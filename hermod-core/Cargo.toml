@@ -11,6 +11,8 @@ base64ct = "1"
 crypto-bigint = "0.7"
 # X.509 DER 解析（tls.rs 提取 SPKI 指纹用，已在依赖树里）。
 der = "0.8"
+# WebSocket 流的 Sink/Stream 扩展（tokio-tungstenite 已依赖，无需下载）。
+futures-util = "0.3"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 hkdf = "0.13"
 p256 = { version = "0.14", features = ["ecdh", "hash2curve"] }
@@ -23,7 +25,8 @@ sha2 = "0.11"
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync"] }
-tokio-tungstenite = "0.30"
+# 需要 rustls 集成以传入自定义 ClientConfig 做 SPKI pinning。
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 
 [lints]
 workspace = true

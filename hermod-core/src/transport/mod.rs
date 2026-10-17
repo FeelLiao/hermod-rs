@@ -27,3 +27,5 @@
 
 pub mod iface;
 pub mod wireguard;
+
+pub use iface::{Transport, TransportConnection};

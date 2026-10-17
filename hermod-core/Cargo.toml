@@ -8,6 +8,7 @@ rust-version.workspace = true
 aes-gcm = "0.11"
 # 已在依赖树里（经 pem-rfc7468）；信令 payload 与 Go 一致用 base64 字符串。
 base64ct = "1"
+boringtun = "0.7.1"
 crypto-bigint = "0.7"
 # X.509 DER 解析（tls.rs 提取 SPKI 指纹用，已在依赖树里）。
 der = "0.8"
@@ -27,6 +28,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync"] }
 # 需要 rustls 集成以传入自定义 ClientConfig 做 SPKI pinning。
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+x25519-dalek = { version = "3.0.0", features = ["static_secrets", "reusable_secrets"] }
 
 [lints]
 workspace = true

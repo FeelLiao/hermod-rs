@@ -74,7 +74,7 @@ pub async fn recv_message(stream: &mut WsStream) -> Result<Message, ClientError>
 /// server 观测到的源地址（ok 应答 payload 的 JSON 解码）。
 ///
 /// Go 版会同时给 public_ipv4/public_ipv6；Rust 版只采纳 IPv6（D7，
-/// 与 [`crate::tunnel::addr`] 的规则一致），v4 字段保留以兼容 Go server。
+/// 与 [`crate::transport::wireguard::addr`] 的规则一致），v4 字段保留以兼容 Go server。
 #[derive(Debug, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct ObservedAddrs {
     #[serde(default)]

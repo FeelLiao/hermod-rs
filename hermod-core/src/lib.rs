@@ -5,7 +5,7 @@
 //! Public API surface (a stable entry point for third-party clients):
 //! - [`crypto`]   — CPace PAKE, key derivation, AEAD, transfer-code wordlist
 //! - [`signal`]   — signaling server & client (wire protocol, TLS pinning)
-//! - [`tunnel`]   — user-space WireGuard + in-process TCP/HTTP data plane
+//! - [`transport`]— 传输层：抽象接口 + 具体实现（当前为用户态 WireGuard + TCP/HTTP）
 //! - [`transfer`] — path safety, integrity flow, and tx/rx orchestration API
 //! - [`config`]   — Go-compatible configuration schema
 //! - [`http_meta`]— in-tunnel HTTP header conventions
@@ -17,4 +17,4 @@ pub mod error;
 pub mod http_meta;
 pub mod signal;
 pub mod transfer;
-pub mod tunnel;
+pub mod transport;

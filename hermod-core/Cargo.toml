@@ -6,6 +6,8 @@ rust-version.workspace = true
 
 [dependencies]
 aes-gcm = "0.11.1"
+# 已在依赖树里（经 pem-rfc7468）；信令 payload 与 Go 一致用 base64 字符串。
+base64ct = "1.8.3"
 crypto-bigint = "0.7.5"
 getrandom = { version = "0.4.3", features = ["sys_rng"] }
 hkdf = "0.13.0"

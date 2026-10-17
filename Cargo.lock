@@ -290,6 +290,7 @@ name = "hermod-core"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "base64ct",
  "crypto-bigint",
  "getrandom",
  "hkdf",

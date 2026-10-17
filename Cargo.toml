@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["hermod-core", "hermod-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.0"
+
+# Uniform lint policy across all workspace crates (M1.1; quality gate in
+# DEVELOPMENT.md §9): clippy warnings are errors, and `unsafe` is forbidden
+# in our own code (S5).
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+# clippy 是 Rust 官方的"代码体检工具"，它能抓编译器（rustc）不报的问题，是保证代码质量的第一道自动化防线。
+[workspace.lints.clippy]
+all = "deny"

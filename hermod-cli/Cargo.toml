@@ -1,0 +1,12 @@
+[package]
+name = "hermod-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The CLI is a thin shell: all logic lives in hermod-core (D17).
+hermod-core = { path = "../hermod-core" }
+
+[lints]
+workspace = true

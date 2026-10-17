@@ -5,6 +5,6 @@
 # OS / editor noise
 .DS_Store
 *.swp
+/hermod-go
 
 # Nested Go reference repo (has its own git history/remote)
-/hermod-go

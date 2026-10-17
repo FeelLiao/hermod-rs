@@ -10,10 +10,13 @@
 //! `Metadata` 的 JSON 编解码（`EncodeMetadata`/`DecodeMetadata`）依赖
 //! serde_json，安装后补充（见 M1.6 对拍）。高层 tx/rx 编排 API 属 M4。
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// 载荷类型（对应 Go `transfer.Kind`）。取值与 HTTP 头 `X-Hermod-Kind` 一致。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// JSON/YAML 序列化为小写字符串："file" | "text" | "stream"（与 Go 一致）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Kind {
     File,
     Text,
@@ -42,15 +45,29 @@ impl Kind {
 }
 
 /// 载荷元数据（对应 Go `transfer.Metadata`），经 JSON 在两端交换：
-/// 类型、原始文件名、大小、SHA-256。JSON 编解码待 serde_json 安装后补齐。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 类型、原始文件名、大小、SHA-256。
+///
+/// JSON 字段序 `kind/name/size/sha256` 与 Go `json.Marshal` 一致；
+/// `name` 为空时省略（对应 Go 的 `omitempty`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Metadata {
     pub kind: Kind,
     /// 原始文件名（仅 `KindFile` 有意义）。
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub name: String,
     pub size: i64,
     /// 载荷原始字节的 SHA-256（十六进制小写）。
     pub sha256: String,
+}
+
+/// 序列化元数据为 JSON 字节（对应 Go `EncodeMetadata`）。
+pub fn encode_metadata(m: &Metadata) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(m)
+}
+
+/// 反序列化 JSON 字节为元数据（对应 Go `DecodeMetadata`）。
+pub fn decode_metadata(data: &[u8]) -> Result<Metadata, serde_json::Error> {
+    serde_json::from_slice(data)
 }
 
 /// 计算字节切片的 SHA-256，返回十六进制小写（对应 Go `HashBytes`）。
@@ -172,6 +189,43 @@ mod tests {
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
         assert_eq!(hash_bytes(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+
+    /// Metadata JSON 编解码：字节格式与 Go `json.Marshal` 一致（无 HTML 转义时）+ 往返。
+    #[test]
+    fn metadata_json_matches_go() {
+        let m = Metadata {
+            kind: Kind::File,
+            name: "report.pdf".to_string(),
+            size: 11,
+            sha256: hash_bytes(b"hello world"),
+        };
+        let encoded = encode_metadata(&m).unwrap();
+        assert_eq!(
+            String::from_utf8(encoded.clone()).unwrap(),
+            r#"{"kind":"file","name":"report.pdf","size":11,"sha256":"b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"}"#
+        );
+        assert_eq!(decode_metadata(&encoded).unwrap(), m);
+    }
+
+    /// `name` 为空时省略（对应 Go `omitempty`）；Go 的 HTML 转义输出也能解析。
+    #[test]
+    fn metadata_json_omitempty_and_parse_go_output() {
+        let m = Metadata {
+            kind: Kind::Stream,
+            name: String::new(),
+            size: 0,
+            sha256: hash_bytes(b""),
+        };
+        let encoded = encode_metadata(&m).unwrap();
+        assert_eq!(
+            String::from_utf8(encoded).unwrap(),
+            r#"{"kind":"stream","size":0,"sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}"#
+        );
+        // Go 默认会把 < > & 转义成 \u003c 等，也必须能解析
+        let go_escaped = r#"{"kind":"file","name":"a\u003cb","size":3,"sha256":"aa"}"#;
+        let m = decode_metadata(go_escaped.as_bytes()).unwrap();
+        assert_eq!(m.name, "a<b");
     }
 
     #[test]

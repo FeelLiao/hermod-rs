@@ -75,7 +75,7 @@ pub async fn send_file(
         .and_then(|n| n.to_str())
         .unwrap_or("file")
         .to_string();
-    crate::log_info!("发送文件 {}（{} 字节）", path.display(), size);
+    crate::log_info!(path = %path.display().to_string(), size, "sending file");
     let opts = ServeOptions {
         token,
         kind: crate::transfer::Kind::File,
@@ -157,7 +157,11 @@ pub async fn receive(
 
     // 校验通过才原子改名（safe_destination_path 负责剥目录分量 + 去重）
     let final_path = crate::transfer::safe_destination_path(dest_dir, &out.name)?;
-    crate::log_info!("校验通过，重命名 {} → {}", temp.display(), final_path.display());
+    crate::log_info!(
+        from = %temp.display().to_string(),
+        to = %final_path.display().to_string(),
+        "verified, renaming"
+    );
     std::fs::rename(&temp, &final_path)?;
     std::mem::forget(guard);
     Ok(Receipt {

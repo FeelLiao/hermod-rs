@@ -61,7 +61,7 @@ where
             Err(e) => return Err(HttpError::Malformed(e.to_string())),
         };
 
-        crate::log_info!("HTTP 收到 {} {}", req.method, req.path);
+        crate::log_info!(method = %req.method, path = %req.path, "request received");
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", p) if p == path => {
                 let cd = http_meta::content_disposition(&opts.name)?;
@@ -71,7 +71,7 @@ where
                     (http_meta::CONTENT_DISPOSITION, cd.as_str()),
                     ("Content-Type", "application/octet-stream"),
                 ];
-                crate::log_info!("开始发送 {} 字节（边发边算 SHA-256）", opts.size);
+                crate::log_info!(size = opts.size, "sending body, hashing SHA-256 on the fly");
                 write_response_head(&mut w, 200, "OK", &headers, opts.size).await?;
 
                 // 流式发送 body + **边发边算** SHA-256（不整体进内存）
@@ -105,11 +105,11 @@ where
                 let meta = transfer::decode_metadata(&body)
                     .map_err(|e| HttpError::Malformed(e.to_string()))?;
                 crate::log_info!(
-                    "收到裁决: rx sha256={} size={}；本地 sha256={} size={}",
-                    meta.sha256,
-                    meta.size,
-                    computed_sha,
-                    opts.size
+                    rx_sha256 = %meta.sha256,
+                    rx_size = meta.size,
+                    local_sha256 = %computed_sha,
+                    local_size = opts.size,
+                    "received digest verdict"
                 );
                 let verified = meta.sha256 == computed_sha && meta.size as u64 == opts.size;
                 let (status, reason) = if verified {

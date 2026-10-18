@@ -136,11 +136,12 @@ impl Transport for WireGuardTransport {
         let fingerprint = [0u8; 32];
 
         crate::log_info!(
-            "传输准备完成: udp_port={udp_port}, http_port={}, 内层 mtu={}（外层约 {}B）, 候选={:?}",
-            self.http_port,
-            self.mtu,
-            self.mtu + 80,
-            candidates
+            udp_port,
+            http_port = self.http_port,
+            inner_mtu = self.mtu,
+            outer_mtu = self.mtu + 80,
+            candidates = ?candidates,
+            "transport prepared"
         );
         let bundle = EndpointBundle {
             version: BUNDLE_VERSION,
@@ -204,11 +205,12 @@ impl Transport for WireGuardTransport {
         let stack = TunnelStack::new(overlay, seed, self.mtu);
 
         crate::log_info!(
-            "建立传输: role={role:?}, 对端候选={:?}, 对端 udp_port={}, peer_http={}, mtu={}",
-            peer.ipv6_candidates,
-            peer.udp_port,
-            peer.http_port,
-            self.mtu
+            role = ?role,
+            peer_candidates = ?peer.ipv6_candidates,
+            peer_udp_port = peer.udp_port,
+            peer_http = peer.http_port,
+            mtu = self.mtu,
+            "establishing transport"
         );
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let local_http = self.http_port;
@@ -315,8 +317,11 @@ async fn driver_loop(
     // 才发起（应对地址变化）。同时发起会让 boringtun 的握手竞态不稳定。
     let is_sender = role == Role::Sender;
     crate::log_info!(
-        "传输驱动启动: role={role:?}, local_http={local_http}, peer_http={peer_http}, mtu={}",
-        stack.mtu()
+        role = ?role,
+        local_http,
+        peer_http,
+        mtu = stack.mtu(),
+        "transport driver started"
     );
     if is_sender && tunnel.start_handshake().await.is_err() {
         crate::log_warn!("初始握手发送失败，驱动退出");
@@ -362,7 +367,7 @@ async fn driver_loop(
                 };
                 match cmd {
                     Command::Listen { reply } => {
-                        crate::log_info!("开始监听: {local_http}");
+                        crate::log_info!(port = local_http, "listening");
                         let (stream, ends) = BridgeStream::new();
                         let h = stack.add_tcp(TunnelStack::new_tcp_socket());
                         let local = if role == Role::Sender { OVERLAY_TX } else { OVERLAY_RX };
@@ -374,7 +379,7 @@ async fn driver_loop(
                         let _ = reply.send(Ok(stream));
                     }
                     Command::Dial { reply } => {
-                        crate::log_info!("拨号: peer_http={peer_http}");
+                        crate::log_info!(peer_http, "dialing");
                         let (stream, ends) = BridgeStream::new();
                         let h = stack.add_tcp(TunnelStack::new_tcp_socket());
                         let peer = if role == Role::Sender { OVERLAY_RX } else { OVERLAY_TX };
@@ -448,7 +453,7 @@ async fn driver_loop(
         }
         if iter.is_multiple_of(40) {
             let send_q: usize = bridged.iter().map(|(h, _)| stack.tcp(*h).send_queue()).sum();
-            crate::log_info!(
+            crate::log_debug!(
                 "drv role={role:?}: 内层收={inner_rx} 发={inner_tx} session_ok={} 桥接={} 待ACK={send_q}",
                 tunnel.session_ok(),
                 bridged.len()
@@ -466,7 +471,7 @@ async fn driver_loop(
         } else {
             // 会话可用：定期强制 rekey，避免 boringtun 会话在 180s 后过期
             if is_sender && last_rekey.elapsed() >= REKEY_INTERVAL {
-                crate::log_info!("WireGuard rekey（避免会话过期）");
+                crate::log_info!("WireGuard rekey (avoid session expiry)");
                 let _ = tunnel.retransmit_handshake().await;
                 last_rekey = Instant::now();
             }

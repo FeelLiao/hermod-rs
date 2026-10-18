@@ -41,7 +41,7 @@ where
     let path = http_meta::token_path(token);
 
     // 1) GET /f/<token>
-    crate::log_info!("HTTP GET {path}");
+    crate::log_info!(path = %path, "GET");
     write_request(&mut w, "GET", &path, &[("Host", "hermod")], &[]).await?;
     let head = ResponseHead::read(&mut reader).await?;
     if head.status != 200 {
@@ -61,7 +61,7 @@ where
     let size = head
         .content_length()
         .ok_or_else(|| HttpError::Malformed("missing Content-Length".into()))? as u64;
-    crate::log_info!("响应 {}：{} 字节，文件名 {:?}", head.status, size, name);
+    crate::log_info!(status = head.status, size, filename = %name, "response headers");
 
     // 2) 边收边算 SHA-256，写入目标
     let mut hasher = Sha256::new();
@@ -98,8 +98,10 @@ where
                 0.0
             };
             crate::log_info!(
-                "接收进度: {mib:.1}/{:.1} MiB，{rate:.1} MiB/s，写盘占比 {write_ratio:.1}%",
-                size as f64 / 1_048_576.0
+                received_mib = format!("{mib:.1}"),
+                rate_mib_s = format!("{rate:.1}"),
+                write_pct = format!("{write_ratio:.1}"),
+                "receive progress"
             );
             last_log = std::time::Instant::now();
             last_bytes = received;
@@ -109,7 +111,7 @@ where
     let sha256 = transfer::hex(&hasher.finalize()[..]);
 
     // 3) POST /done 提交裁决
-    crate::log_info!("接收完成，提交裁决");
+    crate::log_info!("body received, submitting verdict");
     let meta = transfer::Metadata {
         kind,
         name: name.clone(),
@@ -126,7 +128,7 @@ where
         )));
     }
 
-    crate::log_info!("裁决结果: verified={}", verdict.status == 200);
+    crate::log_info!(verified = verdict.status == 200, "verdict");
     Ok(FetchOutcome {
         kind,
         name,

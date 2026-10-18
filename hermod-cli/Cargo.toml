@@ -22,6 +22,10 @@ console = "0.15"
 rand_core = "0.10"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 
+# 结构化日志（对标 Go 的 slog）：tracing-subscriber 需要联网安装
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
 [lints]
 workspace = true
 

@@ -25,18 +25,21 @@ async fn main() -> std::process::ExitCode {
     };
     verbosity::set(level, args.quiet);
     // 把 core 的日志接到 CLI 的 verbosity（级别与 --verbose 一一对应）
-    hermod_core::log::set_max_level(match level {
-        Level::None | Level::Error => hermod_core::log::Level::Error,
-        Level::Warning => hermod_core::log::Level::Warning,
-        Level::Info => hermod_core::log::Level::Info,
-        Level::Debug => hermod_core::log::Level::Debug,
-    });
-    hermod_core::log::set_logger(|lvl, msg| match lvl {
-        hermod_core::log::Level::Error => verbosity::error(msg),
-        hermod_core::log::Level::Warning => verbosity::warn(msg),
-        hermod_core::log::Level::Info => verbosity::info(msg),
-        hermod_core::log::Level::Debug => verbosity::debug(msg),
-    });
+    // 结构化日志：对标 Go 的 slog，级别由 --verbose 决定。
+    // 注意：--quiet 与 --verbose 正交（Go 语义）：-q 只抑制状态输出，不关日志。
+    let filter = match level {
+        Level::None => tracing_subscriber::EnvFilter::new("off"),
+        Level::Error => tracing_subscriber::EnvFilter::new("error"),
+        Level::Warning => tracing_subscriber::EnvFilter::new("warn"),
+        Level::Info => tracing_subscriber::EnvFilter::new("info"),
+        Level::Debug => tracing_subscriber::EnvFilter::new("debug"),
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .with_level(true)
+        .init();
 
     let result = tokio::select! {
         r = run(args) => r,

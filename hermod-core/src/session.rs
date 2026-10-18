@@ -106,9 +106,9 @@ fn parse_hex32(s: &str) -> Option<[u8; 32]> {
 
 async fn open(config: &Config) -> Result<WsStream, SessionError> {
     let (url, spki) = expected_spki(config)?;
-    crate::log_info!("连接信令服务器 {url}（SPKI pinned）");
+    crate::log_info!(server = %url, "connecting to signaling server");
     let ws = client::connect_pinned(&url, spki).await?;
-    crate::log_info!("信令服务器已连接");
+    crate::log_info!("websocket connection established");
     Ok(ws)
 }
 
@@ -126,12 +126,12 @@ pub async fn sender_session_with(
     let (channel_id, words) = wordlist::parse_transfer_code(code)?;
     let password = words.join("-");
     let mut ws = open(config).await?;
-    crate::log_info!("等待 receiver 加入频道 {channel_id}");
+    crate::log_info!(channel_id, "waiting for receiver to join channel");
     let (k, observed) = client::sender_handshake(&mut ws, channel_id, &password).await?;
     crate::log_info!(
-        "PAKE 完成；server 观测地址 v6={:?} v4={:?}",
-        observed.public_ipv6,
-        observed.public_ipv4
+        public_v6 = %observed.public_ipv6,
+        public_v4 = %observed.public_ipv4,
+        "PAKE handshake complete"
     );
     let token = derive_http_token(&k, channel_id);
     let conn =
@@ -157,9 +157,9 @@ pub async fn receiver_session_with(
     let mut ws = open(config).await?;
     let (k, observed) = client::receiver_handshake(&mut ws, channel_id, &password).await?;
     crate::log_info!(
-        "PAKE 完成；server 观测地址 v6={:?} v4={:?}",
-        observed.public_ipv6,
-        observed.public_ipv4
+        public_v6 = %observed.public_ipv6,
+        public_v4 = %observed.public_ipv4,
+        "PAKE handshake complete"
     );
     let token = derive_http_token(&k, channel_id);
     let conn =
@@ -209,7 +209,7 @@ async fn exchange_and_establish(
     if peer_bundle.credential_fingerprint != sha256_32(token) {
         return Err(SessionError::FingerprintMismatch);
     }
-    crate::log_info!("端点 bundle 交换完成，开始建立 WireGuard");
+    crate::log_info!("endpoint bundle exchanged, establishing WireGuard");
     let peer_bytes = peer_bundle.encode()?;
     Ok(transport.establish(role, &psk, &peer_bytes).await?)
 }

@@ -63,7 +63,7 @@ impl WireGuardTunnel {
     pub async fn start_handshake(&mut self) -> Result<(), SessionError> {
         if let Some(pkt) = self.session.initiate_handshake() {
             let cands = self.endpoint.candidates().to_vec();
-            crate::log_info!("发送 WireGuard 握手发起，目标 {} 个候选: {:?}", cands.len(), cands);
+            crate::log_info!(candidates = ?cands, "sending WireGuard handshake initiation");
             for cand in cands {
                 self.udp.send_to(&pkt, cand).await?;
             }

@@ -29,6 +29,7 @@ smoltcp = { version = "0.14.0", features = ["medium-ip", "socket-tcp-cubic"] }
 socket2 = "0.6"
 subtle = "2"
 thiserror = "2"
+tracing = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "fs"] }
 # 需要 rustls 集成以传入自定义 ClientConfig 做 SPKI pinning。
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }

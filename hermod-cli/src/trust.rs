@@ -23,16 +23,16 @@ pub async fn run(args: TrustArgs) -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("fingerprint mismatch: got {hex}, expected {expect}").into());
     }
 
-    // stdout 只放指纹，便于脚本取值与人工核对
-    println!("{hex}");
-    if args.fingerprint.is_none() {
-        verbosity::warn("first-time trust (TOFU): verify the fingerprint out-of-band");
-    }
-
     let mut cfg = config::load().unwrap_or_default();
     let normalized = config::normalize_server_url(&url).map_err(util::boxed)?;
-    cfg.trusted_servers.insert(normalized.clone(), hex);
+    // 对齐 Go：pin 指纹，**并把它设为默认 server**（否则 tx/rx 仍用旧默认）。
+    cfg.trusted_servers.insert(normalized.clone(), hex.clone());
+    cfg.server_url = normalized.clone();
     config::save(&cfg).map_err(util::boxed)?;
-    verbosity::info(format!("trusted {normalized}"));
+
+    // 对齐 Go 的 printStatus 输出
+    verbosity::status(format!("Pinned {normalized}"));
+    verbosity::status(format!("  fingerprint: {hex}"));
+    verbosity::status("  set as default server");
     Ok(())
 }

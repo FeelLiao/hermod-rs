@@ -63,13 +63,6 @@ pub fn status(msg: impl AsRef<str>) {
     }
 }
 
-/// 警告（`--quiet` 时抑制）。
-pub fn warn(msg: impl AsRef<str>) {
-    if enabled(Level::Warning) && !is_quiet() {
-        eprintln!("{}", paint(&format!("warning: {}", msg.as_ref()), console::Color::Yellow));
-    }
-}
-
 /// 错误（**永不被抑制**，红色）。
 pub fn error(msg: impl AsRef<str>) {
     eprintln!("{}", paint(&format!("error: {}", msg.as_ref()), console::Color::Red));

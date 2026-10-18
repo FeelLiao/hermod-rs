@@ -8,6 +8,7 @@
 //! 级别与 CLI 的 `--verbose`（none/error/warning/info/debug）一一对应。
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// 日志级别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -20,35 +21,65 @@ pub enum Level {
 
 type LoggerFn = fn(Level, &str);
 static LOGGER: OnceLock<LoggerFn> = OnceLock::new();
+/// 最高允许级别（默认只放 Error，避免热路径上的 `format!` 开销）。
+static MAX_LEVEL: AtomicU8 = AtomicU8::new(Level::Error as u8);
 
 /// 安装全局 logger（进程内只生效一次；重复安装会被忽略）。
 pub fn set_logger(f: LoggerFn) {
     let _ = LOGGER.set(f);
 }
 
+/// 设置最高输出级别：低于它的日志连 `format!` 都不会执行。
+pub fn set_max_level(level: Level) {
+    MAX_LEVEL.store(level as u8, Ordering::Relaxed);
+}
+
+/// 该级别是否会被输出（宏用它避免无谓的 `format!`）。
+pub fn enabled(level: Level) -> bool {
+    (level as u8) <= MAX_LEVEL.load(Ordering::Relaxed)
+}
+
 /// 把一条日志交给已安装的 logger（未安装则丢弃）。
 pub fn emit(level: Level, msg: &str) {
-    if let Some(f) = LOGGER.get() {
+    if enabled(level)
+        && let Some(f) = LOGGER.get()
+    {
         f(level, msg);
     }
 }
 
 #[macro_export]
 macro_rules! log_error {
-    ($($arg:tt)*) => { $crate::log::emit($crate::log::Level::Error, &format!($($arg)*)) };
+    ($($arg:tt)*) => {
+        if $crate::log::enabled($crate::log::Level::Error) {
+            $crate::log::emit($crate::log::Level::Error, &format!($($arg)*))
+        }
+    };
 }
 
 #[macro_export]
 macro_rules! log_warn {
-    ($($arg:tt)*) => { $crate::log::emit($crate::log::Level::Warning, &format!($($arg)*)) };
+    ($($arg:tt)*) => {
+        if $crate::log::enabled($crate::log::Level::Warning) {
+            $crate::log::emit($crate::log::Level::Warning, &format!($($arg)*))
+        }
+    };
 }
 
 #[macro_export]
 macro_rules! log_info {
-    ($($arg:tt)*) => { $crate::log::emit($crate::log::Level::Info, &format!($($arg)*)) };
+    ($($arg:tt)*) => {
+        if $crate::log::enabled($crate::log::Level::Info) {
+            $crate::log::emit($crate::log::Level::Info, &format!($($arg)*))
+        }
+    };
 }
 
 #[macro_export]
 macro_rules! log_debug {
-    ($($arg:tt)*) => { $crate::log::emit($crate::log::Level::Debug, &format!($($arg)*)) };
+    ($($arg:tt)*) => {
+        if $crate::log::enabled($crate::log::Level::Debug) {
+            $crate::log::emit($crate::log::Level::Debug, &format!($($arg)*))
+        }
+    };
 }

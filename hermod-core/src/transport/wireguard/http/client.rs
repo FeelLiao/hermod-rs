@@ -68,6 +68,10 @@ where
     let mut received: u64 = 0;
     let mut remaining = size;
     let mut buf = [0u8; 16 * 1024];
+    let mut last_log = std::time::Instant::now();
+    let mut last_bytes = 0u64;
+    let mut write_time = std::time::Duration::ZERO;
+    let started = std::time::Instant::now();
     while remaining > 0 {
         let want = (buf.len() as u64).min(remaining) as usize;
         let n = reader.read(&mut buf[..want]).await?;
@@ -75,11 +79,30 @@ where
             return Err(HttpError::Malformed("body shorter than Content-Length".into()));
         }
         hasher.update(&buf[..n]);
+        let w = std::time::Instant::now();
         dest.write_all(&buf[..n]).await?;
+        write_time += w.elapsed();
         remaining -= n as u64;
         received += n as u64;
         if let Some(p) = progress.as_mut() {
             p(received);
+        }
+        let elapsed = last_log.elapsed().as_secs_f64();
+        if elapsed >= 2.0 {
+            let mib = received as f64 / 1_048_576.0;
+            let rate = (received - last_bytes) as f64 / elapsed / 1_048_576.0;
+            let total = started.elapsed().as_secs_f64();
+            let write_ratio = if total > 0.0 {
+                write_time.as_secs_f64() / total * 100.0
+            } else {
+                0.0
+            };
+            crate::log_info!(
+                "接收进度: {mib:.1}/{:.1} MiB，{rate:.1} MiB/s，写盘占比 {write_ratio:.1}%",
+                size as f64 / 1_048_576.0
+            );
+            last_log = std::time::Instant::now();
+            last_bytes = received;
         }
     }
     dest.flush().await?;

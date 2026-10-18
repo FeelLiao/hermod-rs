@@ -21,11 +21,21 @@ pub async fn bind_at(addr: SocketAddrV6) -> std::io::Result<UdpSocket> {
     // 只收 IPv6，避免 v4-mapped 流量（§3.3）。
     sock.set_only_v6(true)?;
     sock.set_nonblocking(true)?;
+    // 大缓冲：高吞吐 UDP 的默认 ~208 KiB 太小，会大量丢包导致窗口塌缩。
+    let _ = sock.set_recv_buffer_size(8 * 1024 * 1024);
+    let _ = sock.set_send_buffer_size(8 * 1024 * 1024);
+    let _ = sock.set_send_buffer_size(8 * 1024 * 1024);
     let addr: SocketAddr = SocketAddr::V6(addr);
     sock.bind(&addr.into())?;
+    crate::log_debug!(
+        "UDP 缓冲实际值: rcv={:?} snd={:?}",
+        sock.recv_buffer_size().ok(),
+        sock.send_buffer_size().ok()
+    );
     let std_udp: std::net::UdpSocket = sock.into();
     UdpSocket::from_std(std_udp)
 }
+
 
 #[cfg(test)]
 mod tests {

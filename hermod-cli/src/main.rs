@@ -25,6 +25,12 @@ async fn main() -> std::process::ExitCode {
     };
     verbosity::set(level, args.quiet);
     // 把 core 的日志接到 CLI 的 verbosity（级别与 --verbose 一一对应）
+    hermod_core::log::set_max_level(match level {
+        Level::None | Level::Error => hermod_core::log::Level::Error,
+        Level::Warning => hermod_core::log::Level::Warning,
+        Level::Info => hermod_core::log::Level::Info,
+        Level::Debug => hermod_core::log::Level::Debug,
+    });
     hermod_core::log::set_logger(|lvl, msg| match lvl {
         hermod_core::log::Level::Error => verbosity::error(msg),
         hermod_core::log::Level::Warning => verbosity::warn(msg),

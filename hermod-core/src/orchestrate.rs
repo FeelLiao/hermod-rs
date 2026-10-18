@@ -75,6 +75,7 @@ pub async fn send_file(
         .and_then(|n| n.to_str())
         .unwrap_or("file")
         .to_string();
+    crate::log_info!("发送文件 {}（{} 字节）", path.display(), size);
     let opts = ServeOptions {
         token,
         kind: crate::transfer::Kind::File,
@@ -149,12 +150,14 @@ pub async fn receive(
     drop(file);
 
     if !out.verified {
+        crate::log_warn!("摘要不一致，删除临时文件 {}", temp.display());
         let _ = std::fs::remove_file(&temp);
         return Err(OrchestrateError::DigestMismatch);
     }
 
     // 校验通过才原子改名（safe_destination_path 负责剥目录分量 + 去重）
     let final_path = crate::transfer::safe_destination_path(dest_dir, &out.name)?;
+    crate::log_info!("校验通过，重命名 {} → {}", temp.display(), final_path.display());
     std::fs::rename(&temp, &final_path)?;
     std::mem::forget(guard);
     Ok(Receipt {

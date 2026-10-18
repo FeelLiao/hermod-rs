@@ -33,6 +33,8 @@ pub struct WireGuardTunnel {
     session: WireGuardSession,
     udp: UdpSocket,
     endpoint: PeerEndpoint,
+    /// boringtun 是否已有可用会话（能成功封装/解封装数据）。
+    session_ok: bool,
 }
 
 impl WireGuardTunnel {
@@ -42,13 +44,21 @@ impl WireGuardTunnel {
             session,
             udp,
             endpoint,
+            session_ok: false,
         }
+    }
+
+    /// boringtun 会话是否已可用（收到过数据或成功封装过）。
+    pub fn session_ok(&self) -> bool {
+        self.session_ok
     }
 
     /// 对全部候选**同时**发握手发起包（§3.3）。
     pub async fn start_handshake(&mut self) -> Result<(), SessionError> {
         if let Some(pkt) = self.session.initiate_handshake() {
-            for cand in self.endpoint.candidates().to_vec() {
+            let cands = self.endpoint.candidates().to_vec();
+            crate::log_info!("发送 WireGuard 握手发起，目标 {} 个候选: {:?}", cands.len(), cands);
+            for cand in cands {
                 self.udp.send_to(&pkt, cand).await?;
             }
         }
@@ -59,9 +69,12 @@ impl WireGuardTunnel {
     pub async fn retransmit_handshake(&mut self) -> Result<(), SessionError> {
         if let Some(pkt) = self.session.force_initiate_handshake() {
             if let Some(cur) = self.endpoint.current() {
+                crate::log_debug!("重发握手 → 当前端点 {cur}");
                 self.udp.send_to(&pkt, cur).await?;
             } else {
-                for cand in self.endpoint.candidates().to_vec() {
+                let cands = self.endpoint.candidates().to_vec();
+                crate::log_debug!("重发握手 → {} 个候选", cands.len());
+                for cand in cands {
                     self.udp.send_to(&pkt, cand).await?;
                 }
             }
@@ -97,12 +110,15 @@ impl WireGuardTunnel {
         match self.session.handle_packet(Some(src_ip), &buf[..n]) {
             Outcome::Network(pkt) => {
                 // 握手响应 / keepalive 等：记录来源端点并回发。
+                crate::log_debug!("收到 WG 控制包（{}B），回发 {}B，端点→{src6}", n, pkt.len());
                 self.endpoint.roam(src6);
                 self.udp.send_to(&pkt, src6).await?;
                 Ok(None)
             }
             Outcome::Tunnel(inner) => {
+                self.session_ok = true;
                 self.endpoint.roam(src6);
+                crate::log_debug!("收到 WG 数据包（{n}B）→ 内层 {}B", inner.len());
                 Ok(Some(inner))
             }
             Outcome::None => {
@@ -110,19 +126,29 @@ impl WireGuardTunnel {
                 self.endpoint.roam(src6);
                 Ok(None)
             }
-            Outcome::Error(_) => Ok(None),
+            Outcome::Error(e) => {
+                crate::log_warn!("WG 解封装失败（{n}B，来自 {src6}）: {e:?}");
+                Ok(None)
+            }
         }
     }
 
     /// 把内层 IP 包封装后发给对端（优先已确定的端点，否则首个候选）。
     pub async fn send_tunnel(&mut self, inner: &[u8]) -> Result<(), SessionError> {
-        if let Some(pkt) = self.session.encapsulate(inner) {
-            let to = self
-                .endpoint
-                .current()
-                .or_else(|| self.endpoint.candidates().first().copied())
-                .ok_or(SessionError::NoPeer)?;
-            self.udp.send_to(&pkt, to).await?;
+        match self.session.encapsulate(inner) {
+            Some(pkt) => {
+                self.session_ok = true;
+                let to = self
+                    .endpoint
+                    .current()
+                    .or_else(|| self.endpoint.candidates().first().copied())
+                    .ok_or(SessionError::NoPeer)?;
+                crate::log_debug!("发送内层 {}B → WG {}B → {to}", inner.len(), pkt.len());
+                self.udp.send_to(&pkt, to).await?;
+            }
+            None => {
+                crate::log_debug!("WG 会话未就绪，丢弃内层 {}B", inner.len());
+            }
         }
         Ok(())
     }

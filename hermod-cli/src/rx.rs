@@ -6,6 +6,8 @@ use hermod_core::config;
 use hermod_core::orchestrate;
 use hermod_core::session::{self, SessionOptions};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -38,9 +40,18 @@ pub async fn run(args: RxArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     let pb = progress::spinner(verbosity::is_quiet());
     let (tick_tx, tick_rx) = mpsc::channel(1);
+    let received = Arc::new(AtomicU64::new(0));
     let pb2 = pb.clone();
+    let got2 = received.clone();
+    let mut speed = progress::Speed::new();
     let mut on_progress = move |n: u64| {
-        pb2.set_message(format!("{n} bytes"));
+        let rate = speed.update(n);
+        pb2.set_message(format!(
+            "{} ({}/s)",
+            indicatif::HumanBytes(n),
+            indicatif::HumanBytes(rate as u64)
+        ));
+        got2.store(n, Ordering::Relaxed);
         let _ = tick_tx.try_send(());
     };
     let fut = orchestrate::receive(
@@ -52,7 +63,13 @@ pub async fn run(args: RxArgs) -> Result<(), Box<dyn std::error::Error>> {
     let receipt = match progress::with_idle_timeout(fut, tick_rx, IDLE).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => return Err(Box::new(e)),
-        Err(msg) => return Err(msg.into()),
+        Err(msg) => {
+            return Err(format!(
+                "{msg}（已接收 {} 字节）",
+                received.load(Ordering::Relaxed)
+            )
+            .into())
+        }
     };
     pb.finish_and_clear();
     // 优雅关闭 rx 侧（排空后驱动退出）

@@ -70,6 +70,7 @@
 pub mod config;
 pub mod crypto;
 pub mod http_meta;
+pub mod log;
 pub mod orchestrate;
 pub mod session;
 pub mod signal;

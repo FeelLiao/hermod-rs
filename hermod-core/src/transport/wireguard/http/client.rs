@@ -41,6 +41,7 @@ where
     let path = http_meta::token_path(token);
 
     // 1) GET /f/<token>
+    crate::log_info!("HTTP GET {path}");
     write_request(&mut w, "GET", &path, &[("Host", "hermod")], &[]).await?;
     let head = ResponseHead::read(&mut reader).await?;
     if head.status != 200 {
@@ -60,6 +61,7 @@ where
     let size = head
         .content_length()
         .ok_or_else(|| HttpError::Malformed("missing Content-Length".into()))? as u64;
+    crate::log_info!("响应 {}：{} 字节，文件名 {:?}", head.status, size, name);
 
     // 2) 边收边算 SHA-256，写入目标
     let mut hasher = Sha256::new();
@@ -84,6 +86,7 @@ where
     let sha256 = transfer::hex(&hasher.finalize()[..]);
 
     // 3) POST /done 提交裁决
+    crate::log_info!("接收完成，提交裁决");
     let meta = transfer::Metadata {
         kind,
         name: name.clone(),
@@ -100,6 +103,7 @@ where
         )));
     }
 
+    crate::log_info!("裁决结果: verified={}", verdict.status == 200);
     Ok(FetchOutcome {
         kind,
         name,

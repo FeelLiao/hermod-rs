@@ -24,6 +24,13 @@ async fn main() -> std::process::ExitCode {
         _ => Level::None,
     };
     verbosity::set(level, args.quiet);
+    // 把 core 的日志接到 CLI 的 verbosity（级别与 --verbose 一一对应）
+    hermod_core::log::set_logger(|lvl, msg| match lvl {
+        hermod_core::log::Level::Error => verbosity::error(msg),
+        hermod_core::log::Level::Warning => verbosity::warn(msg),
+        hermod_core::log::Level::Info => verbosity::info(msg),
+        hermod_core::log::Level::Debug => verbosity::debug(msg),
+    });
 
     let result = tokio::select! {
         r = run(args) => r,

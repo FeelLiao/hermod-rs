@@ -33,6 +33,9 @@ const KEEPALIVE_SECS: u64 = 25;
 const HANDSHAKE_RETRY: Duration = Duration::from_secs(1);
 /// 驱动 poll 间隔。
 const TICK: Duration = Duration::from_millis(50);
+/// 主动 rekey 间隔：boringtun 的 REKEY_AFTER_TIME 是 120s、REJECT_AFTER_TIME 是
+/// 180s，而 `Tunn` 不暴露 `update_timers`，不主动换 key 的话大文件传两分钟就会断。
+const REKEY_INTERVAL: Duration = Duration::from_secs(100);
 
 /// WireGuard 传输错误。
 #[derive(Debug, thiserror::Error)]
@@ -132,6 +135,12 @@ impl Transport for WireGuardTransport {
         // 凭证指纹由会话层填入 SHA-256(HTTP token)；这里先占位 0。
         let fingerprint = [0u8; 32];
 
+        crate::log_info!(
+            "传输准备完成: udp_port={udp_port}, http_port={}, mtu={}, 候选={:?}",
+            self.http_port,
+            self.mtu,
+            candidates
+        );
         let bundle = EndpointBundle {
             version: BUNDLE_VERSION,
             wg_public_key: keypair.public_bytes(),
@@ -193,6 +202,13 @@ impl Transport for WireGuardTransport {
         let tunnel = WireGuardTunnel::new(session, udp, endpoint);
         let stack = TunnelStack::new(overlay, seed, self.mtu);
 
+        crate::log_info!(
+            "建立传输: role={role:?}, 对端候选={:?}, 对端 udp_port={}, peer_http={}, mtu={}",
+            peer.ipv6_candidates,
+            peer.udp_port,
+            peer.http_port,
+            self.mtu
+        );
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let local_http = self.http_port;
         let peer_http = peer.http_port;
@@ -297,18 +313,34 @@ async fn driver_loop(
     // 固定角色（DESIGN §3.3 的退路）：tx 主动发起、rx 只响应；rx 仅在超时后
     // 才发起（应对地址变化）。同时发起会让 boringtun 的握手竞态不稳定。
     let is_sender = role == Role::Sender;
+    crate::log_info!(
+        "传输驱动启动: role={role:?}, local_http={local_http}, peer_http={peer_http}, mtu={}",
+        stack.mtu()
+    );
     if is_sender && tunnel.start_handshake().await.is_err() {
+        crate::log_warn!("初始握手发送失败，驱动退出");
         return;
     }
     let mut last_handshake = Instant::now();
+    let mut last_rekey = Instant::now();
+    let mut iter = 0u64;
+    let mut inner_rx = 0u64;
+    let mut inner_tx = 0u64;
 
     loop {
         tokio::select! {
             r = tunnel.recv() => {
                 match r {
-                    Ok(Some(inner)) => stack.push_inner(inner),
+                    Ok(Some(inner)) => {
+                        inner_rx += 1;
+                        crate::log_debug!("内层包 #{inner_rx}（{}B）→ smoltcp", inner.len());
+                        stack.push_inner(inner);
+                    }
                     Ok(None) => {}
-                    Err(_) => break,
+                    Err(e) => {
+                        crate::log_warn!("UDP 接收失败: {e}");
+                        break;
+                    }
                 }
             }
             cmd = cmd_rx.recv() => {
@@ -329,6 +361,7 @@ async fn driver_loop(
                 };
                 match cmd {
                     Command::Listen { reply } => {
+                        crate::log_info!("开始监听: {local_http}");
                         let (stream, ends) = BridgeStream::new();
                         let h = stack.add_tcp(TunnelStack::new_tcp_socket());
                         let local = if role == Role::Sender { OVERLAY_TX } else { OVERLAY_RX };
@@ -340,6 +373,7 @@ async fn driver_loop(
                         let _ = reply.send(Ok(stream));
                     }
                     Command::Dial { reply } => {
+                        crate::log_info!("拨号: peer_http={peer_http}");
                         let (stream, ends) = BridgeStream::new();
                         let h = stack.add_tcp(TunnelStack::new_tcp_socket());
                         let peer = if role == Role::Sender { OVERLAY_RX } else { OVERLAY_TX };
@@ -378,27 +412,48 @@ async fn driver_loop(
             _ = ticker.tick() => {}
         }
 
+        iter += 1;
         // 驱动 smoltcp，并搬运每个桥接 socket 的字节
         stack.poll();
         for (h, ends) in bridged.iter_mut() {
             pump_socket(stack.tcp(*h), ends);
         }
         while let Some(pkt) = stack.pop_inner() {
+            inner_tx += 1;
             let _ = tunnel.send_tunnel(&pkt).await;
+        }
+        if iter.is_multiple_of(40) {
+            let send_q: usize = bridged.iter().map(|(h, _)| stack.tcp(*h).send_queue()).sum();
+            crate::log_info!(
+                "drv role={role:?}: 内层收={inner_rx} 发={inner_tx} session_ok={} 桥接={} 待ACK={send_q}",
+                tunnel.session_ok(),
+                bridged.len()
+            );
         }
 
         // 定时器：握手重试 / 保活（boringtun 不暴露 update_timers）
-        if !tunnel.is_established() {
+        if !tunnel.session_ok() {
             let retry = if is_sender { HANDSHAKE_RETRY } else { RX_FALLBACK };
             if last_handshake.elapsed() >= retry {
+                crate::log_debug!("会话未就绪，重发握手（role={role:?}）");
                 let _ = tunnel.retransmit_handshake().await;
                 last_handshake = Instant::now();
             }
-        } else if last_keepalive.elapsed() >= Duration::from_secs(KEEPALIVE_SECS) {
-            let _ = tunnel.send_keepalive().await;
-            last_keepalive = Instant::now();
+        } else {
+            // 会话可用：定期强制 rekey，避免 boringtun 会话在 180s 后过期
+            if is_sender && last_rekey.elapsed() >= REKEY_INTERVAL {
+                crate::log_info!("WireGuard rekey（避免会话过期）");
+                let _ = tunnel.retransmit_handshake().await;
+                last_rekey = Instant::now();
+            }
+            if last_keepalive.elapsed() >= Duration::from_secs(KEEPALIVE_SECS) {
+                crate::log_debug!("发送 WireGuard keepalive");
+                let _ = tunnel.send_keepalive().await;
+                last_keepalive = Instant::now();
+            }
         }
     }
+    crate::log_info!("传输驱动退出（role={role:?}, 内层收={inner_rx} 发={inner_tx}）");
 }
 
 #[cfg(test)]

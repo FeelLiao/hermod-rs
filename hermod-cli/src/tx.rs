@@ -10,6 +10,8 @@ use hermod_core::transfer::{self, Kind};
 use hermod_core::transport::wireguard::http::server::ServeOptions;
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -56,13 +58,16 @@ pub async fn run(args: TxArgs) -> Result<(), Box<dyn std::error::Error>> {
             let total = std::fs::metadata(path).map_err(util::boxed)?.len();
             let pb = progress::bar(total, quiet);
             let (tick_tx, tick_rx) = mpsc::channel(1);
+            let sent = Arc::new(AtomicU64::new(0));
             let pb2 = pb.clone();
+            let sent2 = sent.clone();
             let progress: Option<Box<dyn FnMut(u64) + Send>> = Some(Box::new(move |n| {
                 pb2.set_position(n);
+                sent2.store(n, Ordering::Relaxed);
                 let _ = tick_tx.try_send(());
             }));
             let fut = orchestrate::send_file(&mut tx.conn, tx.token, path, progress);
-            let out = run_with_idle(fut, tick_rx).await?;
+            let out = run_with_idle(fut, tick_rx, sent).await?;
             pb.finish_and_clear();
             finish_and_shutdown(&mut tx, out.verified, total, &out.sha256).await?;
         }
@@ -70,13 +75,16 @@ pub async fn run(args: TxArgs) -> Result<(), Box<dyn std::error::Error>> {
             let total = args.input.len() as u64;
             let pb = progress::bar(total, quiet);
             let (tick_tx, tick_rx) = mpsc::channel(1);
+            let sent = Arc::new(AtomicU64::new(0));
             let pb2 = pb.clone();
+            let sent2 = sent.clone();
             let progress: Option<Box<dyn FnMut(u64) + Send>> = Some(Box::new(move |n| {
                 pb2.set_position(n);
+                sent2.store(n, Ordering::Relaxed);
                 let _ = tick_tx.try_send(());
             }));
             let fut = orchestrate::send_text(&mut tx.conn, tx.token, &args.input, progress);
-            let out = run_with_idle(fut, tick_rx).await?;
+            let out = run_with_idle(fut, tick_rx, sent).await?;
             pb.finish_and_clear();
             finish_and_shutdown(&mut tx, out.verified, total, &out.sha256).await?;
         }
@@ -86,9 +94,12 @@ pub async fn run(args: TxArgs) -> Result<(), Box<dyn std::error::Error>> {
             let size = data.len() as u64;
             let pb = progress::bar(size, quiet);
             let (tick_tx, tick_rx) = mpsc::channel(1);
+            let sent = Arc::new(AtomicU64::new(0));
             let pb2 = pb.clone();
+            let sent2 = sent.clone();
             let progress: Option<Box<dyn FnMut(u64) + Send>> = Some(Box::new(move |n| {
                 pb2.set_position(n);
+                sent2.store(n, Ordering::Relaxed);
                 let _ = tick_tx.try_send(());
             }));
             let serve_opts = ServeOptions {
@@ -100,7 +111,7 @@ pub async fn run(args: TxArgs) -> Result<(), Box<dyn std::error::Error>> {
                 progress,
             };
             let fut = orchestrate::serve_file(&mut tx.conn, serve_opts);
-            let out = run_with_idle(fut, tick_rx).await?;
+            let out = run_with_idle(fut, tick_rx, sent).await?;
             pb.finish_and_clear();
             finish_and_shutdown(&mut tx, out.verified, size, &out.sha256).await?;
         }
@@ -130,6 +141,7 @@ fn finish(verified: bool, size: u64, sha256: &str) -> Result<(), Box<dyn std::er
 async fn run_with_idle<F, T>(
     fut: F,
     ticks: mpsc::Receiver<()>,
+    sent: Arc<AtomicU64>,
 ) -> Result<T, Box<dyn std::error::Error>>
 where
     F: std::future::Future<Output = Result<T, orchestrate::OrchestrateError>>,
@@ -137,6 +149,10 @@ where
     match progress::with_idle_timeout(fut, ticks, IDLE).await {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(Box::new(e)),
-        Err(msg) => Err(msg.into()),
+        Err(msg) => Err(format!(
+            "{msg}（已写入 {} 字节；若是大文件，检查对端是否在收、链路 MTU/防火墙）",
+            sent.load(Ordering::Relaxed)
+        )
+        .into()),
     }
 }

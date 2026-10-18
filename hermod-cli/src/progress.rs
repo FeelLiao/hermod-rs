@@ -11,7 +11,7 @@ pub fn bar(total: u64, quiet: bool) -> ProgressBar {
         return ProgressBar::hidden();
     }
     let pb = ProgressBar::new(total);
-    let style = ProgressStyle::with_template("{bar:40} {bytes}/{total_bytes} ({eta})")
+    let style = ProgressStyle::with_template("{bar:40} {bytes}/{total_bytes} {bytes_per_sec} ({eta})")
         .map(|s| s.progress_chars("=>-"))
         .unwrap_or_else(|_| ProgressStyle::default_bar());
     pb.set_style(style);
@@ -51,5 +51,42 @@ where
             }
             _ = &mut sleep => return Err("payload idle timeout"),
         }
+    }
+}
+
+
+/// 估算瞬时速率（字节/秒），用于滚动进度条（rx 不知道总大小）。
+pub struct Speed {
+    last_t: std::time::Instant,
+    last_n: u64,
+    rate: f64,
+}
+
+impl Speed {
+    /// 新建。
+    pub fn new() -> Self {
+        Self {
+            last_t: std::time::Instant::now(),
+            last_n: 0,
+            rate: 0.0,
+        }
+    }
+
+    /// 用累计字节数更新，返回当前估算速率（至少 200ms 更新一次）。
+    pub fn update(&mut self, n: u64) -> f64 {
+        let now = std::time::Instant::now();
+        let dt = now.duration_since(self.last_t).as_secs_f64();
+        if dt >= 0.2 {
+            self.rate = n.saturating_sub(self.last_n) as f64 / dt;
+            self.last_t = now;
+            self.last_n = n;
+        }
+        self.rate
+    }
+}
+
+impl Default for Speed {
+    fn default() -> Self {
+        Self::new()
     }
 }

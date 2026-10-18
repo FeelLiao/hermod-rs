@@ -406,9 +406,11 @@ async fn driver_loop(
                         let _ = reply.send(Ok(stream));
                     }
                     Command::Abort => {
-                        // 立即取消：RST 掉所有桥接 socket；把 RST 包发出去后退出。
-                        for (h, _) in bridged.iter_mut() {
+                        // 立即取消：RST 掉所有桥接 socket（对端会立刻收到并结束），
+                        // 同时关闭本端桥接，让本地的 serve/fetch 任务也立即返回。
+                        for (h, ends) in bridged.iter_mut() {
                             stack.tcp(*h).abort();
+                            ends.close();
                         }
                         stack.poll();
                         while let Some(pkt) = stack.pop_inner() {

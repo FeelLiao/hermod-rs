@@ -85,7 +85,7 @@ impl SendQueue {
 
 impl BridgeEnds {
     /// 关闭桥接两端：drop recv_tx 让用户侧读到 EOF，并关闭写队列。
-    fn close(&mut self) {
+    pub(crate) fn close(&mut self) {
         self.recv_tx.take();
         self.send.close();
     }

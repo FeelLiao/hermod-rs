@@ -426,7 +426,7 @@ async fn driver_loop(
             for (pkt, to) in responses {
                 let _ = tunnel.send_raw(&pkt, to).await;
             }
-            if batch >= 128 {
+            if batch >= 512 {
                 break;
             }
         }

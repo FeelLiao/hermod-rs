@@ -27,8 +27,8 @@ pub async fn bind_at(addr: SocketAddrV6) -> std::io::Result<UdpSocket> {
     let _ = sock.set_send_buffer_size(8 * 1024 * 1024);
     let addr: SocketAddr = SocketAddr::V6(addr);
     sock.bind(&addr.into())?;
-    crate::log_debug!(
-        "UDP 缓冲实际值: rcv={:?} snd={:?}",
+    crate::log_info!(
+        "UDP 缓冲实际值: rcv={:?} snd={:?}（受 net.core.rmem_max/wmem_max 限制）",
         sock.recv_buffer_size().ok(),
         sock.send_buffer_size().ok()
     );

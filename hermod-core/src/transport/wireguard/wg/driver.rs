@@ -38,6 +38,8 @@ pub struct WireGuardTunnel {
     endpoint: PeerEndpoint,
     /// boringtun 是否已有可用会话（能成功封装/解封装数据）。
     session_ok: bool,
+    /// 复用收包缓冲（避免每包分配 64 KiB）。
+    recv_buf: Vec<u8>,
 }
 
 impl WireGuardTunnel {
@@ -48,6 +50,7 @@ impl WireGuardTunnel {
             udp,
             endpoint,
             session_ok: false,
+            recv_buf: vec![0u8; RECV_BUF],
         }
     }
 
@@ -102,13 +105,12 @@ impl WireGuardTunnel {
 
     /// 非阻塞地收一包（供驱动批量 drain）。返回 (内层包, 需回发的控制包)。
     pub fn try_recv_once(&mut self) -> Option<RecvBatch> {
-        let mut buf = [0u8; RECV_BUF];
-        let (n, src) = self.udp.try_recv_from(&mut buf).ok()?;
+        let (n, src) = self.udp.try_recv_from(&mut self.recv_buf).ok()?;
         let SocketAddr::V6(src6) = src else {
             return Some((None, Vec::new()));
         };
         let src_ip = IpAddr::V6(*src6.ip());
-        match self.session.handle_packet(Some(src_ip), &buf[..n]) {
+        match self.session.handle_packet(Some(src_ip), &self.recv_buf[..n]) {
             Outcome::Network(pkt) => {
                 self.endpoint.roam(src6);
                 Some((None, vec![(pkt, src6)]))
@@ -153,14 +155,13 @@ impl WireGuardTunnel {
     /// 漫游（§3.3）：任何**成功**处理的报文（握手响应、数据、完成），其源地址
     /// 成为新的对端端点。认证失败的包（`Outcome::Error`）不更新端点。
     pub async fn recv(&mut self) -> Result<Option<Vec<u8>>, SessionError> {
-        let mut buf = [0u8; RECV_BUF];
-        let (n, src) = self.udp.recv_from(&mut buf).await?;
+        let (n, src) = self.udp.recv_from(&mut self.recv_buf).await?;
         let SocketAddr::V6(src6) = src else {
             // IPV6_V6ONLY 下不应收到 IPv4；防御性忽略。
             return Ok(None);
         };
         let src_ip = IpAddr::V6(*src6.ip());
-        match self.session.handle_packet(Some(src_ip), &buf[..n]) {
+        match self.session.handle_packet(Some(src_ip), &self.recv_buf[..n]) {
             Outcome::Network(pkt) => {
                 // 握手响应 / keepalive 等：记录来源端点并回发。
                 crate::log_debug!("收到 WG 控制包（{}B），回发 {}B，端点→{src6}", n, pkt.len());
@@ -188,13 +189,15 @@ impl WireGuardTunnel {
 
     /// 把内层 IP 包封装后发给对端（优先已确定的端点，否则首个候选）。
     pub async fn send_tunnel(&mut self, inner: &[u8]) -> Result<(), SessionError> {
-        match self.session.encapsulate(inner) {
-            Some(pkt) => {
+        match self.session.encapsulate_len(inner) {
+            Some(len) => {
                 // 只有 WireGuard 数据包（type=4）才说明会话可用；
                 // 无会话时 encapsulate 返回的是握手发起（type=1），不能算建立。
-                if pkt.len() >= 4
-                    && u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]) == 4
-                {
+                let is_data = {
+                    let pkt = self.session.scratch(len);
+                    pkt.len() >= 4 && u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]) == 4
+                };
+                if is_data {
                     self.session_ok = true;
                 }
                 let to = self
@@ -202,8 +205,8 @@ impl WireGuardTunnel {
                     .current()
                     .or_else(|| self.endpoint.candidates().first().copied())
                     .ok_or(SessionError::NoPeer)?;
-                crate::log_debug!("发送内层 {}B → WG {}B → {to}", inner.len(), pkt.len());
-                self.udp.send_to(&pkt, to).await?;
+                crate::log_debug!("发送内层 {}B → WG {len}B → {to}", inner.len());
+                self.udp.send_to(self.session.scratch(len), to).await?;
             }
             None => {
                 crate::log_debug!("WG 会话未就绪，丢弃内层 {}B", inner.len());

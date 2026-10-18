@@ -31,6 +31,8 @@ pub enum Outcome {
 /// WireGuard 会话（单对 peer、单会话）。
 pub struct WireGuardSession {
     tunn: Tunn,
+    /// 复用缓冲：避免每包都 `vec![0u8; BUF_SIZE]`（高包速率下分配开销很大）。
+    scratch: Vec<u8>,
 }
 
 impl WireGuardSession {
@@ -50,6 +52,7 @@ impl WireGuardSession {
     ) -> Self {
         Self {
             tunn: Tunn::new(local, peer, Some(psk), keepalive, index, None),
+            scratch: vec![0u8; BUF_SIZE],
         }
     }
 
@@ -78,8 +81,7 @@ impl WireGuardSession {
 
     /// 处理收到的 WG 包（握手发起/响应或数据）。
     pub fn handle_packet(&mut self, src: Option<IpAddr>, packet: &[u8]) -> Outcome {
-        let mut buf = vec![0u8; BUF_SIZE];
-        match self.tunn.decapsulate(src, packet, &mut buf) {
+        match self.tunn.decapsulate(src, packet, &mut self.scratch) {
             TunnResult::Done => Outcome::None,
             TunnResult::Err(e) => Outcome::Error(e),
             TunnResult::WriteToNetwork(p) => Outcome::Network(p.to_vec()),
@@ -91,17 +93,28 @@ impl WireGuardSession {
 
     /// 把内层 IP 包封装成 WG 包；返回要发到网络的字节。
     pub fn encapsulate(&mut self, packet: &[u8]) -> Option<Vec<u8>> {
-        let mut buf = vec![0u8; BUF_SIZE];
-        match self.tunn.encapsulate(packet, &mut buf) {
+        match self.tunn.encapsulate(packet, &mut self.scratch) {
             TunnResult::WriteToNetwork(p) => Some(p.to_vec()),
             _ => None,
         }
     }
 
+    /// 把内层包封装进复用缓冲，返回要发送的字节数（不额外拷贝）。
+    pub fn encapsulate_len(&mut self, packet: &[u8]) -> Option<usize> {
+        match self.tunn.encapsulate(packet, &mut self.scratch) {
+            TunnResult::WriteToNetwork(p) => Some(p.len()),
+            _ => None,
+        }
+    }
+
+    /// 访问复用缓冲的前 `len` 字节（配合 [`encapsulate_len`] 使用）。
+    pub fn scratch(&self, len: usize) -> &[u8] {
+        &self.scratch[..len]
+    }
+
     /// 排空 boringtun 内部队列（例如握手完成后待发的包），返回要发到网络的字节。
     pub fn poll_queued(&mut self) -> Option<Vec<u8>> {
-        let mut buf = vec![0u8; BUF_SIZE];
-        match self.tunn.decapsulate(None, &[], &mut buf) {
+        match self.tunn.decapsulate(None, &[], &mut self.scratch) {
             TunnResult::WriteToNetwork(p) => Some(p.to_vec()),
             _ => None,
         }

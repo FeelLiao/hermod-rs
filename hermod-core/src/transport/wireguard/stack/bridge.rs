@@ -83,6 +83,14 @@ impl SendQueue {
     }
 }
 
+impl BridgeEnds {
+    /// 关闭桥接两端：drop recv_tx 让用户侧读到 EOF，并关闭写队列。
+    fn close(&mut self) {
+        self.recv_tx.take();
+        self.send.close();
+    }
+}
+
 /// 用户侧桥接流（实现 `AsyncRead` + `AsyncWrite`）。
 pub struct BridgeStream {
     recv: mpsc::Receiver<Vec<u8>>,
@@ -93,7 +101,7 @@ pub struct BridgeStream {
 
 /// 数据面侧持有的两端。
 pub struct BridgeEnds {
-    pub recv_tx: mpsc::Sender<Vec<u8>>,
+    pub recv_tx: Option<mpsc::Sender<Vec<u8>>>,
     send: Arc<SendQueue>,
     pending_recv: Vec<u8>,
     pending_send: Vec<u8>,
@@ -111,7 +119,7 @@ impl BridgeStream {
             read_pos: 0,
         };
         let ends = BridgeEnds {
-            recv_tx,
+            recv_tx: Some(recv_tx),
             send,
             pending_recv: Vec::new(),
             pending_send: Vec::new(),
@@ -194,10 +202,20 @@ impl AsyncWrite for BridgeStream {
 
 /// 数据线程每轮 poll 后调用：在 smoltcp socket 与缓冲之间搬字节。
 pub fn pump_socket(socket: &mut smoltcp::socket::tcp::Socket<'_>, ends: &mut BridgeEnds) {
+    // 连接已彻底关闭（对端 FIN 或 RST）：关闭桥接两端，
+    // 让应用侧的 read 立刻返回 EOF、write 返回 BrokenPipe，
+    // 而不是一直挂起到上层超时。
+    if socket.state() == smoltcp::socket::tcp::State::Closed {
+        ends.close();
+        return;
+    }
     // ---- socket → 用户 ----
+    let Some(recv_tx) = ends.recv_tx.as_ref() else {
+        return;
+    };
     if !ends.pending_recv.is_empty() {
         let chunk = std::mem::take(&mut ends.pending_recv);
-        match ends.recv_tx.try_send(chunk) {
+        match recv_tx.try_send(chunk) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(v)) => {
                 ends.pending_recv = v;
@@ -212,7 +230,7 @@ pub fn pump_socket(socket: &mut smoltcp::socket::tcp::Socket<'_>, ends: &mut Bri
             Ok(0) => break,
             Ok(n) => {
                 let chunk = buf[..n].to_vec();
-                match ends.recv_tx.try_send(chunk) {
+                match recv_tx.try_send(chunk) {
                     Ok(()) => {}
                     Err(mpsc::error::TrySendError::Full(v)) => {
                         ends.pending_recv = v;
@@ -253,10 +271,6 @@ pub fn pump_socket(socket: &mut smoltcp::socket::tcp::Socket<'_>, ends: &mut Bri
         }
     }
 
-    // socket 彻底关闭 → 关闭写队列，唤醒写入方（下次 poll_write 报 BrokenPipe）
-    if socket.state() == smoltcp::socket::tcp::State::Closed {
-        ends.send.close();
-    }
 }
 
 #[cfg(test)]
@@ -275,7 +289,7 @@ mod tests {
         let chunks = ends.send.drain();
         assert_eq!(chunks.concat(), b"hello");
 
-        ends.recv_tx.send(b"world".to_vec()).await.unwrap();
+        ends.recv_tx.as_ref().unwrap().send(b"world".to_vec()).await.unwrap();
         let mut buf = [0u8; 5];
         stream.read_exact(&mut buf).await.unwrap();
         assert_eq!(&buf, b"world");
@@ -284,8 +298,8 @@ mod tests {
     /// channel 关闭后读到 EOF（Ok(0)）。
     #[tokio::test]
     async fn eof_after_close() {
-        let (mut stream, ends) = BridgeStream::new();
-        drop(ends.recv_tx);
+        let (mut stream, mut ends) = BridgeStream::new();
+        ends.recv_tx.take();
         let mut buf = [0u8; 8];
         let n = stream.read(&mut buf).await.unwrap();
         assert_eq!(n, 0);

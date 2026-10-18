@@ -48,7 +48,7 @@ pub const DEFAULT_SERVER_URL: &str = "wss://oracle.stariverfeel.eu.org:4376";
 
 /// 默认服务器的 SPKI 指纹（SHA-256，hex）——内置信任，免去首次 `trust`。
 pub const DEFAULT_SERVER_FINGERPRINT: &str =
-    "88da4f5fcf2f51b82f45c37ef21638c996aaddcaf6f3aa952d7c99cc1354facd";
+    "9ed110b37cd318d8c2ade01cf0b128a72c986ae051bd72dce9c05cf7834891cd";
 
 impl Default for Config {
     /// 应用默认值：默认 server 为 [`DEFAULT_SERVER_URL`]，并内置信任其指纹。

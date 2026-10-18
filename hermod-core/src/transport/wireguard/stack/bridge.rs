@@ -55,13 +55,25 @@ impl SendQueue {
         true
     }
 
-    /// 数据面取走所有块。
+    /// 数据面取走所有块（测试用）。
+    #[cfg(test)]
     fn drain(&self) -> Vec<Vec<u8>> {
         let mut q = self.queue.lock().unwrap();
         let out: Vec<Vec<u8>> = q.drain(..).collect();
         drop(q);
         // 腾出空间：唤醒可能阻塞的写入方
         self.space.wake();
+        out
+    }
+
+    /// 数据面逐条取（取不到返回 None），腾出空间时唤醒写入方。
+    fn try_pop(&self) -> Option<Vec<u8>> {
+        let mut q = self.queue.lock().unwrap();
+        let out = q.pop_front();
+        drop(q);
+        if out.is_some() {
+            self.space.wake();
+        }
         out
     }
 
@@ -214,30 +226,30 @@ pub fn pump_socket(socket: &mut smoltcp::socket::tcp::Socket<'_>, ends: &mut Bri
     }
 
     // ---- 用户 → socket ----
-    // 先写上一轮剩余
-    if !ends.pending_send.is_empty() && socket.may_send() {
-        match socket.send_slice(&ends.pending_send) {
-            Ok(n) => {
-                ends.pending_send.drain(..n);
-            }
-            Err(_) => return,
-        }
-    }
-    for chunk in ends.send.drain() {
+    // 逐条取：socket 还不能发送（例如 TCP 仍在 SynSent）时，数据**留在队列里**，
+    // 等连接建立后下一轮再发（早先无条件 drain 会在握手期间丢数据）。
+    loop {
         if !ends.pending_send.is_empty() {
-            // 之前的还没写完：先留着，下一轮继续（数据已取走，不丢）
-            break;
+            if !socket.may_send() {
+                break;
+            }
+            match socket.send_slice(&ends.pending_send) {
+                Ok(0) => break,
+                Ok(n) => {
+                    ends.pending_send.drain(..n);
+                }
+                Err(_) => break,
+            }
+            if !ends.pending_send.is_empty() {
+                break; // socket 缓冲满，下一轮继续
+            }
         }
         if !socket.may_send() {
             break;
         }
-        match socket.send_slice(&chunk) {
-            Ok(n) => {
-                if n < chunk.len() {
-                    ends.pending_send = chunk[n..].to_vec();
-                }
-            }
-            Err(_) => break,
+        match ends.send.try_pop() {
+            Some(chunk) => ends.pending_send = chunk,
+            None => break,
         }
     }
 

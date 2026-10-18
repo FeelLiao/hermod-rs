@@ -238,12 +238,17 @@ async fn driver_loop(
 ) {
     let mut bridged: Vec<(smoltcp::iface::SocketHandle, BridgeEnds)> = Vec::new();
     let mut ticker = tokio::time::interval(TICK);
-    let mut last_handshake = Instant::now() - HANDSHAKE_RETRY;
     let mut last_keepalive = Instant::now();
+    /// rx 的超时兜底：3 秒仍未建立才自己发起。
+    const RX_FALLBACK: Duration = Duration::from_secs(3);
 
-    if tunnel.start_handshake().await.is_err() {
+    // 固定角色（DESIGN §3.3 的退路）：tx 主动发起、rx 只响应；rx 仅在超时后
+    // 才发起（应对地址变化）。同时发起会让 boringtun 的握手竞态不稳定。
+    let is_sender = role == Role::Sender;
+    if is_sender && tunnel.start_handshake().await.is_err() {
         return;
     }
+    let mut last_handshake = Instant::now();
 
     loop {
         tokio::select! {
@@ -292,7 +297,8 @@ async fn driver_loop(
 
         // 定时器：握手重试 / 保活（boringtun 不暴露 update_timers）
         if !tunnel.is_established() {
-            if last_handshake.elapsed() >= HANDSHAKE_RETRY {
+            let retry = if is_sender { HANDSHAKE_RETRY } else { RX_FALLBACK };
+            if last_handshake.elapsed() >= retry {
                 let _ = tunnel.retransmit_handshake().await;
                 last_handshake = Instant::now();
             }
@@ -317,6 +323,38 @@ mod tests {
         assert_eq!(b.http_port, HTTP_PORT);
         assert_ne!(b.udp_port, 0);
         assert_ne!(b.wg_public_key, [0u8; 32]);
+    }
+
+    /// 端到端：两个 WireGuardTransport 在本机（真实枚举的 IPv6，内核本地投递）
+    /// 完成 WG 握手 + smoltcp TCP + 桥接流传输。
+    #[tokio::test]
+    async fn end_to_end_two_transports() {
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut tx = WireGuardTransport::new();
+        let mut rx = WireGuardTransport::new();
+        let tx_ep = tx.prepare().await.unwrap();
+        let rx_ep = rx.prepare().await.unwrap();
+
+        let k = [0x33u8; 32];
+        let psk = crate::crypto::kdf::derive_wg_psk(&k, 7);
+
+        let mut tx_conn = tx.establish(Role::Sender, &psk, &rx_ep).await.unwrap();
+        let mut rx_conn = rx.establish(Role::Receiver, &psk, &tx_ep).await.unwrap();
+
+        // tx 监听，rx 拨号（都是立即返回空闲流）
+        let mut server = tx_conn.listen().await.unwrap();
+        let mut client = rx_conn.dial().await.unwrap();
+
+        // rx 写 → tx 读（内含 WG 握手 + TCP 建连，给足超时）
+        client.write_all(b"hermod e2e").await.unwrap();
+        let mut buf = [0u8; 10];
+        tokio::time::timeout(Duration::from_secs(15), server.read_exact(&mut buf))
+            .await
+            .expect("超时：握手/建连未完成")
+            .expect("读取失败");
+        assert_eq!(&buf, b"hermod e2e");
     }
 
     /// establish 能消费 prepare 的产物并返回连接；对端 bundle 由另一个

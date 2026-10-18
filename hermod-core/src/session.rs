@@ -19,7 +19,8 @@
 
 use crate::config::{self, Config};
 use crate::crypto::cpace::Role;
-use crate::crypto::kdf::derive_wg_psk;
+use crate::crypto::kdf::{derive_http_token, derive_wg_psk};
+use sha2::{Digest, Sha256};
 use crate::crypto::wordlist;
 use crate::signal::client::{self, ObservedAddrs, WsStream};
 use crate::transport::iface::Transport;
@@ -45,18 +46,28 @@ pub enum SessionError {
     Untrusted { url: String },
     #[error("配置里的 SPKI 指纹非法: {0}")]
     BadFingerprint(String),
+    #[error("对端 bundle 的凭证指纹与本会话 token 不一致")]
+    FingerprintMismatch,
+}
+
+fn sha256_32(data: &[u8]) -> [u8; 32] {
+    Sha256::digest(data).into()
 }
 
 /// tx 会话（已建立，`listen` 后发文件）。
 pub struct TxSession {
     /// 已建立的 WireGuard 连接。
     pub conn: WgConnection,
+    /// 隧道内 HTTP 的一次性 token（tx 用它拼 `GET /f/<token>`）。
+    pub token: [u8; 16],
 }
 
 /// rx 会话（已建立，`dial` 后收文件）。
 pub struct RxSession {
     /// 已建立的 WireGuard 连接。
     pub conn: WgConnection,
+    /// 隧道内 HTTP 的一次性 token（rx 用同一个 token 拨号）。
+    pub token: [u8; 16],
 }
 
 /// 配置里当前 server 的 SPKI 指纹（用于 `connect_pinned`）。
@@ -95,9 +106,11 @@ pub async fn sender_session(config: &Config, code: &str) -> Result<TxSession, Se
     let password = words.join("-");
     let mut ws = open(config).await?;
     let (k, observed) = client::sender_handshake(&mut ws, channel_id, &password).await?;
-    let conn = exchange_and_establish(&mut ws, channel_id, &k, observed, Role::Sender).await?;
+    let token = derive_http_token(&k, channel_id);
+    let conn =
+        exchange_and_establish(&mut ws, channel_id, &k, &token, observed, Role::Sender).await?;
     // ws 在此 drop → 关闭 WebSocket，释放 server 资源（对应 Go 的显式 Close）
-    Ok(TxSession { conn })
+    Ok(TxSession { conn, token })
 }
 
 /// rx：从传输码开始，建立到 tx 的 WireGuard 连接。
@@ -106,8 +119,10 @@ pub async fn receiver_session(config: &Config, code: &str) -> Result<RxSession, 
     let password = words.join("-");
     let mut ws = open(config).await?;
     let (k, observed) = client::receiver_handshake(&mut ws, channel_id, &password).await?;
-    let conn = exchange_and_establish(&mut ws, channel_id, &k, observed, Role::Receiver).await?;
-    Ok(RxSession { conn })
+    let token = derive_http_token(&k, channel_id);
+    let conn =
+        exchange_and_establish(&mut ws, channel_id, &k, &token, observed, Role::Receiver).await?;
+    Ok(RxSession { conn, token })
 }
 
 /// 交换加密端点 bundle，并 establish 传输。
@@ -115,6 +130,7 @@ async fn exchange_and_establish(
     ws: &mut WsStream,
     channel_id: u16,
     k: &[u8; 32],
+    token: &[u8; 16],
     observed: ObservedAddrs,
     role: Role,
 ) -> Result<WgConnection, SessionError> {
@@ -123,7 +139,9 @@ async fn exchange_and_establish(
     // server 观测地址作为 server-reflexive 提示（仅 IPv6 生效）
     transport.set_server_hint(observed.public_ipv6.parse().ok());
     let my_bytes = transport.prepare().await?;
-    let my_bundle = EndpointBundle::decode(&my_bytes)?;
+    let mut my_bundle = EndpointBundle::decode(&my_bytes)?;
+    // 把凭证指纹填成 SHA-256(token)，对端可据此校验 token 一致
+    my_bundle.credential_fingerprint = sha256_32(token);
     let my_blob = bundle::seal_bundle(k, channel_id, &my_bundle)?;
 
     // tx 先发（blob3）再收（blob4）；rx 先收再发。顺序与 Go 版一致。
@@ -140,6 +158,9 @@ async fn exchange_and_establish(
         }
     };
 
+    if peer_bundle.credential_fingerprint != sha256_32(token) {
+        return Err(SessionError::FingerprintMismatch);
+    }
     let peer_bytes = peer_bundle.encode()?;
     Ok(transport.establish(role, &psk, &peer_bytes).await?)
 }

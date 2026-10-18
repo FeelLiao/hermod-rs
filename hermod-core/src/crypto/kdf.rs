@@ -33,8 +33,33 @@ pub fn derive_wg_psk(k: &[u8; 32], channel_id: u16) -> [u8; 32] {
     okm
 }
 
+/// 派生隧道内 HTTP 的 URL token（16 字节）。
+///
+/// `HKDF-SHA256(ikm=K, salt=channel_id_be16, info="hermod-http-token-v1")`。
+/// 两端各自从 K 派生、**从不过网**；每个会话的 K 都是新的，所以 token 天然一次性。
+/// tx 用它拼 `GET /f/<token>`，rx 用同一个 token 拨号。
+pub fn derive_http_token(k: &[u8; 32], channel_id: u16) -> [u8; 16] {
+    let hk = Hkdf::<Sha256>::new(Some(&channel_id.to_be_bytes()), k);
+    let mut okm = [0u8; 16];
+    hk.expand(b"hermod-http-token-v1", &mut okm)
+        .expect("16 bytes is within HKDF-SHA256 output limit");
+    okm
+}
+
 #[cfg(test)]
 mod tests {
+    /// HTTP token：确定性、16 字节、不同 channel_id 不同。
+    #[test]
+    fn http_token_is_deterministic_and_channel_bound() {
+        let k = [0x5au8; 32];
+        let t1 = super::derive_http_token(&k, 42);
+        let t2 = super::derive_http_token(&k, 42);
+        let t3 = super::derive_http_token(&k, 43);
+        assert_eq!(t1, t2);
+        assert_ne!(t1, t3);
+        assert_eq!(t1.len(), 16);
+    }
+
     use super::*;
 
     // 独立基准：用 Python 的 RFC 5869 HKDF-SHA256 实现算出（/tmp/gen_vectors.py），

@@ -12,11 +12,16 @@ use tokio::net::UdpSocket;
 
 /// 绑定 `[::]:port`（port=0 时由内核分配）的 IPv6-only UDP socket。
 pub async fn bind(port: u16) -> std::io::Result<UdpSocket> {
+    bind_at(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0)).await
+}
+
+/// 绑定到指定 IPv6 地址（`--listen` 用），仍强制 IPV6_V6ONLY。
+pub async fn bind_at(addr: SocketAddrV6) -> std::io::Result<UdpSocket> {
     let sock = Socket::new(Domain::IPV6, Type::DGRAM, None)?;
     // 只收 IPv6，避免 v4-mapped 流量（§3.3）。
     sock.set_only_v6(true)?;
     sock.set_nonblocking(true)?;
-    let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0));
+    let addr: SocketAddr = SocketAddr::V6(addr);
     sock.bind(&addr.into())?;
     let std_udp: std::net::UdpSocket = sock.into();
     UdpSocket::from_std(std_udp)
@@ -25,6 +30,16 @@ pub async fn bind(port: u16) -> std::io::Result<UdpSocket> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `bind_at` 会绑定到指定地址（--listen）。
+    #[tokio::test]
+    async fn bind_at_honors_address() {
+        let addr = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0);
+        let sock = bind_at(addr).await.unwrap();
+        let local = sock.local_addr().unwrap();
+        assert!(local.is_ipv6());
+        assert_eq!(local.ip(), std::net::IpAddr::V6(Ipv6Addr::LOCALHOST));
+    }
 
     /// 绑定到随机端口，确认是 IPv6 socket 且能做本机回环收发。
     #[tokio::test]

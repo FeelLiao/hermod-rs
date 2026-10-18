@@ -26,6 +26,8 @@ pub struct ServeOptions {
     pub size: u64,
     /// 载荷来源（文件 / 内存），边发边读，不整体进内存。
     pub body: Box<dyn AsyncRead + Unpin + Send>,
+    /// 进度回调：每发一块调用一次，参数是**累计已发字节数**。
+    pub progress: Option<Box<dyn FnMut(u64) + Send>>,
 }
 
 /// 服务一条连接的结果：rx 提交的摘要是否与本地一致。
@@ -46,6 +48,7 @@ where
     let mut reader = BufReader::new(r);
     let path = http_meta::token_path(&opts.token);
     let mut body = opts.body;
+    let mut progress = opts.progress;
     let mut computed_sha = String::new();
 
     loop {
@@ -71,6 +74,7 @@ where
 
                 // 流式发送 body + **边发边算** SHA-256（不整体进内存）
                 let mut hasher = Sha256::new();
+                let mut sent: u64 = 0;
                 let mut remaining = opts.size;
                 let mut buf = [0u8; 16 * 1024];
                 while remaining > 0 {
@@ -82,6 +86,10 @@ where
                     hasher.update(&buf[..n]);
                     w.write_all(&buf[..n]).await?;
                     remaining -= n as u64;
+                    sent += n as u64;
+                    if let Some(p) = progress.as_mut() {
+                        p(sent);
+                    }
                 }
                 w.flush().await?;
                 computed_sha = transfer::hex(&hasher.finalize()[..]);
@@ -130,12 +138,28 @@ mod tests {
             name: "greeting.txt".into(),
             size: data.len() as u64,
             body: Box::new(std::io::Cursor::new(data.clone())),
+            progress: None,
         };
+        let sent = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let sent2 = sent.clone();
+        let mut opts = opts;
+        opts.progress = Some(Box::new(move |n| {
+            sent2.store(n, std::sync::atomic::Ordering::SeqCst);
+        }));
+
         let (client_io, server_io) = tokio::io::duplex(64 * 1024);
         let server = tokio::spawn(serve(server_io, opts));
 
         let mut dest = Vec::new();
-        let out = fetch(client_io, &token, &mut dest).await.unwrap();
+        let mut got: u64 = 0;
+        let out = fetch(
+            client_io,
+            &token,
+            &mut dest,
+            Some(&mut |n| got = n),
+        )
+        .await
+        .unwrap();
         assert_eq!(dest, data);
         assert_eq!(out.kind, Kind::File);
         assert_eq!(out.name, "greeting.txt");
@@ -146,6 +170,8 @@ mod tests {
         let outcome = server.await.unwrap().unwrap();
         assert!(outcome.verified);
         assert_eq!(outcome.sha256, sha, "tx 边发边算的摘要应与期望一致");
+        assert_eq!(sent.load(std::sync::atomic::Ordering::SeqCst), data.len() as u64);
+        assert_eq!(got, data.len() as u64);
     }
 
     /// 错误的 token → 404，客户端报错。
@@ -158,11 +184,12 @@ mod tests {
             name: "a".into(),
             size: 1,
             body: Box::new(std::io::Cursor::new(data)),
+            progress: None,
         };
         let (client_io, server_io) = tokio::io::duplex(4096);
         let _server = tokio::spawn(serve(server_io, opts));
         let mut dest = Vec::new();
-        let err = fetch(client_io, &[2u8; 16], &mut dest).await.unwrap_err();
+        let err = fetch(client_io, &[2u8; 16], &mut dest, None).await.unwrap_err();
         assert!(matches!(err, HttpError::Malformed(_)));
     }
 }

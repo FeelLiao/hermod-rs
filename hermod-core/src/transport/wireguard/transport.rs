@@ -60,6 +60,10 @@ pub struct WireGuardTransport {
     /// server 观测到的对端出口地址（信令层 `ObservedAddrs.public_ipv6`）。
     /// Go 版把它作为 server-reflexive 候选放在最前；这里同语义。
     server_hint: Option<std::net::Ipv6Addr>,
+    /// 内层 IP MTU（默认 1420，可 `--wg-mtu` 覆盖）。
+    mtu: usize,
+    /// UDP 绑定地址（`--listen`；默认 `[::]:0`）。
+    udp_bind: Option<std::net::SocketAddrV6>,
 }
 
 impl WireGuardTransport {
@@ -73,6 +77,8 @@ impl WireGuardTransport {
             fingerprint: [0u8; 32],
             overlay: OVERLAY_TX,
             server_hint: None,
+            mtu: crate::transport::wireguard::stack::device::IP_MTU,
+            udp_bind: None,
         }
     }
 
@@ -82,6 +88,16 @@ impl WireGuardTransport {
     /// 前调用。只有它本身是合法 IPv6 候选时才生效；本地枚举仍是权威来源。
     pub fn set_server_hint(&mut self, hint: Option<std::net::Ipv6Addr>) {
         self.server_hint = hint;
+    }
+
+    /// 设置内层 IP MTU（默认 1420）。
+    pub fn set_mtu(&mut self, mtu: usize) {
+        self.mtu = mtu;
+    }
+
+    /// 设置 UDP 绑定地址（`--listen`；默认 `[::]:0`）。
+    pub fn set_udp_bind(&mut self, addr: Option<std::net::SocketAddrV6>) {
+        self.udp_bind = addr;
     }
 }
 
@@ -96,7 +112,10 @@ impl Transport for WireGuardTransport {
     type Connection = WgConnection;
 
     async fn prepare(&mut self) -> Result<Vec<u8>, WgError> {
-        let udp = udp::bind(0).await?;
+        let udp = match self.udp_bind {
+            Some(addr) => udp::bind_at(addr).await?,
+            None => udp::bind(0).await?,
+        };
         let udp_port = udp.local_addr()?.port();
         let mut rng = UnwrapErr(getrandom::SysRng);
         let keypair = KeyPair::generate(&mut rng);
@@ -110,13 +129,8 @@ impl Transport for WireGuardTransport {
             candidates.insert(0, hint);
         }
 
-        // 一次性凭证指纹：这里用随机凭证的 SHA-256（真实 token 由 M4.4 生成）。
-        let mut credential = [0u8; 32];
-        rng.fill_bytes(&mut credential);
-        let fingerprint: [u8; 32] = {
-            use sha2::{Digest, Sha256};
-            Sha256::digest(credential).into()
-        };
+        // 凭证指纹由会话层填入 SHA-256(HTTP token)；这里先占位 0。
+        let fingerprint = [0u8; 32];
 
         let bundle = EndpointBundle {
             version: BUNDLE_VERSION,
@@ -177,7 +191,7 @@ impl Transport for WireGuardTransport {
         );
         let endpoint = PeerEndpoint::new(peer.ipv6_candidates.clone(), peer.udp_port);
         let tunnel = WireGuardTunnel::new(session, udp, endpoint);
-        let stack = TunnelStack::new(overlay, seed);
+        let stack = TunnelStack::new(overlay, seed, self.mtu);
 
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
         let local_http = self.http_port;

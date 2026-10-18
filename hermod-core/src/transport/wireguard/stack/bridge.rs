@@ -294,6 +294,7 @@ mod tests {
     /// 端到端：两个 smoltcp 栈 + 桥接流，A 写 → B 读。
     #[tokio::test]
     async fn bridged_streams_transfer_between_stacks() {
+        use crate::transport::wireguard::stack::device::IP_MTU;
         use crate::transport::wireguard::stack::driver::{
             TunnelStack, OVERLAY_RX, OVERLAY_TX,
         };
@@ -303,8 +304,8 @@ mod tests {
             let o = a.octets();
             IpAddress::Ipv4(Ipv4Address::new(o[0], o[1], o[2], o[3]))
         };
-        let mut a = TunnelStack::new(OVERLAY_TX, 1);
-        let mut b = TunnelStack::new(OVERLAY_RX, 2);
+        let mut a = TunnelStack::new(OVERLAY_TX, 1, IP_MTU);
+        let mut b = TunnelStack::new(OVERLAY_RX, 2, IP_MTU);
 
         let srv_h = b.add_tcp(TunnelStack::new_tcp_socket());
         b.listen(

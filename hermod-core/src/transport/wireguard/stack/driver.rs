@@ -7,7 +7,7 @@
 //!
 //! 覆盖网地址（DEVELOPMENT.md §3.3）：tx = 10.66.66.1，rx = 10.66.66.2。
 
-use crate::transport::wireguard::stack::device::{QueueDevice, IP_MTU};
+use crate::transport::wireguard::stack::device::QueueDevice;
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::tcp;
 use smoltcp::time::Instant;
@@ -27,12 +27,13 @@ pub struct TunnelStack {
     iface: Interface,
     sockets: SocketSet<'static>,
     start: std::time::Instant,
+    mtu: usize,
 }
 
 impl TunnelStack {
-    /// 创建栈并配置覆盖网地址（tx 或 rx）。
-    pub fn new(overlay: Ipv4Addr, random_seed: u64) -> Self {
-        let mut device = QueueDevice::new(IP_MTU);
+    /// 创建栈并配置覆盖网地址（tx 或 rx）与 MTU。
+    pub fn new(overlay: Ipv4Addr, random_seed: u64, mtu: usize) -> Self {
+        let mut device = QueueDevice::new(mtu);
         let mut config = Config::new(HardwareAddress::Ip);
         config.random_seed = random_seed;
         let mut iface = Interface::new(config, &mut device, Instant::from_millis(0));
@@ -50,7 +51,13 @@ impl TunnelStack {
             iface,
             sockets: SocketSet::new(Vec::new()),
             start: std::time::Instant::now(),
+            mtu,
         }
+    }
+
+    /// 当前内层 IP MTU。
+    pub fn mtu(&self) -> usize {
+        self.mtu
     }
 
     fn now(&self) -> Instant {
@@ -121,6 +128,7 @@ impl TunnelStack {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::wireguard::stack::device::IP_MTU;
     use smoltcp::wire::IpListenEndpoint;
 
     fn ipv4(a: Ipv4Addr) -> IpAddress {
@@ -142,11 +150,18 @@ mod tests {
         }
     }
 
+    /// MTU 可配置（--wg-mtu）。
+    #[test]
+    fn mtu_reflects_constructor() {
+        let s = TunnelStack::new(OVERLAY_TX, 1, 9000);
+        assert_eq!(s.mtu(), 9000);
+    }
+
     /// 两个栈经内存假设备建立 TCP 连接并传数据（smoltcp 栈验收）。
     #[test]
     fn tcp_connect_and_transfer_between_two_stacks() {
-        let mut a = TunnelStack::new(OVERLAY_TX, 1);
-        let mut b = TunnelStack::new(OVERLAY_RX, 2);
+        let mut a = TunnelStack::new(OVERLAY_TX, 1, IP_MTU);
+        let mut b = TunnelStack::new(OVERLAY_RX, 2, IP_MTU);
 
         // B 监听 10.66.66.2:7777
         let srv = TunnelStack::new_tcp_socket();

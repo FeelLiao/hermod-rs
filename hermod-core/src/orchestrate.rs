@@ -55,9 +55,10 @@ pub async fn fetch_file<D: AsyncWrite + Unpin>(
     conn: &mut WgConnection,
     token: &[u8; 16],
     dest: &mut D,
+    progress: Option<&mut dyn FnMut(u64)>,
 ) -> Result<FetchOutcome, OrchestrateError> {
     let stream = conn.dial().await?;
-    Ok(fetch(stream, token, dest).await?)
+    Ok(fetch(stream, token, dest, progress).await?)
 }
 
 /// tx：把本地文件经隧道发给 rx（边发边算 SHA-256）。
@@ -65,6 +66,7 @@ pub async fn send_file(
     conn: &mut WgConnection,
     token: [u8; 16],
     path: &std::path::Path,
+    progress: Option<Box<dyn FnMut(u64) + Send>>,
 ) -> Result<ServeOutcome, OrchestrateError> {
     let file = tokio::fs::File::open(path).await?;
     let size = file.metadata().await?.len();
@@ -79,6 +81,7 @@ pub async fn send_file(
         name,
         size,
         body: Box::new(file),
+        progress,
     };
     serve_file(conn, opts).await
 }
@@ -88,6 +91,7 @@ pub async fn send_text(
     conn: &mut WgConnection,
     token: [u8; 16],
     text: &str,
+    progress: Option<Box<dyn FnMut(u64) + Send>>,
 ) -> Result<ServeOutcome, OrchestrateError> {
     let data = text.as_bytes().to_vec();
     let size = data.len() as u64;
@@ -97,6 +101,7 @@ pub async fn send_text(
         name: "message.txt".to_string(),
         size,
         body: Box::new(std::io::Cursor::new(data)),
+        progress,
     };
     serve_file(conn, opts).await
 }
@@ -108,6 +113,7 @@ pub async fn receive(
     conn: &mut WgConnection,
     token: &[u8; 16],
     dest_dir: &std::path::Path,
+    progress: Option<&mut dyn FnMut(u64)>,
 ) -> Result<Receipt, OrchestrateError> {
     std::fs::create_dir_all(dest_dir)?;
     // 唯一临时名（避免并发/重名）；create_temp 用 O_EXCL + 0600
@@ -121,7 +127,7 @@ pub async fn receive(
     let std_file = crate::transfer::create_temp(&temp)?;
     let mut file = tokio::fs::File::from_std(std_file);
 
-    let out = match fetch_file(conn, token, &mut file).await {
+    let out = match fetch_file(conn, token, &mut file, progress).await {
         Ok(out) => out,
         Err(e) => {
             let _ = std::fs::remove_file(&temp);
@@ -183,12 +189,13 @@ mod tests {
             name: "hello.txt".into(),
             size: data.len() as u64,
             body: Box::new(std::io::Cursor::new(data.clone())),
+            progress: None,
         };
 
         let mut dest = Vec::new();
         let (serve_out, fetch_out) = tokio::join!(
             serve_file(&mut tx_conn, opts),
-            fetch_file(&mut rx_conn, &token, &mut dest),
+            fetch_file(&mut rx_conn, &token, &mut dest, None),
         );
 
         let serve_out = serve_out.unwrap();
@@ -217,8 +224,8 @@ mod tests {
         let token = [0x22u8; 16];
 
         let (serve_out, receipt) = tokio::join!(
-            send_file(&mut tx_conn, token, &src),
-            receive(&mut rx_conn, &token, &dest_dir),
+            send_file(&mut tx_conn, token, &src, None),
+            receive(&mut rx_conn, &token, &dest_dir, None),
         );
         let serve_out = serve_out.unwrap();
         let receipt = receipt.unwrap();

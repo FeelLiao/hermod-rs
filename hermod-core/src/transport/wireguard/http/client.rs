@@ -30,6 +30,7 @@ pub async fn fetch<S, D>(
     stream: S,
     token: &[u8; 16],
     dest: &mut D,
+    mut progress: Option<&mut dyn FnMut(u64)>,
 ) -> Result<FetchOutcome, HttpError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -62,6 +63,7 @@ where
 
     // 2) 边收边算 SHA-256，写入目标
     let mut hasher = Sha256::new();
+    let mut received: u64 = 0;
     let mut remaining = size;
     let mut buf = [0u8; 16 * 1024];
     while remaining > 0 {
@@ -73,6 +75,10 @@ where
         hasher.update(&buf[..n]);
         dest.write_all(&buf[..n]).await?;
         remaining -= n as u64;
+        received += n as u64;
+        if let Some(p) = progress.as_mut() {
+            p(received);
+        }
     }
     dest.flush().await?;
     let sha256 = transfer::hex(&hasher.finalize()[..]);

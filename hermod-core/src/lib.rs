@@ -24,7 +24,9 @@
 //!   HTTP，零特权）。换传输协议时只改实现，不动上层。
 //! - [`session`]：会话编排——从**传输码**到已建立的传输连接：
 //!   [`session::sender_session`]（tx）/ [`session::receiver_session`]（rx）。
-//!   它把「信令 → CPace → bundle 加密交换 → 传输 establish」串成一跳。
+//!   它把「信令 → CPace → bundle 加密交换 → 传输 establish」串成一跳，并返回
+//!   隧道内 HTTP 的一次性 `token`（两端从 K 派生，见
+//!   [`crypto::kdf::derive_http_token`]）。
 //! - [`transfer`]：载荷元数据（`Kind`/文件名/大小/SHA-256）、输入分类、
 //!   目标路径安全校验、临时文件路径。
 //! - [`config`]：与 Go 版兼容的配置 schema（YAML 键、默认值、Server URL 规范化）。
@@ -32,7 +34,8 @@
 //!   帧格式、一次性 URL token）与抗畸形输入校验。
 //! - [`orchestrate`]：传输编排——把传输连接与隧道内 HTTP 组合成完整的
 //!   tx/rx 主流程：
-//!   - [`orchestrate::send_file`] / [`orchestrate::send_text`]：tx 发文件/文本；
+//!   - [`orchestrate::send_file`] / [`orchestrate::send_text`]：tx 发文件/文本
+//!     （均带可选进度回调）；
 //!   - [`orchestrate::receive`]：rx 拉取到临时文件 → 校验 SHA-256 → 原子改名；
 //!   - [`orchestrate::serve_file`] / [`orchestrate::fetch_file`]：更底层的
 //!     「连接 + HTTP」组合（供自定义流程使用）。

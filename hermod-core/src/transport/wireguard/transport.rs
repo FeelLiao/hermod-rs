@@ -237,6 +237,19 @@ enum Command {
     },
     /// 优雅关闭：把发送队列排空后再让驱动退出。
     Shutdown { reply: oneshot::Sender<()> },
+    /// 立即中止：RST 掉所有桥接 socket 并退出（用于 Ctrl+C 取消传输）。
+    Abort,
+}
+
+/// 从外部中止一个已建立的连接（可 clone，供 Ctrl+C 处理器持有）。
+#[derive(Clone)]
+pub struct AbortHandle(mpsc::Sender<Command>);
+
+impl AbortHandle {
+    /// 请求驱动立即中止连接并给对端发 RST（尽力而为，不阻塞）。
+    pub fn abort(&self) {
+        let _ = self.0.try_send(Command::Abort);
+    }
 }
 
 /// 已建立的 WireGuard 连接（上层用它 listen/dial）。
@@ -278,6 +291,11 @@ impl TransportConnection for WgConnection {
 }
 
 impl WgConnection {
+    /// 取得一个可 clone 的中止句柄（Ctrl+C 时让对端立刻收到 RST）。
+    pub fn abort_handle(&self) -> AbortHandle {
+        AbortHandle(self.cmd.clone())
+    }
+
     /// 优雅关闭：等待驱动把缓冲里的数据全部送达对端后再返回。
     ///
     /// `orchestrate::*` 返回后应调用本方法，否则进程退出会 abort 驱动任务，
@@ -386,6 +404,18 @@ async fn driver_loop(
                         let _ = stack.connect(h, (ipv4_addr(peer), peer_http), DIAL_LOCAL_PORT);
                         bridged.push((h, ends));
                         let _ = reply.send(Ok(stream));
+                    }
+                    Command::Abort => {
+                        // 立即取消：RST 掉所有桥接 socket；把 RST 包发出去后退出。
+                        for (h, _) in bridged.iter_mut() {
+                            stack.tcp(*h).abort();
+                        }
+                        stack.poll();
+                        while let Some(pkt) = stack.pop_inner() {
+                            let _ = tunnel.send_tunnel(&pkt).await;
+                        }
+                        crate::log_info!("transport aborted (RST sent)");
+                        break;
                     }
                     Command::Shutdown { reply } => {
                         // 排空：把 BridgeStream 缓冲与 smoltcp 发送队列都写出去，

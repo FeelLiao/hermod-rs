@@ -192,6 +192,14 @@ The config holds the `server_url`, TLS settings, and the `trusted_servers` map
    SHA-256, then posts the digest to `POST /done`. The sender compares the digest with
    its own and only then completes the transfer.
 
+## Tuning
+
+- **LAN throughput**: the inner TCP window defaults to 1 MiB. On a fast LAN you can
+  raise it with `HERMOD_TCP_SOCKET_BUF` (bytes, e.g. `4194304` for 4 MiB) on both
+  sides. Keep it small on lossy WAN paths — a large window amplifies bufferbloat.
+- Check `--verbose info`'s `receive progress ... write_pct`: if it is high, the
+  receiving disk is the bottleneck, not the network.
+
 ## Security properties
 
 | Property | Mechanism |

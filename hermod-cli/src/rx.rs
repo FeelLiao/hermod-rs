@@ -15,7 +15,10 @@ const IDLE: Duration = Duration::from_secs(30);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(660);
 
 /// 执行 `rx`。
-pub async fn run(args: RxArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(
+    args: RxArgs,
+    abort_slot: util::AbortSlot,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut cfg = config::load().unwrap_or_default();
     if let Some(s) = &args.server {
         cfg.server_url = config::normalize_server_url(s).map_err(util::boxed)?;
@@ -33,6 +36,10 @@ pub async fn run(args: RxArgs) -> Result<(), Box<dyn std::error::Error>> {
     .await
     .map_err(|_| "handshake timed out")?
     .map_err(util::boxed)?;
+    // 连接已建立：把中止句柄交给 Ctrl+C 处理器（取消时对端立刻收到 RST）。
+    if let Ok(mut s) = abort_slot.lock() {
+        *s = Some(rx.conn.abort_handle());
+    }
     verbosity::status("Establishing P2P connection...");
 
     let dest = args.destination.unwrap_or_else(|| ".".to_string());

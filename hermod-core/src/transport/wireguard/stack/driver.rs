@@ -122,9 +122,16 @@ impl TunnelStack {
 
     /// 新建 8 MiB 缓冲的 TCP socket（尚未加入栈）。
     pub fn new_tcp_socket() -> tcp::Socket<'static> {
+        // 可用 HERMOD_TCP_SOCKET_BUF（字节）覆盖窗口大小，便于在局域网实测。
+        // 注意：窗口过大在丢包路径上会放大 bufferbloat，默认仍是 1 MiB。
+        let buf = std::env::var("HERMOD_TCP_SOCKET_BUF")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n >= 64 * 1024)
+            .unwrap_or(SOCKET_BUF);
         let mut socket = tcp::Socket::new(
-            tcp::SocketBuffer::new(vec![0u8; SOCKET_BUF]),
-            tcp::SocketBuffer::new(vec![0u8; SOCKET_BUF]),
+            tcp::SocketBuffer::new(vec![0u8; buf]),
+            tcp::SocketBuffer::new(vec![0u8; buf]),
         );
         // 必须显式启用拥塞控制：smoltcp 默认 features 不含 cubic/reno，
         // 否则 `AnyController::new()` 回退到 NoControl（无拥塞控制），

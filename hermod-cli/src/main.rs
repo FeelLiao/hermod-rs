@@ -41,9 +41,18 @@ async fn main() -> std::process::ExitCode {
         .with_level(true)
         .init();
 
+    // Ctrl+C 取消：连接建立后 tx/rx 会把中止句柄放进这个槽；
+    // 收到 Ctrl+C 时取出并 abort()，驱动会 RST 掉连接，对端立即结束。
+    let abort_slot: util::AbortSlot = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let slot_for_ctrl = abort_slot.clone();
     let result = tokio::select! {
-        r = run(args) => r,
+        r = run(args, abort_slot) => r,
         _ = tokio::signal::ctrl_c() => {
+            if let Some(h) = slot_for_ctrl.lock().ok().and_then(|mut s| s.take()) {
+                h.abort();
+                // 留一点时间让驱动把 RST 发出去。
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
             verbosity::error("interrupted");
             return std::process::ExitCode::from(130);
         }
@@ -58,10 +67,13 @@ async fn main() -> std::process::ExitCode {
     }
 }
 
-async fn run(args: cli::Cli) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(
+    args: cli::Cli,
+    abort_slot: util::AbortSlot,
+) -> Result<(), Box<dyn std::error::Error>> {
     match args.cmd {
-        cli::Command::Tx(a) => tx::run(a).await,
-        cli::Command::Rx(a) => rx::run(a).await,
+        cli::Command::Tx(a) => tx::run(a, abort_slot).await,
+        cli::Command::Rx(a) => rx::run(a, abort_slot).await,
         cli::Command::Trust(a) => trust::run(a).await,
         cli::Command::Serve => serve::run().await,
     }

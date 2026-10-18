@@ -22,3 +22,7 @@ pub fn parse_listen(s: &str) -> Result<SocketAddrV6, String> {
 pub fn boxed<E: std::error::Error + 'static>(e: E) -> Box<dyn std::error::Error> {
     Box::new(e)
 }
+
+/// 共享的「中止句柄」槽：连接建立后由 tx/rx 填入，Ctrl+C 处理器取出并中止。
+pub type AbortSlot =
+    std::sync::Arc<std::sync::Mutex<Option<hermod_core::AbortHandle>>>;

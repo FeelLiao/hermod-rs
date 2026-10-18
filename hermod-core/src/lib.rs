@@ -81,3 +81,4 @@ pub mod transport;
 ///
 /// 上层通常只依赖这两个 trait；具体实现见 [`transport::wireguard`]。
 pub use transport::iface::{Transport, TransportConnection};
+pub use transport::wireguard::transport::AbortHandle;

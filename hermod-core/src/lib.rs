@@ -66,7 +66,6 @@
 
 pub mod config;
 pub mod crypto;
-pub mod error;
 pub mod http_meta;
 pub mod orchestrate;
 pub mod session;

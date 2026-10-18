@@ -1,9 +1,6 @@
-//! Signaling: the WebSocket rendezvous protocol shared between server and
-//! client, including certificate pinning. See DEVELOPMENT.md §2.1 and M2.
+//! Signaling: the WebSocket rendezvous protocol (client side) and certificate
+//! pinning. 服务端仍用 Go 版（D13）；Rust server 延后。See DEVELOPMENT.md §2.1/M2.
 
 pub mod client;
 pub mod protocol;
-pub mod ratelimit;
-pub mod server;
-pub mod store;
 pub mod tls;

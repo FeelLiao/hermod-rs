@@ -26,7 +26,7 @@ pub async fn run(args: TrustArgs) -> Result<(), Box<dyn std::error::Error>> {
     // stdout 只放指纹，便于脚本取值与人工核对
     println!("{hex}");
     if args.fingerprint.is_none() {
-        verbosity::warn("首次信任（TOFU）：请在带外核对上面的指纹");
+        verbosity::warn("first-time trust (TOFU): verify the fingerprint out-of-band");
     }
 
     let mut cfg = config::load().unwrap_or_default();

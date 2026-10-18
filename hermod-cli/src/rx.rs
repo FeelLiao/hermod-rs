@@ -65,7 +65,7 @@ pub async fn run(args: RxArgs) -> Result<(), Box<dyn std::error::Error>> {
         Ok(Err(e)) => return Err(Box::new(e)),
         Err(msg) => {
             return Err(format!(
-                "{msg}（已接收 {} 字节）",
+                "{msg} (received {} bytes)",
                 received.load(Ordering::Relaxed)
             )
             .into())

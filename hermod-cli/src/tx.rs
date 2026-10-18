@@ -132,7 +132,7 @@ async fn finish_and_shutdown(
 
 fn finish(verified: bool, size: u64, sha256: &str) -> Result<(), Box<dyn std::error::Error>> {
     if !verified {
-        return Err("receiver 的摘要未被接受（digest mismatch）".into());
+        return Err("receiver digest not accepted (digest mismatch)".into());
     }
     verbosity::success(format!("sent {size} bytes, sha256={sha256}"));
     Ok(())
@@ -150,7 +150,7 @@ where
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(Box::new(e)),
         Err(msg) => Err(format!(
-            "{msg}（已写入 {} 字节；若是大文件，检查对端是否在收；可尝试 --wg-mtu 1200 排除路径 MTU 问题）",
+            "{msg} ({} bytes written; for large files, check the peer; try --wg-mtu 1200 to rule out path MTU)",
             sent.load(Ordering::Relaxed)
         )
         .into()),

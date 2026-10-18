@@ -13,8 +13,8 @@ pub fn parse_listen(s: &str) -> Result<SocketAddrV6, String> {
     };
     match candidate.parse::<SocketAddr>() {
         Ok(SocketAddr::V6(a)) => Ok(a),
-        Ok(SocketAddr::V4(_)) => Err(format!("--listen 只接受 IPv6 地址（D7）: {s}")),
-        Err(_) => Err(format!("无法解析 --listen 地址: {s}")),
+        Ok(SocketAddr::V4(_)) => Err(format!("--listen accepts IPv6 only (D7): {s}")),
+        Err(_) => Err(format!("cannot parse --listen address: {s}")),
     }
 }
 

@@ -150,7 +150,7 @@ pub async fn receive(
     drop(file);
 
     if !out.verified {
-        crate::log_warn!("摘要不一致，删除临时文件 {}", temp.display());
+        crate::log_warn!("digest mismatch, removing temp file {}", temp.display());
         let _ = std::fs::remove_file(&temp);
         return Err(OrchestrateError::DigestMismatch);
     }

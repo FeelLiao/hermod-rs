@@ -324,7 +324,7 @@ async fn driver_loop(
         "transport driver started"
     );
     if is_sender && tunnel.start_handshake().await.is_err() {
-        crate::log_warn!("初始握手发送失败，驱动退出");
+        crate::log_warn!("initial handshake send failed, driver exiting");
         return;
     }
     let mut last_handshake = Instant::now();
@@ -339,12 +339,12 @@ async fn driver_loop(
                 match r {
                     Ok(Some(inner)) => {
                         inner_rx += 1;
-                        crate::log_debug!("内层包 #{inner_rx}（{}B）→ smoltcp", inner.len());
+                        crate::log_debug!("inner packet #{inner_rx} ({}B) -> smoltcp", inner.len());
                         stack.push_inner(inner);
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        crate::log_warn!("UDP 接收失败: {e}");
+                        crate::log_warn!("UDP receive failed: {e}");
                         break;
                     }
                 }
@@ -436,7 +436,7 @@ async fn driver_loop(
             }
         }
         if batch > 64 || iter.is_multiple_of(200) {
-            crate::log_debug!("批量收包: 本轮 {batch} 个");
+            crate::log_debug!("batch recv: {batch} packets this round");
         }
         // 驱动 smoltcp，并搬运每个桥接 socket 的字节
         stack.poll();
@@ -449,7 +449,7 @@ async fn driver_loop(
         }
         // 把 boringtun 排队的内层包放出来（握手完成前发送的包会排在内部队列）
         if let Err(e) = tunnel.flush_queued().await {
-            crate::log_warn!("排空 WG 队列失败: {e}");
+            crate::log_warn!("failed to flush WG queue: {e}");
         }
         if iter.is_multiple_of(40) {
             let send_q: usize = bridged.iter().map(|(h, _)| stack.tcp(*h).send_queue()).sum();
@@ -464,7 +464,7 @@ async fn driver_loop(
         if !tunnel.session_ok() {
             let retry = if is_sender { HANDSHAKE_RETRY } else { RX_FALLBACK };
             if last_handshake.elapsed() >= retry {
-                crate::log_debug!("会话未就绪，重发握手（role={role:?}）");
+                crate::log_debug!("session not ready, retransmit handshake (role={role:?})");
                 let _ = tunnel.retransmit_handshake().await;
                 last_handshake = Instant::now();
             }
@@ -476,13 +476,13 @@ async fn driver_loop(
                 last_rekey = Instant::now();
             }
             if last_keepalive.elapsed() >= Duration::from_secs(KEEPALIVE_SECS) {
-                crate::log_debug!("发送 WireGuard keepalive");
+                crate::log_debug!("sending WireGuard keepalive");
                 let _ = tunnel.send_keepalive().await;
                 last_keepalive = Instant::now();
             }
         }
     }
-    crate::log_info!("传输驱动退出（role={role:?}, 内层收={inner_rx} 发={inner_tx}）");
+    crate::log_info!("transport driver exited (role={role:?}, inner_rx={inner_rx} inner_tx={inner_tx})");
 }
 
 #[cfg(test)]

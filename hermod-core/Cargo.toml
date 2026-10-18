@@ -16,6 +16,7 @@ der = "0.8"
 futures-util = "0.3"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 hkdf = "0.13"
+if-addrs = "0.15.0"
 p256 = { version = "0.14", features = ["ecdh", "hash2curve"] }
 rand_core = "0.10"
 rustls = "0.23"
@@ -23,6 +24,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 sha2 = "0.11"
+smoltcp = { version = "0.14.0", features = ["medium-ip"] }
 # IPv6-only UDP 绑定（tokio 已依赖，已在树里）。
 socket2 = "0.6"
 subtle = "2"

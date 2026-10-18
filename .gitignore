@@ -6,5 +6,6 @@
 .DS_Store
 *.swp
 /hermod-go
+/docs
 
 # Nested Go reference repo (has its own git history/remote)

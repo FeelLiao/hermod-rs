@@ -5,8 +5,26 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-# The CLI is a thin shell: all logic lives in hermod-core (D17).
+# 所有逻辑都在 hermod-core（D17），CLI 只做参数解析与调度。
 hermod-core = { path = "../hermod-core" }
+
+# 参数解析
+clap = { version = "4", features = ["derive"] }
+
+# 异步运行时 + Ctrl+C + 超时
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+
+# 进度条与终端颜色/tty 检测
+indicatif = "0.17"
+console = "0.15"
+
+# 生成传输码的随机源（已在 core 依赖树里）
+rand_core = "0.10"
+getrandom = { version = "0.4", features = ["sys_rng"] }
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "hermod"
+path = "src/main.rs"

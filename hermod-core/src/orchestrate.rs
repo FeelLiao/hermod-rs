@@ -106,6 +106,15 @@ pub async fn send_text(
     serve_file(conn, opts).await
 }
 
+/// 临时文件 RAII 清理：Drop 时删除（含 future 被取消/panic 的情况）。
+struct TempGuard(std::path::PathBuf);
+
+impl Drop for TempGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// rx：拉取文件到 `dest_dir`，写临时文件 → 校验 → 原子改名。
 ///
 /// 对应 M4.4：临时文件 O_EXCL + 0600；摘要不一致则删临时文件并报错。
@@ -125,6 +134,8 @@ pub async fn receive(
     }
     let temp = dest_dir.join(format!(".hermod_{:016x}.hermod_tmp", u64::from_le_bytes(rnd)));
     let std_file = crate::transfer::create_temp(&temp)?;
+    // 守卫在函数返回/被取消时删除临时文件；成功改名后 forget 掉。
+    let guard = TempGuard(temp.clone());
     let mut file = tokio::fs::File::from_std(std_file);
 
     let out = match fetch_file(conn, token, &mut file, progress).await {
@@ -145,6 +156,7 @@ pub async fn receive(
     // 校验通过才原子改名（safe_destination_path 负责剥目录分量 + 去重）
     let final_path = crate::transfer::safe_destination_path(dest_dir, &out.name)?;
     std::fs::rename(&temp, &final_path)?;
+    std::mem::forget(guard);
     Ok(Receipt {
         path: final_path,
         sha256: out.sha256,

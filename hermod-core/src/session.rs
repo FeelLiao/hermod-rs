@@ -54,6 +54,15 @@ fn sha256_32(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
 
+/// 会话建立的可选参数（对应 CLI 的 `--wg-mtu` / `--listen`）。
+#[derive(Debug, Clone, Default)]
+pub struct SessionOptions {
+    /// 内层 IP MTU（默认 1420）。
+    pub mtu: Option<usize>,
+    /// UDP 绑定地址（默认 `[::]:0`）。
+    pub udp_bind: Option<std::net::SocketAddrV6>,
+}
+
 /// tx 会话（已建立，`listen` 后发文件）。
 pub struct TxSession {
     /// 已建立的 WireGuard 连接。
@@ -102,26 +111,46 @@ async fn open(config: &Config) -> Result<WsStream, SessionError> {
 
 /// tx：从传输码开始，建立到 rx 的 WireGuard 连接。
 pub async fn sender_session(config: &Config, code: &str) -> Result<TxSession, SessionError> {
+    sender_session_with(config, code, &SessionOptions::default()).await
+}
+
+/// tx：同 [`sender_session`]，可指定 MTU / UDP 绑定地址。
+pub async fn sender_session_with(
+    config: &Config,
+    code: &str,
+    opts: &SessionOptions,
+) -> Result<TxSession, SessionError> {
     let (channel_id, words) = wordlist::parse_transfer_code(code)?;
     let password = words.join("-");
     let mut ws = open(config).await?;
     let (k, observed) = client::sender_handshake(&mut ws, channel_id, &password).await?;
     let token = derive_http_token(&k, channel_id);
     let conn =
-        exchange_and_establish(&mut ws, channel_id, &k, &token, observed, Role::Sender).await?;
+        exchange_and_establish(&mut ws, channel_id, &k, &token, observed, Role::Sender, opts)
+            .await?;
     // ws 在此 drop → 关闭 WebSocket，释放 server 资源（对应 Go 的显式 Close）
     Ok(TxSession { conn, token })
 }
 
 /// rx：从传输码开始，建立到 tx 的 WireGuard 连接。
 pub async fn receiver_session(config: &Config, code: &str) -> Result<RxSession, SessionError> {
+    receiver_session_with(config, code, &SessionOptions::default()).await
+}
+
+/// rx：同 [`receiver_session`]，可指定 MTU / UDP 绑定地址。
+pub async fn receiver_session_with(
+    config: &Config,
+    code: &str,
+    opts: &SessionOptions,
+) -> Result<RxSession, SessionError> {
     let (channel_id, words) = wordlist::parse_transfer_code(code)?;
     let password = words.join("-");
     let mut ws = open(config).await?;
     let (k, observed) = client::receiver_handshake(&mut ws, channel_id, &password).await?;
     let token = derive_http_token(&k, channel_id);
     let conn =
-        exchange_and_establish(&mut ws, channel_id, &k, &token, observed, Role::Receiver).await?;
+        exchange_and_establish(&mut ws, channel_id, &k, &token, observed, Role::Receiver, opts)
+            .await?;
     Ok(RxSession { conn, token })
 }
 
@@ -133,9 +162,14 @@ async fn exchange_and_establish(
     token: &[u8; 16],
     observed: ObservedAddrs,
     role: Role,
+    opts: &SessionOptions,
 ) -> Result<WgConnection, SessionError> {
     let psk = derive_wg_psk(k, channel_id);
     let mut transport = WireGuardTransport::new();
+    if let Some(mtu) = opts.mtu {
+        transport.set_mtu(mtu);
+    }
+    transport.set_udp_bind(opts.udp_bind);
     // server 观测地址作为 server-reflexive 提示（仅 IPv6 生效）
     transport.set_server_hint(observed.public_ipv6.parse().ok());
     let my_bytes = transport.prepare().await?;

@@ -31,7 +31,8 @@ pub async fn run(args: TxArgs) -> Result<(), Box<dyn std::error::Error>> {
     // 1) 生成并打印传输码（stdout 只放这个）
     let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
     let (_channel_id, code) = wordlist::generate_transfer_code(&mut rng, args.words);
-    println!("{code}");
+    // 对齐 Go：传输码打到 stderr，格式 "Transfer code: <code>"；不受 --quiet 抑制。
+    eprintln!("Transfer code: {code}");
 
     // 2) 建会话
     verbosity::debug(format!("server_url={}", cfg.server_url));
@@ -46,7 +47,7 @@ pub async fn run(args: TxArgs) -> Result<(), Box<dyn std::error::Error>> {
     .await
     .map_err(|_| "handshake timed out")?
     .map_err(util::boxed)?;
-    verbosity::success("tunnel established");
+    verbosity::status("Establishing P2P connection...");
 
     // 3) 按输入类型发送
     let quiet = verbosity::is_quiet();
@@ -134,7 +135,8 @@ fn finish(verified: bool, size: u64, sha256: &str) -> Result<(), Box<dyn std::er
     if !verified {
         return Err("receiver digest not accepted (digest mismatch)".into());
     }
-    verbosity::success(format!("sent {size} bytes, sha256={sha256}"));
+    verbosity::info(format!("sha256: {sha256}, bytes: {size}"));
+    verbosity::status("Transfer complete.");
     Ok(())
 }
 

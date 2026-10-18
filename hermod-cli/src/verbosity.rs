@@ -54,10 +54,12 @@ pub fn info(msg: impl AsRef<str>) {
     }
 }
 
-/// 成功信息（绿色，`--quiet` 时抑制）。
-pub fn success(msg: impl AsRef<str>) {
-    if enabled(Level::Info) && !is_quiet() {
-        eprintln!("{}", paint(msg.as_ref(), console::Color::Green));
+/// 状态输出：受 `--quiet` 抑制，但与 `--verbose` **无关**（对应 Go 的 `printStatus`）。
+///
+/// 例：`Establishing P2P connection...`、`Saved to ...`、`Transfer complete.`
+pub fn status(msg: impl AsRef<str>) {
+    if !is_quiet() {
+        eprintln!("{}", msg.as_ref());
     }
 }
 

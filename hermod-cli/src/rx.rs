@@ -33,7 +33,7 @@ pub async fn run(args: RxArgs) -> Result<(), Box<dyn std::error::Error>> {
     .await
     .map_err(|_| "handshake timed out")?
     .map_err(util::boxed)?;
-    verbosity::success("tunnel established");
+    verbosity::status("Establishing P2P connection...");
 
     let dest = args.destination.unwrap_or_else(|| ".".to_string());
     std::fs::create_dir_all(&dest).map_err(util::boxed)?;
@@ -75,13 +75,9 @@ pub async fn run(args: RxArgs) -> Result<(), Box<dyn std::error::Error>> {
     // 优雅关闭 rx 侧（排空后驱动退出）
     rx.conn.shutdown().await.map_err(util::boxed)?;
 
-    // stdout：最终路径 + SHA-256（便于脚本取用）
-    println!("{}", receipt.path.display());
-    println!("{}", receipt.sha256);
-    verbosity::success(format!(
-        "received {} bytes → {}",
-        receipt.size,
-        receipt.path.display()
-    ));
+    // 对齐 Go：状态打到 stderr（--quiet 抑制）；sha256 放在 info 日志。
+    verbosity::status(format!("Saved to {}", receipt.path.display()));
+    verbosity::info(format!("sha256: {}, bytes: {}", receipt.sha256, receipt.size));
+    verbosity::status("Transfer complete.");
     Ok(())
 }

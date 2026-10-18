@@ -57,6 +57,9 @@ pub struct WireGuardTransport {
     candidates: Vec<std::net::Ipv6Addr>,
     fingerprint: [u8; 32],
     overlay: Ipv4Addr,
+    /// server 观测到的对端出口地址（信令层 `ObservedAddrs.public_ipv6`）。
+    /// Go 版把它作为 server-reflexive 候选放在最前；这里同语义。
+    server_hint: Option<std::net::Ipv6Addr>,
 }
 
 impl WireGuardTransport {
@@ -69,7 +72,16 @@ impl WireGuardTransport {
             candidates: Vec::new(),
             fingerprint: [0u8; 32],
             overlay: OVERLAY_TX,
+            server_hint: None,
         }
+    }
+
+    /// 注入信令服务器观测到的本端出口 IPv6 地址（Go 版的 server-reflexive）。
+    ///
+    /// 上层在 `allocate`/`join` 拿到 `ObservedAddrs` 后、[`prepare`](Transport::prepare)
+    /// 前调用。只有它本身是合法 IPv6 候选时才生效；本地枚举仍是权威来源。
+    pub fn set_server_hint(&mut self, hint: Option<std::net::Ipv6Addr>) {
+        self.server_hint = hint;
     }
 }
 
@@ -88,7 +100,15 @@ impl Transport for WireGuardTransport {
         let udp_port = udp.local_addr()?.port();
         let mut rng = UnwrapErr(getrandom::SysRng);
         let keypair = KeyPair::generate(&mut rng);
-        let candidates = crate::transport::wireguard::addr::enumerate_local_ipv6();
+        let mut candidates = crate::transport::wireguard::addr::enumerate_local_ipv6();
+        // server 观测地址只当提示：仅采纳合法 IPv6，且放到候选最前
+        // （对应 Go 版 CandidatesV6 里 public endpoint 在 local 之前）。
+        if let Some(hint) = self.server_hint
+            && crate::transport::wireguard::addr::classify(&hint).is_some()
+        {
+            candidates.retain(|a| *a != hint);
+            candidates.insert(0, hint);
+        }
 
         // 一次性凭证指纹：这里用随机凭证的 SHA-256（真实 token 由 M4.4 生成）。
         let mut credential = [0u8; 32];
@@ -312,6 +332,28 @@ async fn driver_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// server 观测地址（server-reflexive）放在候选最前。
+    #[tokio::test]
+    async fn prepare_puts_server_hint_first() {
+        let mut t = WireGuardTransport::new();
+        let hint: std::net::Ipv6Addr = "fd00::abcd".parse().unwrap();
+        t.set_server_hint(Some(hint));
+        let bytes = t.prepare().await.unwrap();
+        let b = EndpointBundle::decode(&bytes).unwrap();
+        assert_eq!(b.ipv6_candidates.first(), Some(&hint));
+    }
+
+    /// v4-mapped 观测地址（经 IPv4 连 server）必须被忽略（D7）。
+    #[tokio::test]
+    async fn prepare_ignores_v4_mapped_hint() {
+        let mut t = WireGuardTransport::new();
+        let v4mapped: std::net::Ipv6Addr = "::ffff:1.2.3.4".parse().unwrap();
+        t.set_server_hint(Some(v4mapped));
+        let bytes = t.prepare().await.unwrap();
+        let b = EndpointBundle::decode(&bytes).unwrap();
+        assert!(!b.ipv6_candidates.contains(&v4mapped));
+    }
 
     /// prepare 产出的 bundle 能被解析，且字段合理。
     #[tokio::test]

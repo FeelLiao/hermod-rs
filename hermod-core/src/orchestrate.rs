@@ -26,6 +26,29 @@ pub enum OrchestrateError {
     Transfer(#[from] crate::transfer::TransferError),
     #[error("digest mismatch: rx 提交的 SHA-256 未被 tx 接受")]
     DigestMismatch,
+    /// 对端中止了连接（Ctrl+C / RST / 提前 EOF）。
+    #[error("peer cancelled the transfer")]
+    PeerCancelled,
+}
+
+/// 把「对端中止连接」类错误（RST / 提前 EOF / BrokenPipe）映射为友好提示。
+fn map_http(e: HttpError) -> OrchestrateError {
+    let cancelled = match &e {
+        HttpError::Malformed(s) => s.contains("body shorter than Content-Length"),
+        HttpError::Io(io) => matches!(
+            io.kind(),
+            std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::UnexpectedEof
+        ),
+        HttpError::Meta(_) => false,
+    };
+    if cancelled {
+        OrchestrateError::PeerCancelled
+    } else {
+        OrchestrateError::Http(e)
+    }
 }
 
 /// rx 成功落盘后的回执。
@@ -47,7 +70,7 @@ pub async fn serve_file(
     opts: ServeOptions,
 ) -> Result<ServeOutcome, OrchestrateError> {
     let stream = conn.listen().await?;
-    Ok(serve(stream, opts).await?)
+    serve(stream, opts).await.map_err(map_http)
 }
 
 /// rx：向隧道内 tx 拨号，拉文件到 `dest` 并提交裁决。
@@ -58,7 +81,7 @@ pub async fn fetch_file<D: AsyncWrite + Unpin>(
     progress: Option<&mut dyn FnMut(u64)>,
 ) -> Result<FetchOutcome, OrchestrateError> {
     let stream = conn.dial().await?;
-    Ok(fetch(stream, token, dest, progress).await?)
+    fetch(stream, token, dest, progress).await.map_err(map_http)
 }
 
 /// tx：把本地文件经隧道发给 rx（边发边算 SHA-256）。

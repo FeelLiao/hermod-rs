@@ -61,7 +61,13 @@ async fn main() -> std::process::ExitCode {
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            verbosity::error(e.to_string());
+            let msg = e.to_string();
+            if msg == "peer cancelled the transfer" {
+                // 对端取消：直接显示友好提示，不加 error: 前缀。
+                eprintln!("{msg}");
+            } else {
+                verbosity::error(msg);
+            }
             std::process::ExitCode::from(1)
         }
     }

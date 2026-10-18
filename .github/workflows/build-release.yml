@@ -61,7 +61,7 @@ jobs:
           CC_x86_64_unknown_linux_musl: ${{ matrix.cc }}
         run: cargo build --release --target ${{ matrix.target }} -p hermod-cli
 
-      - name: Verify (Linux: statically linked)
+      - name: "Verify (Linux: statically linked)"
         if: matrix.os == 'ubuntu-latest'
         run: |
           file target/${{ matrix.target }}/release/${{ matrix.bin }}

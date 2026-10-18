@@ -187,6 +187,37 @@ pub async fn write_request<W: AsyncWrite + Unpin>(
     w.flush().await
 }
 
+/// 只写响应头（用于流式 body：由调用方随后的字节填充 Content-Length）。
+pub async fn write_response_head<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    status: u16,
+    reason: &str,
+    headers: &[(&str, &str)],
+    content_length: u64,
+) -> io::Result<()> {
+    let mut head = format!("HTTP/1.1 {status} {reason}\r\n");
+    for (k, v) in headers {
+        head.push_str(k);
+        head.push_str(": ");
+        head.push_str(v);
+        head.push_str("\r\n");
+    }
+    head.push_str(&format!("Content-Length: {content_length}\r\n\r\n"));
+    w.write_all(head.as_bytes()).await?;
+    w.flush().await
+}
+
+/// HTTP 层错误（编解码 / IO / 元数据）。
+#[derive(Debug, thiserror::Error)]
+pub enum HttpError {
+    #[error("io: {0}")]
+    Io(#[from] io::Error),
+    #[error("malformed http: {0}")]
+    Malformed(String),
+    #[error("metadata: {0}")]
+    Meta(#[from] crate::http_meta::MetaError),
+}
+
 /// 写一个 HTTP 响应（头 + body，自动补 Content-Length）。
 pub async fn write_response<W: AsyncWrite + Unpin>(
     w: &mut W,

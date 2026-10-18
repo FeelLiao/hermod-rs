@@ -1,3 +1,104 @@
-//! In-tunnel HTTP client (rx side): a single GET pulls the whole file, then
-//! `POST /done` submits the digest verdict. See DEVELOPMENT.md §3.4/§3.6 and
-//! M4.3.
+//! 隧道内 HTTP 客户端（rx）：一次 GET 拉文件 + `POST /done` 提交裁决。
+//!
+//! 对应 DEVELOPMENT.md §3.4/§3.6：rx 拿一次性 token 发 `GET /f/<token>`，
+//! 边收边算 SHA-256，把 body 写入目标；随后 `POST /done` 提交
+//! `{"sha256":..., "size":N}`，由 tx 比对裁决。
+
+use crate::http_meta;
+use crate::transport::wireguard::http::{HttpError, ResponseHead, write_request};
+use crate::transfer::{self, Kind};
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+
+/// 拉取结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchOutcome {
+    /// 载荷类型（来自 `X-Hermod-Kind`）。
+    pub kind: Kind,
+    /// 原始文件名（来自 `Content-Disposition`）。
+    pub name: String,
+    /// 载荷字节数。
+    pub size: u64,
+    /// rx 本地算出的 SHA-256（十六进制小写）。
+    pub sha256: String,
+    /// tx 是否接受 rx 提交的摘要（POST /done 返回 200）。
+    pub verified: bool,
+}
+
+/// 用一次性 token 从隧道内 tx 拉取文件并提交裁决。
+pub async fn fetch<S, D>(
+    stream: S,
+    token: &[u8; 16],
+    dest: &mut D,
+) -> Result<FetchOutcome, HttpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    D: AsyncWrite + Unpin,
+{
+    let (r, mut w) = tokio::io::split(stream);
+    let mut reader = BufReader::new(r);
+    let path = http_meta::token_path(token);
+
+    // 1) GET /f/<token>
+    write_request(&mut w, "GET", &path, &[("Host", "hermod")], &[]).await?;
+    let head = ResponseHead::read(&mut reader).await?;
+    if head.status != 200 {
+        return Err(HttpError::Malformed(format!(
+            "GET {path} status {}",
+            head.status
+        )));
+    }
+    let kind = head
+        .header(http_meta::X_HERMOD_KIND)
+        .and_then(http_meta::parse_x_hermod_kind)
+        .ok_or_else(|| HttpError::Malformed("missing/invalid X-Hermod-Kind".into()))?;
+    let name = head
+        .header(http_meta::CONTENT_DISPOSITION)
+        .and_then(http_meta::parse_content_disposition)
+        .ok_or_else(|| HttpError::Malformed("missing/invalid Content-Disposition".into()))?;
+    let size = head
+        .content_length()
+        .ok_or_else(|| HttpError::Malformed("missing Content-Length".into()))? as u64;
+
+    // 2) 边收边算 SHA-256，写入目标
+    let mut hasher = Sha256::new();
+    let mut remaining = size;
+    let mut buf = [0u8; 16 * 1024];
+    while remaining > 0 {
+        let want = (buf.len() as u64).min(remaining) as usize;
+        let n = reader.read(&mut buf[..want]).await?;
+        if n == 0 {
+            return Err(HttpError::Malformed("body shorter than Content-Length".into()));
+        }
+        hasher.update(&buf[..n]);
+        dest.write_all(&buf[..n]).await?;
+        remaining -= n as u64;
+    }
+    dest.flush().await?;
+    let sha256 = transfer::hex(&hasher.finalize()[..]);
+
+    // 3) POST /done 提交裁决
+    let meta = transfer::Metadata {
+        kind,
+        name: name.clone(),
+        size: size as i64,
+        sha256: sha256.clone(),
+    };
+    let body = transfer::encode_metadata(&meta).map_err(|e| HttpError::Malformed(e.to_string()))?;
+    write_request(&mut w, "POST", "/done", &[], &body).await?;
+    let verdict = ResponseHead::read(&mut reader).await?;
+    if verdict.status != 200 && verdict.status != 409 {
+        return Err(HttpError::Malformed(format!(
+            "POST /done status {}",
+            verdict.status
+        )));
+    }
+
+    Ok(FetchOutcome {
+        kind,
+        name,
+        size,
+        sha256,
+        verified: verdict.status == 200,
+    })
+}

@@ -56,6 +56,23 @@ pub fn content_disposition(filename: &str) -> Result<String, MetaError> {
     Ok(format!("attachment; filename=\"{filename}\""))
 }
 
+/// 从 `Content-Disposition` 头值解析文件名（[`content_disposition`] 的逆）。
+///
+/// 只接受 `attachment; filename="..."` 形式；缺失/畸形返回 `None`。
+pub fn parse_content_disposition(value: &str) -> Option<String> {
+    let rest = value.strip_prefix("attachment;")?.trim();
+    let quoted = rest.strip_prefix("filename=")?;
+    let name = quoted.strip_prefix('"')?.strip_suffix('"')?;
+    // 逆向安全校验：非空、不过长、无 CR/LF/引号
+    if name.is_empty() || name.len() > MAX_FILENAME_LEN {
+        return None;
+    }
+    if name.chars().any(|c| matches!(c, '\r' | '\n' | '"')) {
+        return None;
+    }
+    Some(name.to_string())
+}
+
 /// 传输帧格式：已知长度走 `Content-Length`，流式走 chunked。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Framing {

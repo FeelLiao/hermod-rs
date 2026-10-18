@@ -414,6 +414,25 @@ async fn driver_loop(
         }
 
         iter += 1;
+        // 批量收包：一次 drain 最多 128 个 UDP 包，再统一 poll 一次 smoltcp，
+        // 避免「每包一次完整 poll」在高包速率下追不上内核、导致成批丢包。
+        let mut batch = 0usize;
+        while let Some((inner, responses)) = tunnel.try_recv_once() {
+            batch += 1;
+            if let Some(inner) = inner {
+                inner_rx += 1;
+                stack.push_inner(inner);
+            }
+            for (pkt, to) in responses {
+                let _ = tunnel.send_raw(&pkt, to).await;
+            }
+            if batch >= 128 {
+                break;
+            }
+        }
+        if batch > 64 || iter.is_multiple_of(200) {
+            crate::log_debug!("批量收包: 本轮 {batch} 个");
+        }
         // 驱动 smoltcp，并搬运每个桥接 socket 的字节
         stack.poll();
         for (h, ends) in bridged.iter_mut() {

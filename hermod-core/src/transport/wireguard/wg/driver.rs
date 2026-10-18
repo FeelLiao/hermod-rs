@@ -13,7 +13,7 @@
 
 use crate::transport::wireguard::wg::endpoint::PeerEndpoint;
 use crate::transport::wireguard::wg::tunnel::{Outcome, WireGuardSession};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, SocketAddr, SocketAddrV6};
 use tokio::net::UdpSocket;
 
 /// UDP 收包缓冲（最大 UDP 载荷 65535）。
@@ -27,6 +27,9 @@ pub enum SessionError {
     #[error("no peer endpoint available")]
     NoPeer,
 }
+
+/// 批量收包结果：(可选内层包, 需要回发的控制包列表)。
+pub type RecvBatch = (Option<Vec<u8>>, Vec<(Vec<u8>, SocketAddrV6)>);
 
 /// 一个 WireGuard 隧道会话（由调用方在 async 任务里驱动）。
 pub struct WireGuardTunnel {
@@ -94,6 +97,41 @@ impl WireGuardTunnel {
             crate::log_debug!("排空 boringtun 队列：发送 {}B → {to}", pkt.len());
             self.udp.send_to(&pkt, to).await?;
         }
+        Ok(())
+    }
+
+    /// 非阻塞地收一包（供驱动批量 drain）。返回 (内层包, 需回发的控制包)。
+    pub fn try_recv_once(&mut self) -> Option<RecvBatch> {
+        let mut buf = [0u8; RECV_BUF];
+        let (n, src) = self.udp.try_recv_from(&mut buf).ok()?;
+        let SocketAddr::V6(src6) = src else {
+            return Some((None, Vec::new()));
+        };
+        let src_ip = IpAddr::V6(*src6.ip());
+        match self.session.handle_packet(Some(src_ip), &buf[..n]) {
+            Outcome::Network(pkt) => {
+                self.endpoint.roam(src6);
+                Some((None, vec![(pkt, src6)]))
+            }
+            Outcome::Tunnel(inner) => {
+                self.session_ok = true;
+                self.endpoint.roam(src6);
+                Some((Some(inner), Vec::new()))
+            }
+            Outcome::None => {
+                self.endpoint.roam(src6);
+                Some((None, Vec::new()))
+            }
+            Outcome::Error(e) => {
+                crate::log_warn!("WG 解封装失败（{n}B，来自 {src6}）: {e:?}");
+                Some((None, Vec::new()))
+            }
+        }
+    }
+
+    /// 直接把原始字节发给指定端点（批量 drain 后回发控制包用）。
+    pub async fn send_raw(&mut self, pkt: &[u8], to: SocketAddrV6) -> Result<(), SessionError> {
+        self.udp.send_to(pkt, to).await?;
         Ok(())
     }
 

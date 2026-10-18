@@ -60,12 +60,23 @@ pub fn merge_server_hint(addrs: &mut Vec<Ipv6Addr>, hint: Ipv6Addr) {
     }
 }
 
-/// 枚举本机非回环 IPv6 地址。
+/// 枚举本机非回环 IPv6 地址（M2.5，`if-addrs` 实现）。
 ///
-/// **stub**：暂返回空列表。正式实现需跨平台枚举网卡（候选：`if-addrs` crate
-/// 或平台 API），并排除回环/虚拟接口；随后交给 [`rank_candidates`] 排序。
+/// 排除回环、组播、未指定、v4-mapped；链路本地不纳入候选（bundle 无法携带
+/// scope id，跨主机不可达）。结果交给 [`rank_candidates`] 排序。
 pub fn enumerate_local_ipv6() -> Vec<Ipv6Addr> {
-    Vec::new()
+    let Ok(ifaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    let mut addrs = Vec::new();
+    for iface in ifaces {
+        if let std::net::IpAddr::V6(v6) = iface.addr.ip()
+            && classify(&v6).is_some_and(|c| c != AddrClass::LinkLocal)
+        {
+            addrs.push(v6);
+        }
+    }
+    rank_candidates(addrs)
 }
 
 #[cfg(test)]

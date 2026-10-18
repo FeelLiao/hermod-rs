@@ -5,6 +5,7 @@
 pub mod addr;
 pub mod http;
 pub mod session;
+pub mod transport;
 pub mod stack;
 pub mod udp;
 pub mod wg;

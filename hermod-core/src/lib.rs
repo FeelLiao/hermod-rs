@@ -22,6 +22,9 @@
 //!   [`TransportConnection`] 契约（上层只依赖它）；具体实现见
 //!   [`transport::wireguard`]（用户态 WireGuard + smoltcp 进程内 TCP + 隧道内
 //!   HTTP，零特权）。换传输协议时只改实现，不动上层。
+//! - [`session`]：会话编排——从**传输码**到已建立的传输连接：
+//!   [`session::sender_session`]（tx）/ [`session::receiver_session`]（rx）。
+//!   它把「信令 → CPace → bundle 加密交换 → 传输 establish」串成一跳。
 //! - [`transfer`]：载荷元数据（`Kind`/文件名/大小/SHA-256）、输入分类、
 //!   目标路径安全校验、临时文件路径。
 //! - [`config`]：与 Go 版兼容的配置 schema（YAML 键、默认值、Server URL 规范化）。
@@ -66,6 +69,7 @@ pub mod crypto;
 pub mod error;
 pub mod http_meta;
 pub mod orchestrate;
+pub mod session;
 pub mod signal;
 pub mod transfer;
 pub mod transport;

@@ -154,18 +154,19 @@ pub async fn sender_handshake(
     stream: &mut WsStream,
     channel_id: u16,
     password: &str,
-) -> Result<[u8; 32], ClientError> {
-    allocate(stream, channel_id).await?;
+) -> Result<([u8; 32], ObservedAddrs), ClientError> {
+    let observed = allocate(stream, channel_id).await?;
     wait_ready(stream).await?;
 
     let (session, my_pub) =
         crate::crypto::cpace::init(password, channel_id, crate::crypto::cpace::Role::Sender)?;
+    // blob1：本端 CPace 公钥（只发一次；多发会污染后续的 bundle 交换）
     send_blob(stream, channel_id, &my_pub).await?;
 
+    // blob2：对端 CPace 公钥 → 得到 K
     let peer_pub = recv_blob(stream).await?;
-    send_blob(stream, channel_id, &my_pub).await?;
     let peer = blob_to_point(&peer_pub)?;
-    Ok(session.finish(&peer)?)
+    Ok((session.finish(&peer)?, observed))
 }
 
 /// 接收方（rx）经中继完成 CPace（M2.3）：
@@ -174,17 +175,18 @@ pub async fn receiver_handshake(
     stream: &mut WsStream,
     channel_id: u16,
     password: &str,
-) -> Result<[u8; 32], ClientError> {
-    join(stream, channel_id).await?;
+) -> Result<([u8; 32], ObservedAddrs), ClientError> {
+    let observed = join(stream, channel_id).await?;
 
     let (session, my_pub) =
         crate::crypto::cpace::init(password, channel_id, crate::crypto::cpace::Role::Receiver)?;
 
+    // blob1：对端 CPace 公钥；blob2：本端 CPace 公钥 → 得到 K
     let peer_pub = recv_blob(stream).await?;
     send_blob(stream, channel_id, &my_pub).await?;
 
     let peer = blob_to_point(&peer_pub)?;
-    Ok(session.finish(&peer)?)
+    Ok((session.finish(&peer)?, observed))
 }
 
 /// 把 blob 转成 65 字节 CPace 未压缩点。
@@ -297,7 +299,9 @@ mod tests {
             sender_handshake(&mut tx_client, channel_id, password),
             receiver_handshake(&mut rx_client, channel_id, password),
         );
-        assert_eq!(k_tx.unwrap(), k_rx.unwrap(), "双方 CPace 密钥必须一致");
+        let (k_tx, _) = k_tx.unwrap();
+        let (k_rx, _) = k_rx.unwrap();
+        assert_eq!(k_tx, k_rx, "双方 CPace 密钥必须一致");
 
         // 关闭客户端连接，让中继循环退出（否则 relay.await 永远等不到流关闭）
         drop(tx_client);

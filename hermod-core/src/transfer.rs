@@ -70,6 +70,20 @@ pub fn decode_metadata(data: &[u8]) -> Result<Metadata, serde_json::Error> {
     serde_json::from_slice(data)
 }
 
+/// 以 O_EXCL + 0600 创建临时文件（防覆盖/防他人读取）。
+///
+/// 对应 M4.4：rx 先写 `.hermod_tmp`，校验通过后再 `rename`。
+pub fn create_temp(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(path)
+}
+
 /// 计算字节切片的 SHA-256，返回十六进制小写（对应 Go `HashBytes`）。
 pub fn hash_bytes(data: &[u8]) -> String {
     hex(&Sha256::digest(data))

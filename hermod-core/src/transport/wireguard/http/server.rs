@@ -10,6 +10,7 @@ use crate::transport::wireguard::http::{
     HttpError, Request, write_response, write_response_head,
 };
 use crate::transfer::{self, Kind};
+use sha2::{Digest, Sha256};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
@@ -23,17 +24,17 @@ pub struct ServeOptions {
     pub name: String,
     /// 载荷字节数（Content-Length）。
     pub size: u64,
-    /// tx 预先算好的 SHA-256（十六进制小写）。
-    pub sha256: String,
     /// 载荷来源（文件 / 内存），边发边读，不整体进内存。
     pub body: Box<dyn AsyncRead + Unpin + Send>,
 }
 
 /// 服务一条连接的结果：rx 提交的摘要是否与本地一致。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeOutcome {
     /// rx 提交的 SHA-256/大小是否与 tx 本地一致。
     pub verified: bool,
+    /// tx 边发边算出的 SHA-256（十六进制小写）。
+    pub sha256: String,
 }
 
 /// 服务一条 TCP 连接：一次 GET 拉文件 + 一次 POST /done 裁决，然后返回。
@@ -45,6 +46,7 @@ where
     let mut reader = BufReader::new(r);
     let path = http_meta::token_path(&opts.token);
     let mut body = opts.body;
+    let mut computed_sha = String::new();
 
     loop {
         let req = match Request::read(&mut reader).await {
@@ -67,7 +69,8 @@ where
                 ];
                 write_response_head(&mut w, 200, "OK", &headers, opts.size).await?;
 
-                // 流式发送 body（不整体进内存）
+                // 流式发送 body + **边发边算** SHA-256（不整体进内存）
+                let mut hasher = Sha256::new();
                 let mut remaining = opts.size;
                 let mut buf = [0u8; 16 * 1024];
                 while remaining > 0 {
@@ -76,10 +79,12 @@ where
                     if n == 0 {
                         return Err(HttpError::Malformed("body shorter than Content-Length".into()));
                     }
+                    hasher.update(&buf[..n]);
                     w.write_all(&buf[..n]).await?;
                     remaining -= n as u64;
                 }
                 w.flush().await?;
+                computed_sha = transfer::hex(&hasher.finalize()[..]);
             }
             ("POST", "/done") => {
                 let n = req
@@ -89,14 +94,17 @@ where
                 reader.read_exact(&mut body).await?;
                 let meta = transfer::decode_metadata(&body)
                     .map_err(|e| HttpError::Malformed(e.to_string()))?;
-                let verified = meta.sha256 == opts.sha256 && meta.size as u64 == opts.size;
+                let verified = meta.sha256 == computed_sha && meta.size as u64 == opts.size;
                 let (status, reason) = if verified {
                     (200, "OK")
                 } else {
                     (409, "Conflict")
                 };
                 write_response(&mut w, status, reason, &[], b"").await?;
-                return Ok(ServeOutcome { verified });
+                return Ok(ServeOutcome {
+                    verified,
+                    sha256: computed_sha,
+                });
             }
             _ => {
                 write_response(&mut w, 404, "Not Found", &[], b"").await?;
@@ -121,7 +129,6 @@ mod tests {
             kind: Kind::File,
             name: "greeting.txt".into(),
             size: data.len() as u64,
-            sha256: sha.clone(),
             body: Box::new(std::io::Cursor::new(data.clone())),
         };
         let (client_io, server_io) = tokio::io::duplex(64 * 1024);
@@ -138,6 +145,7 @@ mod tests {
 
         let outcome = server.await.unwrap().unwrap();
         assert!(outcome.verified);
+        assert_eq!(outcome.sha256, sha, "tx 边发边算的摘要应与期望一致");
     }
 
     /// 错误的 token → 404，客户端报错。
@@ -149,7 +157,6 @@ mod tests {
             kind: Kind::File,
             name: "a".into(),
             size: 1,
-            sha256: transfer::hash_bytes(&data),
             body: Box::new(std::io::Cursor::new(data)),
         };
         let (client_io, server_io) = tokio::io::duplex(4096);

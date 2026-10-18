@@ -29,7 +29,7 @@ smoltcp = { version = "0.14.0", features = ["medium-ip"] }
 socket2 = "0.6"
 subtle = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "fs"] }
 # 需要 rustls 集成以传入自定义 ClientConfig 做 SPKI pinning。
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 # 注意：x25519 密钥类型统一用 `boringtun::x25519` 的再导出（x25519-dalek 2.0.1，

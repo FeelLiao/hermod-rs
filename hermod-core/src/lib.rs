@@ -27,8 +27,12 @@
 //! - [`config`]：与 Go 版兼容的配置 schema（YAML 键、默认值、Server URL 规范化）。
 //! - [`http_meta`]：隧道内 HTTP 的头部约定（`X-Hermod-Kind`、`Content-Disposition`、
 //!   帧格式、一次性 URL token）与抗畸形输入校验。
-//! - [`orchestrate`]：传输编排——把传输连接与隧道内 HTTP 组合成
-//!   [`orchestrate::serve_file`]（tx）/ [`orchestrate::fetch_file`]（rx）。
+//! - [`orchestrate`]：传输编排——把传输连接与隧道内 HTTP 组合成完整的
+//!   tx/rx 主流程：
+//!   - [`orchestrate::send_file`] / [`orchestrate::send_text`]：tx 发文件/文本；
+//!   - [`orchestrate::receive`]：rx 拉取到临时文件 → 校验 SHA-256 → 原子改名；
+//!   - [`orchestrate::serve_file`] / [`orchestrate::fetch_file`]：更底层的
+//!     「连接 + HTTP」组合（供自定义流程使用）。
 //!
 //! # 典型用法（嵌入式）
 //!

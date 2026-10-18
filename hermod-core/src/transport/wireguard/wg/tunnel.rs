@@ -62,6 +62,20 @@ impl WireGuardSession {
         }
     }
 
+    /// 强制重新发起握手（超时重试用；boringtun 不暴露定时器，由外层驱动）。
+    pub fn force_initiate_handshake(&mut self) -> Option<Vec<u8>> {
+        let mut buf = vec![0u8; BUF_SIZE];
+        match self.tunn.format_handshake_initiation(&mut buf, true) {
+            TunnResult::WriteToNetwork(p) => Some(p.to_vec()),
+            _ => None,
+        }
+    }
+
+    /// 发保活包（空载荷：boringtun 会生成 keepalive 包）。仅会话已建立时有效。
+    pub fn send_keepalive(&mut self) -> Option<Vec<u8>> {
+        self.encapsulate(&[])
+    }
+
     /// 处理收到的 WG 包（握手发起/响应或数据）。
     pub fn handle_packet(&mut self, src: Option<IpAddr>, packet: &[u8]) -> Outcome {
         let mut buf = vec![0u8; BUF_SIZE];

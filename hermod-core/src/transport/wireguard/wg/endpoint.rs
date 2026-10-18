@@ -33,6 +33,14 @@ impl PeerEndpoint {
         }
     }
 
+    /// 直接用给定的套接字地址构造候选（不排序、不过滤；测试与内部使用）。
+    pub fn from_addrs(candidates: Vec<SocketAddrV6>) -> Self {
+        Self {
+            candidates,
+            current: None,
+        }
+    }
+
     /// 全部候选（按顺序；建连时对它们同时发握手）。
     pub fn candidates(&self) -> &[SocketAddrV6] {
         &self.candidates

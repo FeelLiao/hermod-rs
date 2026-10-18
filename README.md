@@ -94,7 +94,7 @@ hermod tx [INPUT] [flags]
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--server` | `-s` | `wss://localhost:4376` | Signaling server URL (saved as default when specified) |
+| `--server` | `-s` | `wss://oracle.stariverfeel.eu.org:4376` | Signaling server URL (saved as default when specified) |
 | `--words` | `-w` | `3` | Number of words in the transfer code |
 | `--listen` | `-l` | `[::]:0` | Local UDP bind address (IPv6) |
 | `--wg-mtu` | | `1400` | Inner IP MTU (outer packet = inner + 80) |
@@ -122,7 +122,7 @@ hermod rx [CODE] [flags]
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
-| `--server` | `-s` | `wss://localhost:4376` | Signaling server URL (saved as default when specified) |
+| `--server` | `-s` | `wss://oracle.stariverfeel.eu.org:4376` | Signaling server URL (saved as default when specified) |
 | `--destination` | `-d` | current directory | Output directory |
 | `--listen` | `-l` | `[::]:0` | Local UDP bind address (IPv6) |
 | `--wg-mtu` | | `1400` | Inner IP MTU (must match the sender) |

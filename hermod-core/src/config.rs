@@ -37,27 +37,40 @@ pub struct Config {
     pub server_key_pem: String,
     #[serde(
         rename = "trusted_servers",
-        default,
+        default = "default_trusted_servers",
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub trusted_servers: BTreeMap<String, String>,
 }
 
+/// 默认认证（信令）服务器。
+pub const DEFAULT_SERVER_URL: &str = "wss://oracle.stariverfeel.eu.org:4376";
+
+/// 默认服务器的 SPKI 指纹（SHA-256，hex）——内置信任，免去首次 `trust`。
+pub const DEFAULT_SERVER_FINGERPRINT: &str =
+    "88da4f5fcf2f51b82f45c37ef21638c996aaddcaf6f3aa952d7c99cc1354facd";
+
 impl Default for Config {
-    /// 应用默认值（对应 Go `Default()`）。server 默认 wss://localhost:4376。
+    /// 应用默认值：默认 server 为 [`DEFAULT_SERVER_URL`]，并内置信任其指纹。
     fn default() -> Self {
         Config {
             server_url: default_server_url(),
             tls: default_tls_config(),
             server_cert_pem: String::new(),
             server_key_pem: String::new(),
-            trusted_servers: BTreeMap::new(),
+            trusted_servers: default_trusted_servers(),
         }
     }
 }
 
 fn default_server_url() -> String {
-    "wss://localhost:4376".to_string()
+    DEFAULT_SERVER_URL.to_string()
+}
+
+fn default_trusted_servers() -> BTreeMap<String, String> {
+    let mut m = BTreeMap::new();
+    m.insert(DEFAULT_SERVER_URL.to_string(), DEFAULT_SERVER_FINGERPRINT.to_string());
+    m
 }
 
 fn default_prefer_curves() -> Vec<String> {
@@ -255,10 +268,13 @@ trusted_servers:
         let cfg: Config = serde_yaml::from_str("server_url: wss://other:9999\n").unwrap();
         assert_eq!(cfg.server_url, "wss://other:9999");
         assert_eq!(cfg.tls.prefer_curves, vec!["X25519MLKEM768"]); // 默认曲线保留
-        assert!(cfg.trusted_servers.is_empty());
+        assert_eq!(
+            cfg.trusted_servers.get(DEFAULT_SERVER_URL).map(String::as_str),
+            Some(DEFAULT_SERVER_FINGERPRINT)
+        );
         // 空 YAML → 全部默认
         let cfg: Config = serde_yaml::from_str("").unwrap();
-        assert_eq!(cfg.server_url, "wss://localhost:4376");
+        assert_eq!(cfg.server_url, DEFAULT_SERVER_URL);
     }
 
     /// 保存 → 读回 往返一致；文件不存在 → 默认值。

@@ -37,11 +37,22 @@ pub enum ClientError {
 ///
 /// `expected_spki` 来自 `hermod trust` 记录的指纹（见 [`crate::signal::tls`]）。
 pub async fn connect_pinned(url: &str, expected_spki: [u8; 32]) -> Result<WsStream, ClientError> {
+    let ws_url = ws_endpoint(url);
     let config = pinned_client_config(expected_spki);
     let connector = Connector::Rustls(config);
     let (stream, _response) =
-        connect_async_tls_with_config(url, None, false, Some(connector)).await?;
+        connect_async_tls_with_config(&ws_url, None, false, Some(connector)).await?;
     Ok(stream)
+}
+
+/// 补 `/ws` 路径（对应 Go `signaling.go` 的行为）：server 的 WebSocket 端点在 `/ws`。
+fn ws_endpoint(url: &str) -> String {
+    let base = url.trim_end_matches('/');
+    if base.ends_with("/ws") {
+        base.to_string()
+    } else {
+        format!("{base}/ws")
+    }
 }
 
 /// 发送一条信令消息（JSON 文本帧，对应 Go `conn.WriteJSON`）。

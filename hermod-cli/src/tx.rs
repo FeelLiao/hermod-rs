@@ -23,6 +23,9 @@ pub async fn run(args: TxArgs) -> Result<(), Box<dyn std::error::Error>> {
         cfg.server_url = config::normalize_server_url(s).map_err(util::boxed)?;
     }
 
+    // 0) 先确认 server 已信任，避免打印一个用不了的传输码
+    hermod_core::session::expected_spki(&cfg).map_err(util::boxed)?;
+
     // 1) 生成并打印传输码（stdout 只放这个）
     let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
     let (_channel_id, code) = wordlist::generate_transfer_code(&mut rng, args.words);
@@ -61,7 +64,7 @@ pub async fn run(args: TxArgs) -> Result<(), Box<dyn std::error::Error>> {
             let fut = orchestrate::send_file(&mut tx.conn, tx.token, path, progress);
             let out = run_with_idle(fut, tick_rx).await?;
             pb.finish_and_clear();
-            finish(out.verified, total, &out.sha256)?;
+            finish_and_shutdown(&mut tx, out.verified, total, &out.sha256).await?;
         }
         Kind::Text => {
             let total = args.input.len() as u64;
@@ -75,7 +78,7 @@ pub async fn run(args: TxArgs) -> Result<(), Box<dyn std::error::Error>> {
             let fut = orchestrate::send_text(&mut tx.conn, tx.token, &args.input, progress);
             let out = run_with_idle(fut, tick_rx).await?;
             pb.finish_and_clear();
-            finish(out.verified, total, &out.sha256)?;
+            finish_and_shutdown(&mut tx, out.verified, total, &out.sha256).await?;
         }
         Kind::Stream => {
             let mut data = Vec::new();
@@ -99,10 +102,21 @@ pub async fn run(args: TxArgs) -> Result<(), Box<dyn std::error::Error>> {
             let fut = orchestrate::serve_file(&mut tx.conn, serve_opts);
             let out = run_with_idle(fut, tick_rx).await?;
             pb.finish_and_clear();
-            finish(out.verified, size, &out.sha256)?;
+            finish_and_shutdown(&mut tx, out.verified, size, &out.sha256).await?;
         }
     }
     Ok(())
+}
+
+async fn finish_and_shutdown(
+    tx: &mut hermod_core::session::TxSession,
+    verified: bool,
+    size: u64,
+    sha256: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // 等驱动把最后的裁决/尾数据送达对端，再返回（否则进程退出会 abort 驱动）
+    tx.conn.shutdown().await.map_err(util::boxed)?;
+    finish(verified, size, sha256)
 }
 
 fn finish(verified: bool, size: u64, sha256: &str) -> Result<(), Box<dyn std::error::Error>> {

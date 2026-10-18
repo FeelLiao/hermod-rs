@@ -55,6 +55,8 @@ pub async fn run(args: RxArgs) -> Result<(), Box<dyn std::error::Error>> {
         Err(msg) => return Err(msg.into()),
     };
     pb.finish_and_clear();
+    // 优雅关闭 rx 侧（排空后驱动退出）
+    rx.conn.shutdown().await.map_err(util::boxed)?;
 
     // stdout：最终路径 + SHA-256（便于脚本取用）
     println!("{}", receipt.path.display());

@@ -221,16 +221,18 @@ pub async fn fetch_server_spki(url: &str) -> Result<[u8; 32], TlsError> {
         }))
         .with_no_client_auth();
     let connector = tokio_tungstenite::Connector::Rustls(Arc::new(config));
-    let _ = tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector))
-        .await?;
+    // 我们不关心 WS 升级是否成功：只要 TLS 握手完成，证书已在 CaptureVerifier 里。
+    // （server 的 /ws 路径可能返回 404，但证书不受路径影响。）
+    let connect_result =
+        tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector)).await;
 
-    let der = captured
-        .lock()
-        .expect("capture lock")
-        .take()
-        .ok_or(TlsError::NoSpki)?;
-    let cert = CertificateDer::from(der);
-    spki_fingerprint(&cert)
+    match captured.lock().expect("capture lock").take() {
+        Some(der) => spki_fingerprint(&CertificateDer::from(der)),
+        None => Err(match connect_result {
+            Err(e) => TlsError::Connect(e),
+            Ok(_) => TlsError::NoSpki,
+        }),
+    }
 }
 
 #[cfg(test)]

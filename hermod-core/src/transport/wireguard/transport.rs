@@ -216,6 +216,8 @@ enum Command {
     Dial {
         reply: oneshot::Sender<Result<BridgeStream, WgError>>,
     },
+    /// 优雅关闭：把发送队列排空后再让驱动退出。
+    Shutdown { reply: oneshot::Sender<()> },
 }
 
 /// 已建立的 WireGuard 连接（上层用它 listen/dial）。
@@ -253,6 +255,22 @@ impl TransportConnection for WgConnection {
             .await
             .map_err(|_| WgError::Closed)?;
         rx.await.map_err(|_| WgError::Closed)?
+    }
+}
+
+impl WgConnection {
+    /// 优雅关闭：等待驱动把缓冲里的数据全部送达对端后再返回。
+    ///
+    /// `orchestrate::*` 返回后应调用本方法，否则进程退出会 abort 驱动任务，
+    /// 导致 `POST /done` 的裁决或文件尾数据丢失。
+    pub async fn shutdown(&mut self) -> Result<(), WgError> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd
+            .send(Command::Shutdown { reply })
+            .await
+            .map_err(|_| WgError::Closed)?;
+        rx.await.map_err(|_| WgError::Closed)?;
+        Ok(())
     }
 }
 
@@ -294,7 +312,21 @@ async fn driver_loop(
                 }
             }
             cmd = cmd_rx.recv() => {
-                let Some(cmd) = cmd else { break };
+                let Some(cmd) = cmd else {
+                    // 用户侧连接已关闭：给驱动一个排空窗口，把缓冲里还没发出的
+                    // 数据（例如 POST /done 的裁决）真正写进 WG，再退出。
+                    for _ in 0..10 {
+                        stack.poll();
+                        for (h, ends) in bridged.iter_mut() {
+                            pump_socket(stack.tcp(*h), ends);
+                        }
+                        while let Some(pkt) = stack.pop_inner() {
+                            let _ = tunnel.send_tunnel(&pkt).await;
+                        }
+                        tokio::time::sleep(TICK).await;
+                    }
+                    break;
+                };
                 match cmd {
                     Command::Listen { reply } => {
                         let (stream, ends) = BridgeStream::new();
@@ -314,6 +346,32 @@ async fn driver_loop(
                         let _ = stack.connect(h, (ipv4_addr(peer), peer_http), DIAL_LOCAL_PORT);
                         bridged.push((h, ends));
                         let _ = reply.send(Ok(stream));
+                    }
+                    Command::Shutdown { reply } => {
+                        // 排空：把 BridgeStream 缓冲与 smoltcp 发送队列都写出去，
+                        // 直到全部被对端 ACK（send_queue == 0），再退出，避免丢掉
+                        // 最后的裁决/尾数据。
+                        for _ in 0..200 {
+                            stack.poll();
+                            for (h, ends) in bridged.iter_mut() {
+                                pump_socket(stack.tcp(*h), ends);
+                            }
+                            let mut sent_any = false;
+                            while let Some(pkt) = stack.pop_inner() {
+                                let _ = tunnel.send_tunnel(&pkt).await;
+                                sent_any = true;
+                            }
+                            let busy = sent_any
+                                || bridged
+                                    .iter()
+                                    .any(|(h, _)| stack.tcp(*h).send_queue() > 0);
+                            if !busy {
+                                break;
+                            }
+                            tokio::time::sleep(TICK).await;
+                        }
+                        let _ = reply.send(());
+                        break;
                     }
                 }
             }

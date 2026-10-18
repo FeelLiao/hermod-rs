@@ -28,6 +28,8 @@ pub enum TlsError {
     Parse(#[from] der::Error),
     #[error("server certificate has no subjectPublicKeyInfo")]
     NoSpki,
+    #[error("connect to server failed: {0}")]
+    Connect(#[from] tokio_tungstenite::tungstenite::Error),
 }
 
 /// 计算服务器证书的 SPKI 指纹：SHA-256(SubjectPublicKeyInfo DER)。
@@ -155,6 +157,82 @@ pub fn pinned_client_config(expected: [u8; 32]) -> Arc<rustls::ClientConfig> {
     )
 }
 
+/// 抓取服务器证书的验证器（TOFU）：接受任意证书，并把 end-entity DER 存下来。
+///
+/// 仅供 `hermod trust` 首次信任时使用；**不要**用于正常连接（正常连接必须用
+/// [`PinnedVerifier`]）。
+#[derive(Debug)]
+struct CaptureVerifier {
+    cert: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    provider: CryptoProvider,
+}
+
+impl ServerCertVerifier for CaptureVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
+        *self.cert.lock().expect("capture lock") = Some(end_entity.as_ref().to_vec());
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// 连接服务器并抓取它 TLS 证书的 SPKI 指纹（TOFU，不校验证书）。
+///
+/// 供 `hermod trust` 使用：首次信任时调用，把结果存进 `config.trusted_servers`。
+/// 调用方应在展示给用户确认后（或与已知指纹比对后）才落盘。
+pub async fn fetch_server_spki(url: &str) -> Result<[u8; 32], TlsError> {
+    let captured: Arc<std::sync::Mutex<Option<Vec<u8>>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let provider = rustls::crypto::aws_lc_rs::default_provider();
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider.clone()))
+        .with_safe_default_protocol_versions()
+        .expect("TLS 1.2 / 1.3 supported by the default provider")
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(CaptureVerifier {
+            cert: captured.clone(),
+            provider,
+        }))
+        .with_no_client_auth();
+    let connector = tokio_tungstenite::Connector::Rustls(Arc::new(config));
+    let _ = tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector))
+        .await?;
+
+    let der = captured
+        .lock()
+        .expect("capture lock")
+        .take()
+        .ok_or(TlsError::NoSpki)?;
+    let cert = CertificateDer::from(der);
+    spki_fingerprint(&cert)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +265,30 @@ mod tests {
 
     fn cert_der() -> CertificateDer<'static> {
         CertificateDer::from(unhex(TEST_CERT_DER_HEX))
+    }
+
+    /// TOFU 抓取：CaptureVerifier 会把 end-entity 证书 DER 记录下来。
+    #[test]
+    fn capture_verifier_records_certificate() {
+        let captured: Arc<std::sync::Mutex<Option<Vec<u8>>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let provider = rustls::crypto::aws_lc_rs::default_provider();
+        let v = CaptureVerifier {
+            cert: captured.clone(),
+            provider,
+        };
+        let cert = cert_der();
+        let name = ServerName::try_from("example.com").unwrap();
+        v.verify_server_cert(&cert, &[], &name, &[], UnixTime::now())
+            .unwrap();
+
+        let got = captured.lock().unwrap().clone().unwrap();
+        assert_eq!(got, cert.as_ref());
+        // 抓到的证书算出的 SPKI 指纹应与 fixture 一致
+        assert_eq!(
+            spki_fingerprint(&CertificateDer::from(got)).unwrap(),
+            spki_fingerprint(&cert).unwrap()
+        );
     }
 
     /// SPKI 指纹与 openssl 独立算出的值逐字节一致。

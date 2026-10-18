@@ -18,8 +18,12 @@ use std::net::Ipv4Addr;
 pub const OVERLAY_TX: Ipv4Addr = Ipv4Addr::new(10, 66, 66, 1);
 /// 覆盖网地址（rx）。
 pub const OVERLAY_RX: Ipv4Addr = Ipv4Addr::new(10, 66, 66, 2);
-/// 每方向 TCP socket 缓冲（DEVELOPMENT.md §3.4：8 MiB）。
-pub const SOCKET_BUF: usize = 8 * 1024 * 1024;
+/// 每方向 TCP socket 缓冲。
+///
+/// 原设计是 8 MiB，但外层 UDP 缓冲受 `rmem_max` 限制只有 ~416 KiB，
+/// 8 MiB 的发送窗口会让 tx 突发约 7000 段、超出 rx 缓冲而大量丢包（bufferbloat）。
+/// 降到 1 MiB 让慢启动的突发落在 rx 能接住的量级，吞吐影响很小。
+pub const SOCKET_BUF: usize = 1024 * 1024;
 
 /// 隧道内 smoltcp 栈（单线程驱动；不是线程安全的，由数据线程独占）。
 pub struct TunnelStack {
@@ -118,10 +122,15 @@ impl TunnelStack {
 
     /// 新建 8 MiB 缓冲的 TCP socket（尚未加入栈）。
     pub fn new_tcp_socket() -> tcp::Socket<'static> {
-        tcp::Socket::new(
+        let mut socket = tcp::Socket::new(
             tcp::SocketBuffer::new(vec![0u8; SOCKET_BUF]),
             tcp::SocketBuffer::new(vec![0u8; SOCKET_BUF]),
-        )
+        );
+        // 必须显式启用拥塞控制：smoltcp 默认 features 不含 cubic/reno，
+        // 否则 `AnyController::new()` 回退到 NoControl（无拥塞控制），
+        // 发送端会按窗口无节制突发，导致外层 UDP 缓冲被灌满丢包。
+        socket.set_congestion_control(tcp::CongestionControl::Cubic);
+        socket
     }
 }
 

@@ -82,6 +82,21 @@ impl WireGuardTunnel {
         Ok(())
     }
 
+    /// 排空 boringtun 内部队列并把包发出去（握手完成前 encapsulate 会把内层包
+    /// 排队；必须用空 datagram 反复 decapsulate 才能把它们放出来）。
+    pub async fn flush_queued(&mut self) -> Result<(), SessionError> {
+        while let Some(pkt) = self.session.poll_queued() {
+            let to = self
+                .endpoint
+                .current()
+                .or_else(|| self.endpoint.candidates().first().copied())
+                .ok_or(SessionError::NoPeer)?;
+            crate::log_debug!("排空 boringtun 队列：发送 {}B → {to}", pkt.len());
+            self.udp.send_to(&pkt, to).await?;
+        }
+        Ok(())
+    }
+
     /// 发保活包（空载荷）。仅会话已建立时有字节可发。
     pub async fn send_keepalive(&mut self) -> Result<(), SessionError> {
         if let Some(pkt) = self.session.send_keepalive() {
@@ -137,7 +152,13 @@ impl WireGuardTunnel {
     pub async fn send_tunnel(&mut self, inner: &[u8]) -> Result<(), SessionError> {
         match self.session.encapsulate(inner) {
             Some(pkt) => {
-                self.session_ok = true;
+                // 只有 WireGuard 数据包（type=4）才说明会话可用；
+                // 无会话时 encapsulate 返回的是握手发起（type=1），不能算建立。
+                if pkt.len() >= 4
+                    && u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]) == 4
+                {
+                    self.session_ok = true;
+                }
                 let to = self
                     .endpoint
                     .current()

@@ -150,7 +150,7 @@ where
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(Box::new(e)),
         Err(msg) => Err(format!(
-            "{msg}（已写入 {} 字节；若是大文件，检查对端是否在收、链路 MTU/防火墙）",
+            "{msg}（已写入 {} 字节；若是大文件，检查对端是否在收；可尝试 --wg-mtu 1200 排除路径 MTU 问题）",
             sent.load(Ordering::Relaxed)
         )
         .into()),

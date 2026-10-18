@@ -136,9 +136,10 @@ impl Transport for WireGuardTransport {
         let fingerprint = [0u8; 32];
 
         crate::log_info!(
-            "传输准备完成: udp_port={udp_port}, http_port={}, mtu={}, 候选={:?}",
+            "传输准备完成: udp_port={udp_port}, http_port={}, 内层 mtu={}（外层约 {}B）, 候选={:?}",
             self.http_port,
             self.mtu,
+            self.mtu + 80,
             candidates
         );
         let bundle = EndpointBundle {
@@ -421,6 +422,10 @@ async fn driver_loop(
         while let Some(pkt) = stack.pop_inner() {
             inner_tx += 1;
             let _ = tunnel.send_tunnel(&pkt).await;
+        }
+        // 把 boringtun 排队的内层包放出来（握手完成前发送的包会排在内部队列）
+        if let Err(e) = tunnel.flush_queued().await {
+            crate::log_warn!("排空 WG 队列失败: {e}");
         }
         if iter.is_multiple_of(40) {
             let send_q: usize = bridged.iter().map(|(h, _)| stack.tcp(*h).send_queue()).sum();

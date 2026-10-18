@@ -56,7 +56,7 @@ pub struct TxArgs {
     pub listen: String,
 
     /// 内层 IP MTU
-    #[arg(long, default_value_t = 1420)]
+    #[arg(long, default_value_t = 1400)]
     pub wg_mtu: usize,
 }
 
@@ -79,7 +79,7 @@ pub struct RxArgs {
     pub listen: String,
 
     /// 内层 IP MTU
-    #[arg(long, default_value_t = 1420)]
+    #[arg(long, default_value_t = 1400)]
     pub wg_mtu: usize,
 }
 

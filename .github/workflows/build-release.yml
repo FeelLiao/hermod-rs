@@ -1,0 +1,96 @@
+# Build Hermod on Linux (musl, fully static) and Windows (MSVC, static CRT),
+# and publish a GitHub Release whenever a `v*` tag is pushed.
+
+name: build-and-release
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux: musl target -> fully static binary (no glibc dependency).
+          # aws-lc-sys (rustls crypto) builds BoringSSL via CMake with musl-gcc.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            bin: hermod
+            out: hermod-linux-x86_64-musl
+            rustflags: ""
+            cc: musl-gcc
+
+          # Windows: MSVC toolchain with static CRT (+crt-static).
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            bin: hermod.exe
+            out: hermod-windows-x86_64.exe
+            rustflags: "-C target-feature=+crt-static"
+            cc: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins 1.99.0; make it the default so the added
+      # target is installed for the exact pinned toolchain.
+      - name: Install Rust (pinned) + target
+        run: |
+          rustup default 1.99.0
+          rustup target add ${{ matrix.target }}
+
+      # Linux static build deps: musl-gcc, cmake (aws-lc-sys), perl, clang.
+      - name: Install Linux static build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools cmake perl clang
+
+      - name: Build (static)
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+          CC_x86_64_unknown_linux_musl: ${{ matrix.cc }}
+        run: cargo build --release --target ${{ matrix.target }} -p hermod-cli
+
+      - name: Verify (Linux: statically linked)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          file target/${{ matrix.target }}/release/${{ matrix.bin }}
+          ldd target/${{ matrix.target }}/release/${{ matrix.bin }} 2>&1 || true
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.bin }} dist/${{ matrix.out }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/${{ matrix.out }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

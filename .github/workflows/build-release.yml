@@ -79,8 +79,71 @@ jobs:
           path: dist/${{ matrix.out }}
           if-no-files-found: error
 
+  build-android:
+    name: build (Android ARM64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (pinned) + Android target
+        run: |
+          rustup default 1.99.0
+          rustup target add aarch64-linux-android
+
+      # aws-lc-sys 用 CMake 编 BoringSSL，需要 cmake/perl/clang
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake perl clang
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      # NDK r29 = Android 16 / API 36 对应的 NDK
+      - name: Install Android NDK r29
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "ndk;29.0.14206865"
+
+      - name: Configure Android toolchain
+        shell: bash
+        run: |
+          NDK="$ANDROID_HOME/ndk/29.0.14206865"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # API 24（Android 7+）；想只支持 Android 16 就把 24 改成 36
+          API=24
+          {
+            echo "ANDROID_NDK_HOME=$NDK"
+            echo "ANDROID_NDK_ROOT=$NDK"
+            echo "ANDROID_NDK=$NDK"
+            echo "CC_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android${API}-clang"
+            echo "CXX_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android${API}-clang++"
+            echo "AR_aarch64_linux_android=$TOOLCHAIN/llvm-ar"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/aarch64-linux-android${API}-clang"
+          } >> "$GITHUB_ENV"
+
+      - name: Build (Android ARM64)
+        env:
+          CARGO_TERM_COLOR: always
+        run: cargo build --release --target aarch64-linux-android -p hermod-cli
+
+      - name: Verify binary
+        run: file target/aarch64-linux-android/release/hermod
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/aarch64-linux-android/release/hermod dist/hermod-android-aarch64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hermod-android-aarch64
+          path: dist/hermod-android-aarch64
+          if-no-files-found: error
+
   release:
-    needs: build
+    needs: [build, build-android]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

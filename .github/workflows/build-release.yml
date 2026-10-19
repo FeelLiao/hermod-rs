@@ -120,6 +120,9 @@ jobs:
             echo "ANDROID_NDK_HOME=$NDK"
             echo "ANDROID_NDK_ROOT=$NDK"
             echo "ANDROID_NDK=$NDK"
+            # 显式给 CMake 的 NDK toolchain / 平台，减少 aws-lc-sys 交叉编译失败
+            echo "CMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake"
+            echo "ANDROID_PLATFORM=android-${API}"
             echo "CC_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android${API}-clang"
             echo "CXX_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android${API}-clang++"
             echo "AR_aarch64_linux_android=$TOOLCHAIN/llvm-ar"

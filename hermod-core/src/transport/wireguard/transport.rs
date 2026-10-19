@@ -350,6 +350,17 @@ async fn driver_loop(
     let mut iter = 0u64;
     let mut inner_rx = 0u64;
     let mut inner_tx = 0u64;
+    // ---- TCP/WG 统计 ----
+    let mut inner_rx_bytes = 0u64;
+    let mut inner_tx_bytes = 0u64;
+    let mut last_tx_seq: Option<u32> = None;
+    let mut last_ack: Option<u32> = None;
+    let mut retx = 0u64;
+    let mut dup_ack = 0u64;
+    let mut last_rx_at = Instant::now();
+    let mut prev_rx_bytes = 0u64;
+    let mut prev_tx_bytes = 0u64;
+    let mut prev_stats_at = Instant::now();
 
     loop {
         tokio::select! {
@@ -357,6 +368,15 @@ async fn driver_loop(
                 match r {
                     Ok(Some(inner)) => {
                         inner_rx += 1;
+                        inner_rx_bytes += inner.len() as u64;
+                        last_rx_at = Instant::now();
+                        if let Some((_, ack, false, true, _)) = tcp_fields(&inner) {
+                            if last_ack == Some(ack) {
+                                dup_ack += 1;
+                            } else {
+                                last_ack = Some(ack);
+                            }
+                        }
                         crate::log_debug!("inner packet #{inner_rx} ({}B) -> smoltcp", inner.len());
                         stack.push_inner(inner);
                     }
@@ -458,6 +478,15 @@ async fn driver_loop(
             batch += 1;
             if let Some(inner) = inner {
                 inner_rx += 1;
+                inner_rx_bytes += inner.len() as u64;
+                last_rx_at = Instant::now();
+                if let Some((_, ack, false, true, _)) = tcp_fields(&inner) {
+                    if last_ack == Some(ack) {
+                        dup_ack += 1;
+                    } else {
+                        last_ack = Some(ack);
+                    }
+                }
                 stack.push_inner(inner);
             }
             for (pkt, to) in responses {
@@ -477,6 +506,15 @@ async fn driver_loop(
         }
         while let Some(pkt) = stack.pop_inner() {
             inner_tx += 1;
+            inner_tx_bytes += pkt.len() as u64;
+            if let Some((seq, _, true, _, plen)) = tcp_fields(&pkt) {
+                if let Some(expect) = last_tx_seq
+                    && seq != expect
+                {
+                    retx += 1;
+                }
+                last_tx_seq = Some(seq.wrapping_add(plen as u32));
+            }
             let _ = tunnel.send_tunnel(&pkt).await;
         }
         // 把 boringtun 排队的内层包放出来（握手完成前发送的包会排在内部队列）
@@ -484,11 +522,63 @@ async fn driver_loop(
             crate::log_warn!("failed to flush WG queue: {e}");
         }
         if iter.is_multiple_of(40) {
-            let send_q: usize = bridged.iter().map(|(h, _)| stack.tcp(*h).send_queue()).sum();
+            let now = Instant::now();
+            let dt = now.duration_since(prev_stats_at).as_secs_f64().max(0.001);
+            let rx_mib_s = (inner_rx_bytes - prev_rx_bytes) as f64 / dt / 1_048_576.0;
+            let tx_mib_s = (inner_tx_bytes - prev_tx_bytes) as f64 / dt / 1_048_576.0;
+            prev_rx_bytes = inner_rx_bytes;
+            prev_tx_bytes = inner_tx_bytes;
+            prev_stats_at = now;
+
+            let mut snd_q = 0usize;
+            let mut snd_cap = 0usize;
+            let mut rcv_q = 0usize;
+            let mut rcv_cap = 0usize;
+            for (h, _) in bridged.iter() {
+                let s = stack.tcp(*h);
+                snd_q += s.send_queue();
+                snd_cap += s.send_capacity();
+                rcv_q += s.recv_queue();
+                rcv_cap += s.recv_capacity();
+            }
+            let mut bridge = crate::transport::wireguard::stack::bridge::BridgeStats::default();
+            for (_, ends) in bridged.iter() {
+                let st = ends.stats();
+                bridge.pushed_bytes += st.pushed_bytes;
+                bridge.push_full += st.push_full;
+                bridge.popped_bytes += st.popped_bytes;
+                bridge.delivered_bytes += st.delivered_bytes;
+                bridge.recv_full += st.recv_full;
+            }
+            let wg_idle_s = now.duration_since(last_rx_at).as_secs_f64();
             crate::log_debug!(
-                "drv role={role:?}: 内层收={inner_rx} 发={inner_tx} session_ok={} 桥接={} 待ACK={send_q}",
-                tunnel.session_ok(),
-                bridged.len()
+                role = ?role,
+                rx_mib_s,
+                tx_mib_s,
+                snd_q,
+                snd_cap,
+                rcv_q,
+                rcv_cap,
+                retx,
+                dup_ack,
+                bridge_pushed = bridge.pushed_bytes,
+                bridge_push_full = bridge.push_full,
+                bridge_delivered = bridge.delivered_bytes,
+                bridge_recv_full = bridge.recv_full,
+                wg_idle_s,
+                "tcp stats"
+            );
+            if wg_idle_s > 2.0 {
+                crate::log_debug!(wg_idle_s, "no WG delivery to TCP");
+            }
+        }
+        if iter.is_multiple_of(200) {
+            crate::log_info!(
+                rx_mib = inner_rx_bytes / 1_048_576,
+                tx_mib = inner_tx_bytes / 1_048_576,
+                retx,
+                dup_ack,
+                "tcp transfer summary"
             );
         }
 
@@ -515,6 +605,25 @@ async fn driver_loop(
         }
     }
     crate::log_info!("transport driver exited (role={role:?}, inner_rx={inner_rx} inner_tx={inner_tx})");
+}
+
+
+/// 从内层 IPv4 包解析 TCP 关键字段（仅统计用）：
+/// `(seq, ack, 有载荷, 是 ACK, 载荷长度)`。
+fn tcp_fields(pkt: &[u8]) -> Option<(u32, u32, bool, bool, usize)> {
+    let ip = smoltcp::wire::Ipv4Packet::new_checked(pkt).ok()?;
+    if ip.next_header() != smoltcp::wire::IpProtocol::Tcp {
+        return None;
+    }
+    let tcp = smoltcp::wire::TcpPacket::new_checked(ip.payload()).ok()?;
+    let payload_len = tcp.payload().len();
+    Some((
+        tcp.seq_number().0 as u32,
+        tcp.ack_number().0 as u32,
+        payload_len > 0,
+        tcp.ack(),
+        payload_len,
+    ))
 }
 
 #[cfg(test)]

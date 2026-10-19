@@ -15,7 +15,7 @@ use futures_util::task::AtomicWaker;
 use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -34,6 +34,12 @@ struct SendQueue {
     /// 队列有空间时唤醒用户侧写入方。
     space: AtomicWaker,
     closed: AtomicBool,
+    /// 统计：成功入队的字节数。
+    pushed_bytes: AtomicU64,
+    /// 统计：因队列满被拒绝的次数。
+    full_events: AtomicU64,
+    /// 统计：数据面取走的字节数。
+    popped_bytes: AtomicU64,
 }
 
 impl SendQueue {
@@ -42,6 +48,9 @@ impl SendQueue {
             queue: Mutex::new(VecDeque::new()),
             space: AtomicWaker::new(),
             closed: AtomicBool::new(false),
+            pushed_bytes: AtomicU64::new(0),
+            full_events: AtomicU64::new(0),
+            popped_bytes: AtomicU64::new(0),
         }
     }
 
@@ -49,8 +58,11 @@ impl SendQueue {
     fn try_push(&self, data: Vec<u8>) -> bool {
         let mut q = self.queue.lock().unwrap();
         if q.len() >= WRITE_CAP {
+            self.full_events.fetch_add(1, Ordering::Relaxed);
             return false;
         }
+        self.pushed_bytes
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
         q.push_back(data);
         true
     }
@@ -71,7 +83,9 @@ impl SendQueue {
         let mut q = self.queue.lock().unwrap();
         let out = q.pop_front();
         drop(q);
-        if out.is_some() {
+        if let Some(chunk) = &out {
+            self.popped_bytes
+                .fetch_add(chunk.len() as u64, Ordering::Relaxed);
             self.space.wake();
         }
         out
@@ -83,7 +97,28 @@ impl SendQueue {
     }
 }
 
+/// 桥接层统计快照（给数据面打日志用）。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BridgeStats {
+    pub pushed_bytes: u64,
+    pub push_full: u64,
+    pub popped_bytes: u64,
+    pub delivered_bytes: u64,
+    pub recv_full: u64,
+}
+
 impl BridgeEnds {
+    /// 读取桥接统计。
+    pub fn stats(&self) -> BridgeStats {
+        BridgeStats {
+            pushed_bytes: self.send.pushed_bytes.load(Ordering::Relaxed),
+            push_full: self.send.full_events.load(Ordering::Relaxed),
+            popped_bytes: self.send.popped_bytes.load(Ordering::Relaxed),
+            delivered_bytes: self.delivered_bytes.load(Ordering::Relaxed),
+            recv_full: self.recv_full_events.load(Ordering::Relaxed),
+        }
+    }
+
     /// 关闭桥接两端：drop recv_tx 让用户侧读到 EOF，并关闭写队列。
     pub(crate) fn close(&mut self) {
         self.recv_tx.take();
@@ -105,6 +140,10 @@ pub struct BridgeEnds {
     send: Arc<SendQueue>,
     pending_recv: Vec<u8>,
     pending_send: Vec<u8>,
+    /// 统计：成功交付给用户侧的字节数。
+    delivered_bytes: AtomicU64,
+    /// 统计：用户侧接收队列满、暂存 pending_recv 的次数。
+    recv_full_events: AtomicU64,
 }
 
 impl BridgeStream {
@@ -123,6 +162,8 @@ impl BridgeStream {
             send,
             pending_recv: Vec::new(),
             pending_send: Vec::new(),
+            delivered_bytes: AtomicU64::new(0),
+            recv_full_events: AtomicU64::new(0),
         };
         (stream, ends)
     }
@@ -215,9 +256,13 @@ pub fn pump_socket(socket: &mut smoltcp::socket::tcp::Socket<'_>, ends: &mut Bri
     };
     if !ends.pending_recv.is_empty() {
         let chunk = std::mem::take(&mut ends.pending_recv);
+        let n = chunk.len();
         match recv_tx.try_send(chunk) {
-            Ok(()) => {}
+            Ok(()) => {
+                ends.delivered_bytes.fetch_add(n as u64, Ordering::Relaxed);
+            }
             Err(mpsc::error::TrySendError::Full(v)) => {
+                ends.recv_full_events.fetch_add(1, Ordering::Relaxed);
                 ends.pending_recv = v;
                 return;
             }
@@ -231,8 +276,11 @@ pub fn pump_socket(socket: &mut smoltcp::socket::tcp::Socket<'_>, ends: &mut Bri
             Ok(n) => {
                 let chunk = buf[..n].to_vec();
                 match recv_tx.try_send(chunk) {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        ends.delivered_bytes.fetch_add(n as u64, Ordering::Relaxed);
+                    }
                     Err(mpsc::error::TrySendError::Full(v)) => {
+                        ends.recv_full_events.fetch_add(1, Ordering::Relaxed);
                         ends.pending_recv = v;
                         return;
                     }

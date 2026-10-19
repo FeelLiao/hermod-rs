@@ -4,7 +4,30 @@ All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.1.1]
+
+### Added
+- TCP/bridge/WireGuard statistics in the transport driver (debug every 2 s,
+  info summary every 10 s): per-second tx/rx bytes, TCP send/receive queue
+  occupancy, retransmissions, duplicate ACKs, bridge queue-full counts, and
+  WireGuard delivery liveness.
+- Android ARM64 build job in CI (NDK r29 / Android 16), released alongside
+  Linux and Windows binaries.
+
+### Fixed
+- `hermod trust` now normalizes the URL (appends `:4376`) before fetching the
+  SPKI, so pinning a server whose port was omitted no longer pins the wrong
+  certificate.
+- `hermod trust` sets the server as the default (`server_url`).
+- Ctrl+C cancels the transfer immediately on both sides: the driver sends a
+  TCP RST and the peer's bridge is closed, so the other side exits at once
+  instead of waiting for the 30 s idle timeout.
+- The peer now reports `peer cancelled the transfer` instead of a low-level
+  I/O error.
+
+## [0.1.0]
+
+### Added
 
 ### Added
 - Complete Rust implementation of the Hermod protocol:

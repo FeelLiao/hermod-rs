@@ -96,14 +96,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake perl clang
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      # NDK r29 = Android 16 / API 36 对应的 NDK
+      # NDK r29 = Android 16 / API 36 对应的 NDK。
+      # 用 runner 预装的 sdkmanager（setup-android 会装已下架的 tools 包而失败）。
       - name: Install Android NDK r29
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "ndk;29.0.14206865"
+          # runner 预装 SDK；优先用 ANDROID_HOME，否则回退到标准路径
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          SDKMANAGER=$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager | head -1)
+          echo "using $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "ndk;29.0.14206865"
 
       - name: Configure Android toolchain
         shell: bash

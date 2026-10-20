@@ -1,14 +1,12 @@
-# Build Hermod on Linux (musl, fully static) and Windows (MSVC, static CRT),
-# and publish a GitHub Release whenever a `v*` tag is pushed.
+# Build Hermod on Linux (musl, fully static), Windows (MSVC, static CRT), and
+# Android ARM64, and publish a GitHub Release only when a `v*` version tag is
+# pushed. Pull requests, branch pushes, and manual runs do not trigger CI.
 
 name: build-and-release
 
 on:
   push:
-    branches: [main, master]
     tags: ['v*']
-  pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: write

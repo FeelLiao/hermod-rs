@@ -25,7 +25,10 @@ pub mod iface;
 pub mod quic;
 pub mod wireguard;
 
-pub use iface::{AbortHandle, Transport, TransportConnection, TransportKind, TransportStream};
+pub use iface::{
+    AbortHandle, NetworkStats, NetworkStatsHandle, Transport, TransportConnection, TransportKind,
+    TransportStream,
+};
 pub use quic::transport::{CongestionControl, QuicConnection, QuicError, QuicTransport};
 pub use wireguard::transport::{WgConnection, WgError, WireGuardTransport};
 
@@ -216,6 +219,13 @@ impl TransportConnection for AnyConnection {
         match self {
             AnyConnection::WireGuard(c) => c.shutdown().await.map_err(TransportError::WireGuard),
             AnyConnection::Quic(c) => c.shutdown().await.map_err(TransportError::Quic),
+        }
+    }
+
+    fn network_stats(&self) -> Option<NetworkStatsHandle> {
+        match self {
+            AnyConnection::WireGuard(_) => None,
+            AnyConnection::Quic(c) => c.network_stats(),
         }
     }
 }

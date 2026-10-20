@@ -20,7 +20,10 @@
 //! 证书/握手见 [crate::transport::quic::auth]。
 
 use crate::crypto::cpace::Role;
-use crate::transport::iface::{AbortHandle, Transport, TransportConnection, peer_cancelled_io};
+use crate::transport::iface::{
+    AbortHandle, NetworkStats, NetworkStatsHandle, Transport, TransportConnection,
+    peer_cancelled_io,
+};
 use crate::transport::quic::addr;
 use crate::transport::quic::auth::{self, Identity};
 use crate::transport::quic::bundle::{QUIC_ENDPOINT_VERSION, QuicEndpoint};
@@ -337,6 +340,8 @@ pub struct QuicConnection {
     /// 本会话的 SHA-256(token)；QUIC 流开头的 32 字节前导，用于在 server 侧
     /// 拒绝未通过 session 认证的连接（TLS 只认证 server）。
     credential_fingerprint: [u8; 32],
+    /// 后台采样的网络层统计；CLI 用它显示实际 UDP 发送速率。
+    stats: NetworkStatsHandle,
     closed: bool,
 }
 
@@ -351,6 +356,7 @@ impl QuicConnection {
             handshake: Some(handshake),
             conn: None,
             credential_fingerprint,
+            stats: NetworkStatsHandle::new(),
             closed: false,
         }
     }
@@ -362,7 +368,34 @@ impl QuicConnection {
         let rx = self.handshake.take().ok_or(QuicError::Closed)?;
         let conn = rx.await.map_err(|_| QuicError::Closed)??;
         self.conn = Some(conn.clone());
+        self.start_stats_task(conn.clone());
         Ok(conn)
+    }
+
+    /// 每 500ms 采样一次 quinn 的网络统计，供发送端进度条读取。
+    fn start_stats_task(&self, conn: quinn::Connection) {
+        let stats = self.stats.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(500));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        let s = conn.stats();
+                        stats.update(NetworkStats {
+                            wire_bytes: s.udp_tx.bytes,
+                            sent_packets: s.path.sent_packets,
+                            lost_bytes: s.path.lost_bytes,
+                            lost_packets: s.path.lost_packets,
+                            rtt: s.path.rtt,
+                            cwnd: s.path.cwnd,
+                            mtu: s.path.current_mtu,
+                        });
+                    }
+                    _ = conn.closed() => break,
+                }
+            }
+        });
     }
 }
 
@@ -423,6 +456,10 @@ impl TransportConnection for QuicConnection {
         AbortHandle::new(move || {
             endpoint.close(VarInt::from_u32(CLOSE_CANCEL), b"cancelled");
         })
+    }
+
+    fn network_stats(&self) -> Option<NetworkStatsHandle> {
+        Some(self.stats.clone())
     }
 
     async fn shutdown(&mut self) -> Result<(), QuicError> {

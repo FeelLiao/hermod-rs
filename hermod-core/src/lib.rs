@@ -84,6 +84,6 @@ pub mod transport;
 /// 上层通常只依赖 [`Transport`] / [`TransportConnection`]；终端用户通过
 /// [`TransportKind`] 选择 [`AnyTransport`]（发送端默认 QUIC，接收端可自动跟随）。
 pub use transport::{
-    AbortHandle, AnyConnection, AnyTransport, CongestionControl, Transport, TransportConnection,
-    TransportError, TransportKind,
+    AbortHandle, AnyConnection, AnyTransport, CongestionControl, NetworkStats, NetworkStatsHandle,
+    Transport, TransportConnection, TransportError, TransportKind,
 };

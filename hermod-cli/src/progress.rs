@@ -11,11 +11,56 @@ pub fn bar(total: u64, quiet: bool) -> ProgressBar {
         return ProgressBar::hidden();
     }
     let pb = ProgressBar::new(total);
-    let style = ProgressStyle::with_template("{bar:40} {bytes}/{total_bytes} {bytes_per_sec} ({eta})")
+    let style =
+        ProgressStyle::with_template("{bar:40} {bytes}/{total_bytes} {bytes_per_sec} ({eta})")
+            .map(|s| s.progress_chars("=>-"))
+            .unwrap_or_else(|_| ProgressStyle::default_bar());
+    pb.set_style(style);
+    pb
+}
+
+/// 发送端 QUIC 用的进度条：位置是本地写入字节，速度由网络统计消息覆盖。
+pub fn bar_net(total: u64, quiet: bool) -> ProgressBar {
+    if quiet || !crate::tty::stderr_is_tty() {
+        return ProgressBar::hidden();
+    }
+    let pb = ProgressBar::new(total);
+    let style = ProgressStyle::with_template("{bar:40} {bytes}/{total_bytes} {msg}")
         .map(|s| s.progress_chars("=>-"))
         .unwrap_or_else(|_| ProgressStyle::default_bar());
     pb.set_style(style);
+    pb.set_message("0 B/s (--)");
     pb
+}
+
+/// 把字节/秒格式化成 `7.2 MiB/s` 这样的字符串。
+pub fn format_rate(bytes_per_sec: f64) -> String {
+    const K: f64 = 1024.0;
+    if !bytes_per_sec.is_finite() || bytes_per_sec < 1.0 {
+        "0 B/s".to_string()
+    } else if bytes_per_sec < K {
+        format!("{bytes_per_sec:.0} B/s")
+    } else if bytes_per_sec < K * K {
+        format!("{:.1} KiB/s", bytes_per_sec / K)
+    } else if bytes_per_sec < K * K * K {
+        format!("{:.1} MiB/s", bytes_per_sec / (K * K))
+    } else {
+        format!("{:.2} GiB/s", bytes_per_sec / (K * K * K))
+    }
+}
+
+/// 把剩余秒数格式化成 `(5m)` 风格。
+pub fn format_eta(seconds: f64) -> String {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return "--".to_string();
+    }
+    if seconds < 60.0 {
+        format!("{}s", seconds.ceil() as u64)
+    } else if seconds < 3600.0 {
+        format!("{}m", (seconds / 60.0).ceil() as u64)
+    } else {
+        format!("{}h", (seconds / 3600.0).ceil() as u64)
+    }
 }
 
 /// 未知总字节数的滚动进度条（rx 在收到响应头前不知道大小）。
@@ -54,7 +99,6 @@ where
     }
 }
 
-
 /// 估算瞬时速率（字节/秒），用于滚动进度条（rx 不知道总大小）。
 pub struct Speed {
     last_t: std::time::Instant,
@@ -88,5 +132,27 @@ impl Speed {
 impl Default for Speed {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_rate_in_binary_units() {
+        assert_eq!(format_rate(0.0), "0 B/s");
+        assert_eq!(format_rate(512.0), "512 B/s");
+        assert_eq!(format_rate(1536.0), "1.5 KiB/s");
+        assert_eq!(format_rate(7.2 * 1024.0 * 1024.0), "7.2 MiB/s");
+        assert_eq!(format_rate(2.0 * 1024.0 * 1024.0 * 1024.0), "2.00 GiB/s");
+    }
+
+    #[test]
+    fn formats_eta() {
+        assert_eq!(format_eta(0.0), "--");
+        assert_eq!(format_eta(9.2), "10s");
+        assert_eq!(format_eta(5.0 * 60.0), "5m");
+        assert_eq!(format_eta(2.0 * 3600.0), "2h");
     }
 }

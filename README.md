@@ -227,6 +227,10 @@ The config holds the `server_url`, TLS settings, and the `trusted_servers` map
 
 ## Tuning
 
+- **Sender progress**: the `tx` progress bar uses the QUIC wire rate
+  (`udp_tx.bytes`) for the speed/ETA display, while its position is still file
+  bytes written locally. This means the speed can keep moving while the local
+  64 MiB send window is blocked; it includes QUIC ACK/control/retransmit overhead.
 - **QUIC throughput**: BBR is the default and is the recommended choice on lossy
   paths. Compare with `--quic-cc cubic` / `--quic-cc newreno` if needed. QUIC uses
   64 MiB stream and connection receive windows, a 64 MiB send window, 8 MiB UDP

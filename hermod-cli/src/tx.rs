@@ -9,12 +9,12 @@ use hermod_core::orchestrate;
 use hermod_core::session::{self, SessionOptions};
 use hermod_core::transfer::{self, Kind};
 use hermod_core::transport::http::server::ServeOptions;
-use hermod_core::transport::{CongestionControl, TransportKind};
+use hermod_core::transport::{CongestionControl, NetworkStatsHandle, TransportKind};
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 const IDLE: Duration = Duration::from_secs(30);
@@ -70,7 +70,13 @@ pub async fn run(
         Kind::File => {
             let path = Path::new(&args.input);
             let total = std::fs::metadata(path).map_err(util::boxed)?.len();
-            let pb = progress::bar(total, quiet);
+            let net = tx.conn.network_stats();
+            let pb = if net.is_some() {
+                progress::bar_net(total, quiet)
+            } else {
+                progress::bar(total, quiet)
+            };
+            let _net = spawn_net_progress(&pb, net, total);
             let (tick_tx, tick_rx) = mpsc::channel(1);
             let sent = Arc::new(AtomicU64::new(0));
             let pb2 = pb.clone();
@@ -87,7 +93,13 @@ pub async fn run(
         }
         Kind::Text => {
             let total = args.input.len() as u64;
-            let pb = progress::bar(total, quiet);
+            let net = tx.conn.network_stats();
+            let pb = if net.is_some() {
+                progress::bar_net(total, quiet)
+            } else {
+                progress::bar(total, quiet)
+            };
+            let _net = spawn_net_progress(&pb, net, total);
             let (tick_tx, tick_rx) = mpsc::channel(1);
             let sent = Arc::new(AtomicU64::new(0));
             let pb2 = pb.clone();
@@ -108,7 +120,13 @@ pub async fn run(
                 .read_to_end(&mut data)
                 .map_err(util::boxed)?;
             let size = data.len() as u64;
-            let pb = progress::bar(size, quiet);
+            let net = tx.conn.network_stats();
+            let pb = if net.is_some() {
+                progress::bar_net(size, quiet)
+            } else {
+                progress::bar(size, quiet)
+            };
+            let _net = spawn_net_progress(&pb, net, size);
             let (tick_tx, tick_rx) = mpsc::channel(1);
             let sent = Arc::new(AtomicU64::new(0));
             let pb2 = pb.clone();
@@ -133,6 +151,62 @@ pub async fn run(
         }
     }
     Ok(())
+}
+
+/// 网络统计后台任务的 RAII 守卫：离开作用域时 abort。
+struct NetGuard(Option<tokio::task::JoinHandle<()>>);
+
+impl Drop for NetGuard {
+    fn drop(&mut self) {
+        if let Some(task) = self.0.take() {
+            task.abort();
+        }
+    }
+}
+
+/// 每秒读取一次 QUIC 网络统计，把 `7.2 MiB/s (5m)` 写进进度条消息。
+fn spawn_net_progress(
+    pb: &indicatif::ProgressBar,
+    handle: Option<NetworkStatsHandle>,
+    total: u64,
+) -> NetGuard {
+    let Some(handle) = handle else {
+        return NetGuard(None);
+    };
+    let pb = pb.clone();
+    let task = tokio::spawn(async move {
+        let mut last = handle.snapshot();
+        let mut last_t = Instant::now();
+        let mut rate = 0.0f64;
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            let now = Instant::now();
+            let stats = handle.snapshot();
+            let dt = now.duration_since(last_t).as_secs_f64().max(0.001);
+            let delta = stats.wire_bytes.saturating_sub(last.wire_bytes) as f64;
+            let instant = delta / dt;
+            rate = if rate == 0.0 {
+                instant
+            } else {
+                0.3 * instant + 0.7 * rate
+            };
+            last = stats;
+            last_t = now;
+
+            let remaining = total.saturating_sub(pb.position());
+            let eta = if remaining == 0 {
+                "finishing".to_string()
+            } else if rate > 1024.0 {
+                progress::format_eta(remaining as f64 / rate)
+            } else {
+                "--".to_string()
+            };
+            pb.set_message(format!("{} ({})", progress::format_rate(rate), eta));
+        }
+    });
+    NetGuard(Some(task))
 }
 
 async fn finish_and_shutdown(

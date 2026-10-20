@@ -4,6 +4,15 @@ All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The sender progress bar now shows the QUIC **wire rate** (`udp_tx.bytes`
+  delta), which keeps moving while the local send buffer drains. The bar's
+  position and percentage remain based on file bytes written; WireGuard keeps
+  its existing local rate display.
+
 ## [0.2.0] - 2026-10-20
 
 ### Added

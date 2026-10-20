@@ -17,7 +17,8 @@
 
 use crate::crypto::cpace::Role;
 use core::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// 传输层字节流的组合 trait（trait object 只能包含一个非 auto trait）。
@@ -27,6 +28,48 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub trait TransportStream: AsyncRead + AsyncWrite + Unpin + Send {}
 
 impl<T> TransportStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
+
+/// 传输层网络统计快照（目前 QUIC 提供；WireGuard 返回 None）。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NetworkStats {
+    /// 已发到 UDP 的字节数（含 QUIC 头、ACK、重传）。
+    pub wire_bytes: u64,
+    /// 已发 UDP 包数。
+    pub sent_packets: u64,
+    /// 丢失字节数。
+    pub lost_bytes: u64,
+    /// 丢失包数。
+    pub lost_packets: u64,
+    /// 平滑 RTT。
+    pub rtt: Duration,
+    /// 当前拥塞窗口。
+    pub cwnd: u64,
+    /// 当前路径 MTU。
+    pub mtu: u16,
+}
+
+/// 可由后台任务更新、由进度显示读取的网络统计句柄。
+#[derive(Clone, Default)]
+pub struct NetworkStatsHandle(Arc<Mutex<NetworkStats>>);
+
+impl NetworkStatsHandle {
+    /// 新建全 0 快照。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 读取当前快照（短锁；锁中毒时返回全 0，不影响传输）。
+    pub fn snapshot(&self) -> NetworkStats {
+        self.0.lock().map(|s| *s).unwrap_or_default()
+    }
+
+    /// 由传输层后台任务更新。
+    pub(crate) fn update(&self, stats: NetworkStats) {
+        if let Ok(mut current) = self.0.lock() {
+            *current = stats;
+        }
+    }
+}
 
 /// 数据面传输协议选择。
 ///
@@ -181,6 +224,13 @@ pub trait TransportConnection {
     ///
     /// `orchestrate::*` 返回后应调用本方法，否则进程退出可能丢掉最后的裁决/尾数据。
     fn shutdown(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
+
+    /// 可选的网络层统计（QUIC 提供；WireGuard 暂不提供）。
+    ///
+    /// 用于发送端显示实际 UDP 发送速率，而不是本地写入进度。
+    fn network_stats(&self) -> Option<NetworkStatsHandle> {
+        None
+    }
 }
 
 /// 与具体传输协议无关的中止句柄。

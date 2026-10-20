@@ -6,10 +6,12 @@
 //! 等 RTO。QUIC 自带 RFC 9002 的 ACK 驱动丢包检测 + PTO、包级 pacing、PMTUD
 //! 和可插拔拥塞控制（这里默认 BBR），在高 BDP/有丢包的链路上更不容易掉速。
 //!
-//! 本实现把载荷 HTTP/1.1 放在**一条 QUIC 双向流**上：tx 侧 `accept_bi`，rx 侧
-//! `open_bi`，与 [TransportConnection::listen] / [TransportConnection::dial] 的
-//! 语义一一对应。流开头先传 32 字节 session 指纹（SHA-256(token)）；server 只把
-//! 匹配的流交给 HTTP，未授权连接无法占住唯一的 listen 流。
+//! 连接方向：tx（Sender）是 QUIC client、主动出站；rx（Receiver）是 QUIC server、
+//! 监听。载荷 HTTP/1.1 放在**一条 QUIC 双向流**上：tx 侧 `accept_bi`，rx 侧
+//! `open_bi`（QUIC 允许 server 发起双向流），与
+//! [TransportConnection::listen] / [TransportConnection::dial] 的语义一一对应。
+//! 流开头先传 32 字节 session 指纹（SHA-256(token)）；server 只把匹配的流交给
+//! HTTP，未授权连接无法占住唯一的 listen 流。
 //!
 //! ## 独立性
 //!
@@ -274,11 +276,34 @@ impl Transport for QuicTransport {
             "establishing QUIC transport"
         );
 
-        // 角色映射与 trait 语义保持一致：
-        // - tx（Sender）负责 listen → QUIC server（accept_bi）；
-        // - rx（Receiver）负责 dial → QUIC client（open_bi）。
+        // 角色映射：
+        // - tx（Sender）= QUIC client，主动向 rx 的所有候选发 Initial，和 WireGuard
+        //   一样由发送端先出站，避免发送端防火墙丢弃首个入站 UDP；
+        // - rx（Receiver）= QUIC server，只监听。
+        // 但 HTTP 流的发起方向仍与 trait 语义一致：tx listen = accept_bi（接受
+        // rx 打开的流），rx dial = open_bi（打开流）。QUIC 双向流允许 server 发起。
         let endpoint = match role {
             Role::Sender => {
+                // 并行向 rx 的所有候选发 Initial（同时开 tx 侧防火墙针孔）。
+                let tls = auth::client_config(peer_fingerprint)?;
+                let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
+                    .map_err(|e| QuicError::Config(e.to_string()))?;
+                let mut client = quinn::ClientConfig::new(Arc::new(crypto));
+                client.transport_config(transport);
+                let endpoint =
+                    quinn::Endpoint::new(quinn::EndpointConfig::default(), None, socket, runtime)?;
+                let (tx, rx) = oneshot::channel();
+                tokio::spawn(connect_task(endpoint.clone(), client, peer_addrs, tx));
+                QuicConnection::new(endpoint, rx, credential_fingerprint)
+            }
+            Role::Receiver => {
+                // rx 是 server；先向 tx 的候选发几个 dummy UDP 包，打开 rx 侧
+                // 有状态防火墙的返回路径（WireGuard 的「双方同时发」等价物）。
+                for _ in 0..3 {
+                    for addr in &peer_addrs {
+                        let _ = socket.send_to(b"hermod-quic-pinhole", addr);
+                    }
+                }
                 let tls = auth::server_config(&identity)?;
                 let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(tls)
                     .map_err(|e| QuicError::Config(e.to_string()))?;
@@ -292,19 +317,6 @@ impl Transport for QuicTransport {
                 )?;
                 let (tx, rx) = oneshot::channel();
                 tokio::spawn(accept_task(endpoint.clone(), tx));
-                QuicConnection::new(endpoint, rx, credential_fingerprint)
-            }
-            Role::Receiver => {
-                // 并行向所有候选发 Initial（同时开防火墙针孔）。
-                let tls = auth::client_config(peer_fingerprint)?;
-                let crypto = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
-                    .map_err(|e| QuicError::Config(e.to_string()))?;
-                let mut client = quinn::ClientConfig::new(Arc::new(crypto));
-                client.transport_config(transport);
-                let endpoint =
-                    quinn::Endpoint::new(quinn::EndpointConfig::default(), None, socket, runtime)?;
-                let (tx, rx) = oneshot::channel();
-                tokio::spawn(connect_task(endpoint.clone(), client, peer_addrs, tx));
                 QuicConnection::new(endpoint, rx, credential_fingerprint)
             }
         };
@@ -726,18 +738,18 @@ mod tests {
         let mut rx = loopback_transport();
         tx.set_credential_fingerprint([0x33; 32]);
         rx.set_credential_fingerprint([0x33; 32]);
-        let mut tx_ep = QuicEndpoint::decode(&tx.prepare().await.unwrap()).unwrap();
+        let tx_ep = tx.prepare().await.unwrap();
+        let mut rx_ep = QuicEndpoint::decode(&rx.prepare().await.unwrap()).unwrap();
         // 客户端只试 ::1，避免在测试里等不可达候选的超时。
-        tx_ep.ipv6_candidates = vec![Ipv6Addr::LOCALHOST];
-        // 把 server 公布的证书指纹改坏；rx（client）必须拒绝 tx 的证书。
-        tx_ep.cert_fingerprint = [0x00; 32];
-        let tx_ep = tx_ep.encode().unwrap();
-        let rx_ep = rx.prepare().await.unwrap();
+        rx_ep.ipv6_candidates = vec![Ipv6Addr::LOCALHOST];
+        // 把 rx（QUIC server）公布的证书指纹改坏；tx（client）必须拒绝它。
+        rx_ep.cert_fingerprint = [0x00; 32];
+        let rx_ep = rx_ep.encode().unwrap();
         let psk = crate::crypto::kdf::derive_wg_psk(&[0x99; 32], 4);
 
-        let _tx_conn = tx.establish(Role::Sender, &psk, &rx_ep).await.unwrap();
-        let mut rx_conn = rx.establish(Role::Receiver, &psk, &tx_ep).await.unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(10), rx_conn.dial()).await;
+        let mut tx_conn = tx.establish(Role::Sender, &psk, &rx_ep).await.unwrap();
+        let _rx_conn = rx.establish(Role::Receiver, &psk, &tx_ep).await.unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(10), tx_conn.listen()).await;
         assert!(
             matches!(result, Ok(Err(_))),
             "握手必须因为证书指纹不匹配而失败"

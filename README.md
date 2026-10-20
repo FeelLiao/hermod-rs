@@ -204,12 +204,15 @@ The config holds the `server_url`, TLS settings, and the `trusted_servers` map
    derives `PSK = HKDF-SHA256(K, channel_id, "hermod-wg-psk-v1")`. A WireGuard
    handshake runs over IPv6 UDP; then an in-process TCP/IP stack (smoltcp) carries
    HTTP/1.1.
-   **QUIC** (`--transport quic`): the sender generates an ephemeral self-signed
-   certificate and the receiver pins its SHA-256 from the encrypted bundle. The sender
-   is the QUIC server (tx `listen` = `accept_bi`), the receiver is the QUIC client
-   (rx `dial` = `open_bi`), and HTTP/1.1 runs on one bidirectional QUIC stream.
-   The receiver first sends a 32-byte session fingerprint (SHA-256 of the token);
-   the sender rejects streams without it before handing the stream to HTTP.
+   **QUIC** (`--transport quic`): the receiver generates an ephemeral self-signed
+   certificate and the sender pins its SHA-256 from the encrypted bundle. The sender
+   is the QUIC client (it initiates the connection outbound, like WireGuard's
+   sender), the receiver is the QUIC server. HTTP/1.1 runs on one bidirectional
+   QUIC stream opened by the receiver: tx `listen` = `accept_bi`, rx `dial` =
+   `open_bi`. The receiver first sends a 32-byte session fingerprint (SHA-256 of
+   the token); the sender rejects streams without it before handing the stream to
+   HTTP. The receiver also sends a few dummy UDP packets to the sender's candidates
+   to open stateful-firewall return paths.
 8. In both cases the sender serves `GET /f/<token>`; the receiver pulls the whole
    payload while hashing SHA-256, then posts the digest to `POST /done`. The sender
    compares the digest with its own and only then completes the transfer. QUIC

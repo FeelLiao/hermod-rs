@@ -1,13 +1,13 @@
 //! QUIC 的临时身份、TLS 配置与证书钉扎。
 //!
-//! QUIC 必须有 TLS 1.3。这里让 tx（QUIC server）每次会话生成一把临时自签名
-//! 证书，把证书 DER 的 SHA-256 放进 CPace 加密的 endpoint bundle；rx（QUIC
+//! QUIC 必须有 TLS 1.3。这里让 rx（QUIC server）每次会话生成一把临时自签名
+//! 证书，把证书 DER 的 SHA-256 放进 CPace 加密的 endpoint bundle；tx（QUIC
 //! client）只信任 bundle 里那一枚指纹。这样：
 //!
-//! - 中间人没有 server 私钥，无法冒充 tx；
+//! - 中间人没有 server 私钥，无法冒充 rx；
 //! - 证书在 TLS 握手线上是明文，但指纹经过 CPace 加密通道交换，无法被替换。
 //!
-//! rx 的身份不依赖 TLS 客户端证书：双方在 session 层已经用 CPace 的 K 认证
+//! tx 的身份不依赖 TLS 客户端证书：双方在 session 层已经用 CPace 的 K 认证
 //! 过对端，数据面再用一次性 HTTP token（128 位）授权。TLS 只负责加密和认证
 //! server；文件访问必须出示 token，猜不中就拿不到数据。
 

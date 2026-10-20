@@ -23,6 +23,13 @@ adheres to [Semantic Versioning](https://semver.org/).
 - QUIC end-to-end tests (raw stream + HTTP/SHA-256) and an ignored 256 MiB
   throughput benchmark.
 
+### Fixed
+
+- QUIC now has the sender initiate the connection (matching WireGuard's firewall
+  behavior), while the receiver acts as the QUIC server and sends UDP pinhole
+  probes to open stateful-firewall return paths. The HTTP stream is still opened
+  by the receiver and read by the sender.
+
 ### Changed
 
 - Transport HTTP/1.1 moved from `transport::wireguard::http` to the neutral

@@ -4,8 +4,8 @@ mod cli;
 mod progress;
 mod rx;
 mod serve;
-mod tty;
 mod trust;
+mod tty;
 mod tx;
 mod util;
 mod verbosity;
@@ -53,7 +53,7 @@ async fn main() -> std::process::ExitCode {
                 // 留一点时间让驱动把 RST 发出去。
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
-            verbosity::error("interrupted");
+            eprintln!("interrupted");
             return std::process::ExitCode::from(130);
         }
     };
@@ -61,12 +61,15 @@ async fn main() -> std::process::ExitCode {
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            let msg = e.to_string();
-            if msg == "peer cancelled the transfer" {
+            let peer_cancelled = matches!(
+                e.downcast_ref::<hermod_core::orchestrate::OrchestrateError>(),
+                Some(hermod_core::orchestrate::OrchestrateError::PeerCancelled)
+            ) || e.to_string() == "peer cancelled the transfer";
+            if peer_cancelled {
                 // 对端取消：直接显示友好提示，不加 error: 前缀。
-                eprintln!("{msg}");
+                eprintln!("peer cancelled the transfer");
             } else {
-                verbosity::error(msg);
+                verbosity::error(e.to_string());
             }
             std::process::ExitCode::from(1)
         }

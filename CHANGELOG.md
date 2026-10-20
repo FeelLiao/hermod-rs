@@ -8,8 +8,11 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Optional **QUIC data plane** (`--transport quic`) as a standalone transport
-  implementation; WireGuard remains the default and is unchanged.
+- **QUIC data plane** is now the default transport; WireGuard remains available
+  with `--transport wireguard`.
+- The receiver defaults to `--transport auto`: it reads a small transport header
+  from the sender's AEAD-encrypted endpoint bundle and selects the matching
+  implementation itself.
 - QUIC transport with TLS 1.3 server-certificate pinning, per-session ephemeral
   certificates, endpoint authentication through the CPace-encrypted endpoint
   bundle, and a 32-byte session-fingerprint stream preamble plus a one-time HTTP
@@ -29,13 +32,18 @@ adheres to [Semantic Versioning](https://semver.org/).
   behavior), while the receiver acts as the QUIC server and sends UDP pinhole
   probes to open stateful-firewall return paths. The HTTP stream is still opened
   by the receiver and read by the sender.
+- Peer cancellation is now transport-agnostic: QUIC uses explicit close code 1,
+  maps stream/connection resets to a typed peer-cancelled marker, and the CLI
+  prints `peer cancelled the transfer` without an `error:` prefix. Local Ctrl+C
+  prints `interrupted`.
 
 ### Changed
 
 - Transport HTTP/1.1 moved from `transport::wireguard::http` to the neutral
   `transport::http`, so QUIC does not depend on the WireGuard module.
-- `orchestrate` is generic over `TransportConnection`; `session` treats endpoint
-  bytes as opaque and selects the transport at runtime.
+- `orchestrate` is generic over `TransportConnection`; `session` wraps the opaque
+  endpoint payload with a small transport header (inside AEAD) so the receiver can
+  auto-select the implementation.
 - The transport interface now exposes `set_credential_fingerprint`, a generic
   `AbortHandle`, and `shutdown`.
 

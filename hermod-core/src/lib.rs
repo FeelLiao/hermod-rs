@@ -20,8 +20,9 @@
 //!   以及两端的 CPace 握手编排。
 //! - [`transport`]：传输层。先看 [`transport::iface`] 的 [`Transport`]/
 //!   [`TransportConnection`] 契约（上层只依赖它）；两个并列实现：
-//!   [`transport::wireguard`]（默认，用户态 WireGuard + smoltcp 进程内 TCP）与
-//!   [`transport::quic`]（可选，QUIC + TLS 1.3 + BBR）。两者互不依赖；
+//!   [`transport::quic`]（默认，QUIC + TLS 1.3 + BBR）与
+//!   [`transport::wireguard`]（可选回退，用户态 WireGuard + smoltcp 进程内 TCP）。
+//!   两者互不依赖；
 //!   [`transport::http`] 是共享的传输内 HTTP/1.1。
 //! - [`session`]：会话编排——从**传输码**到已建立的传输连接：
 //!   [`session::sender_session`]（tx）/ [`session::receiver_session`]（rx）。
@@ -81,7 +82,7 @@ pub mod transport;
 /// 传输层接口与运行时分发（便捷再导出）。
 ///
 /// 上层通常只依赖 [`Transport`] / [`TransportConnection`]；终端用户通过
-/// [`TransportKind`] 选择 [`AnyTransport`]（默认 WireGuard，可选 QUIC）。
+/// [`TransportKind`] 选择 [`AnyTransport`]（发送端默认 QUIC，接收端可自动跟随）。
 pub use transport::{
     AbortHandle, AnyConnection, AnyTransport, CongestionControl, Transport, TransportConnection,
     TransportError, TransportKind,

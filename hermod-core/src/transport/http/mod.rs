@@ -209,11 +209,23 @@ pub async fn write_response_head<W: AsyncWrite + Unpin>(
 #[derive(Debug, thiserror::Error)]
 pub enum HttpError {
     #[error("io: {0}")]
-    Io(#[from] io::Error),
+    Io(io::Error),
+    #[error("peer cancelled the transfer")]
+    PeerCancelled,
     #[error("malformed http: {0}")]
     Malformed(String),
     #[error("metadata: {0}")]
     Meta(#[from] crate::http_meta::MetaError),
+}
+
+impl From<io::Error> for HttpError {
+    fn from(error: io::Error) -> Self {
+        if crate::transport::iface::is_peer_cancelled(&error) {
+            HttpError::PeerCancelled
+        } else {
+            HttpError::Io(error)
+        }
+    }
 }
 
 /// 写一个 HTTP 响应（头 + body，自动补 Content-Length）。
@@ -300,6 +312,13 @@ mod tests {
         let mut body = Vec::new();
         reader.read_to_end(&mut body).await.unwrap();
         assert_eq!(body, b"hello");
+    }
+
+    /// 取消 marker 必须映射到 HttpError::PeerCancelled。
+    #[test]
+    fn peer_cancelled_marker_maps_to_http_error() {
+        let error = HttpError::from(crate::transport::iface::peer_cancelled_io());
+        assert!(matches!(error, HttpError::PeerCancelled));
     }
 
     /// 非法请求行 → 报错。

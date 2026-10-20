@@ -53,10 +53,10 @@ where
         let req = match Request::read(&mut reader).await {
             Ok(req) => req,
             // rx 关闭连接（正常结束）→ 结束服务
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                return Err(HttpError::Io(e));
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                return Err(HttpError::Malformed(e.to_string()));
             }
-            Err(e) => return Err(HttpError::Malformed(e.to_string())),
+            Err(e) => return Err(e.into()),
         };
 
         crate::log_info!(method = %req.method, path = %req.path, "request received");

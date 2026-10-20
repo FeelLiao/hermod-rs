@@ -2,8 +2,8 @@
 //!
 //! 当前有两个**并列、互不依赖**的实现：
 //!
-//! - [wireguard]：用户态 WireGuard + smoltcp 进程内 TCP（默认，行为不变）；
-//! - [quic]：QUIC + TLS 1.3 + BBR（通过 `--transport quic` 显式启用）。
+//! - [quic]：QUIC + TLS 1.3 + BBR（默认）；
+//! - [wireguard]：用户态 WireGuard + smoltcp 进程内 TCP（可选回退）。
 //!
 //! 上层（[crate::session] / [crate::orchestrate]）只依赖 [iface::Transport] /
 //! [iface::TransportConnection]；[AnyTransport] / [AnyConnection] 只是运行时分发，
@@ -15,9 +15,9 @@
 //! transport/
 //! ├── iface.rs      # trait + TransportKind + AbortHandle
 //! ├── mod.rs        # AnyTransport / AnyConnection 运行时分发
-//! ├── wireguard/    # 默认实现：WireGuard + smoltcp TCP
+//! ├── wireguard/    # 可选回退：WireGuard + smoltcp TCP
 //! ├── http/         # 共享的传输内 HTTP/1.1
-//! └── quic/         # 可选实现：QUIC endpoint / TLS 钉扎 / BBR
+//! └── quic/         # 默认实现：QUIC endpoint / TLS 钉扎 / BBR
 //! ```
 
 pub mod http;
@@ -51,7 +51,7 @@ pub enum AnyTransport {
 }
 
 impl AnyTransport {
-    /// 按 CLI/配置选择构造；默认是 WireGuard。
+    /// 按 CLI/配置选择构造；发送端默认 QUIC，接收端可自动跟随。
     pub fn new(kind: TransportKind) -> Self {
         match kind {
             TransportKind::WireGuard => AnyTransport::WireGuard(WireGuardTransport::new()),

@@ -41,10 +41,11 @@ pub async fn run(
 
     // 2) 建会话
     verbosity::debug(format!("server_url={}", cfg.server_url));
+    let transport = TransportKind::parse(&args.transport_opts.transport).unwrap_or_default();
     let opts = SessionOptions {
         mtu: Some(args.wg_mtu),
         udp_bind: Some(util::parse_listen(&args.listen)?),
-        transport: TransportKind::parse(&args.transport_opts.transport).unwrap_or_default(),
+        transport: Some(transport),
         quic_congestion: CongestionControl::parse(&args.transport_opts.quic_cc).unwrap_or_default(),
         quic_mtu: Some(args.transport_opts.quic_mtu),
     };

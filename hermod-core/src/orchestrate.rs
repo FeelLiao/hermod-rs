@@ -32,7 +32,11 @@ pub enum OrchestrateError {
 
 /// 把「对端中止连接」类错误（RST / 提前 EOF / BrokenPipe）映射为友好提示。
 fn map_http(e: HttpError) -> OrchestrateError {
+    if matches!(e, HttpError::PeerCancelled) {
+        return OrchestrateError::PeerCancelled;
+    }
     let cancelled = match &e {
+        HttpError::PeerCancelled => false,
         HttpError::Malformed(s) => s.contains("body shorter than Content-Length"),
         HttpError::Io(io) => matches!(
             io.kind(),
@@ -304,6 +308,57 @@ mod tests {
         assert!(serve_out.verified);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 取消发生在 HTTP 传输过程中时，另一端必须得到 PeerCancelled 而不是裸 io 错误。
+    #[tokio::test]
+    async fn quic_peer_cancel_during_http_is_clean() {
+        use crate::transport::quic::transport::QuicTransport;
+        use std::net::{Ipv6Addr, SocketAddrV6};
+
+        let mut tx = QuicTransport::new();
+        let mut rx = QuicTransport::new();
+        let bind = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0);
+        tx.set_udp_bind(Some(bind));
+        rx.set_udp_bind(Some(bind));
+        tx.set_credential_fingerprint([0x91; 32]);
+        rx.set_credential_fingerprint([0x91; 32]);
+        let tx_ep = tx.prepare().await.unwrap();
+        let rx_ep = rx.prepare().await.unwrap();
+        let psk = derive_wg_psk(&[0x92u8; 32], 13);
+        let mut tx_conn = tx.establish(Role::Sender, &psk, &rx_ep).await.unwrap();
+        let mut rx_conn = rx.establish(Role::Receiver, &psk, &tx_ep).await.unwrap();
+
+        let data = vec![0x5a_u8; 64 * 1024 * 1024];
+        let token = [0x93u8; 16];
+        let opts = ServeOptions {
+            token,
+            kind: Kind::File,
+            name: "cancel.bin".into(),
+            size: data.len() as u64,
+            body: Box::new(std::io::Cursor::new(data)),
+            progress: None,
+        };
+        let mut dest = Vec::new();
+        let abort = rx_conn.abort_handle();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            abort.abort();
+        });
+
+        let (serve_out, _fetch_out) =
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                tokio::join!(
+                    serve_file(&mut tx_conn, opts),
+                    fetch_file(&mut rx_conn, &token, &mut dest, None),
+                )
+            })
+            .await
+            .expect("取消测试超时");
+        assert!(
+            matches!(serve_out, Err(OrchestrateError::PeerCancelled)),
+            "tx 应得到 PeerCancelled，实际: {serve_out:?}"
+        );
     }
 
     /// QUIC 全链路：QuicTransport + 传输内 HTTP + SHA-256 裁决。

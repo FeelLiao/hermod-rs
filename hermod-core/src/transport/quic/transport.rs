@@ -1,4 +1,4 @@
-//! QUIC 传输实现（可选数据面）。
+//! QUIC 传输实现（默认数据面）。
 //!
 //! ## 为什么用 QUIC
 //!
@@ -20,7 +20,7 @@
 //! 证书/握手见 [crate::transport::quic::auth]。
 
 use crate::crypto::cpace::Role;
-use crate::transport::iface::{AbortHandle, Transport, TransportConnection};
+use crate::transport::iface::{AbortHandle, Transport, TransportConnection, peer_cancelled_io};
 use crate::transport::quic::addr;
 use crate::transport::quic::auth::{self, Identity};
 use crate::transport::quic::bundle::{QUIC_ENDPOINT_VERSION, QuicEndpoint};
@@ -46,6 +46,10 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const PREAMBLE_TIMEOUT: Duration = Duration::from_secs(5);
 /// session 指纹前导长度（SHA-256(token)）。
 const PREAMBLE_LEN: usize = 32;
+/// QUIC 正常完成关闭码。
+const CLOSE_DONE: u32 = 0;
+/// QUIC 主动取消关闭码；对端据此显示 "peer cancelled the transfer"。
+const CLOSE_CANCEL: u32 = 1;
 /// 保活间隔。
 const KEEPALIVE: Duration = Duration::from_secs(10);
 /// 初始 RTT（比 quinn 默认 333 ms 更贴近常见网络）。
@@ -417,7 +421,7 @@ impl TransportConnection for QuicConnection {
     fn abort_handle(&self) -> AbortHandle {
         let endpoint = self.endpoint.clone();
         AbortHandle::new(move || {
-            endpoint.close(VarInt::from_u32(0), b"cancelled");
+            endpoint.close(VarInt::from_u32(CLOSE_CANCEL), b"cancelled");
         })
     }
 
@@ -428,10 +432,10 @@ impl TransportConnection for QuicConnection {
         self.closed = true;
         if let Some(conn) = self.conn.take() {
             // 流级 FIN 已经在 QuicStream::poll_shutdown 里等到 ACK；这里只收尾连接。
-            conn.close(VarInt::from_u32(0), b"done");
+            conn.close(VarInt::from_u32(CLOSE_DONE), b"done");
         } else {
             // 握手尚未完成就关闭：直接让 endpoint 停下来。
-            self.endpoint.close(VarInt::from_u32(0), b"done");
+            self.endpoint.close(VarInt::from_u32(CLOSE_DONE), b"done");
         }
         let _ = tokio::time::timeout(Duration::from_secs(1), self.endpoint.wait_idle()).await;
         Ok(())
@@ -442,9 +446,10 @@ impl Drop for QuicConnection {
     fn drop(&mut self) {
         if !self.closed {
             if let Some(conn) = &self.conn {
-                conn.close(VarInt::from_u32(0), b"dropped");
+                conn.close(VarInt::from_u32(CLOSE_CANCEL), b"cancelled");
             }
-            self.endpoint.close(VarInt::from_u32(0), b"dropped");
+            self.endpoint
+                .close(VarInt::from_u32(CLOSE_CANCEL), b"cancelled");
         }
     }
 }
@@ -473,13 +478,62 @@ impl QuicStream {
     }
 }
 
+fn is_cancel_code(code: VarInt) -> bool {
+    code == VarInt::from_u32(CLOSE_CANCEL)
+}
+
+fn connection_is_cancelled(error: &quinn::ConnectionError) -> bool {
+    match error {
+        quinn::ConnectionError::ApplicationClosed(close) => is_cancel_code(close.error_code),
+        quinn::ConnectionError::Reset => true,
+        _ => false,
+    }
+}
+
+fn map_read_error(error: quinn::ReadError) -> io::Error {
+    let cancelled = match &error {
+        quinn::ReadError::Reset(code) => is_cancel_code(*code),
+        quinn::ReadError::ConnectionLost(inner) => connection_is_cancelled(inner),
+        _ => false,
+    };
+    if cancelled {
+        peer_cancelled_io()
+    } else {
+        error.into()
+    }
+}
+
+fn map_write_error(error: quinn::WriteError) -> io::Error {
+    let cancelled = match &error {
+        quinn::WriteError::Stopped(code) => is_cancel_code(*code),
+        quinn::WriteError::ConnectionLost(inner) => connection_is_cancelled(inner),
+        _ => false,
+    };
+    if cancelled {
+        peer_cancelled_io()
+    } else {
+        error.into()
+    }
+}
+
+fn stopped_is_cancelled(error: &quinn::StoppedError) -> bool {
+    match error {
+        quinn::StoppedError::ConnectionLost(inner) => connection_is_cancelled(inner),
+        _ => false,
+    }
+}
+
 impl AsyncRead for QuicStream {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        AsyncRead::poll_read(Pin::new(&mut self.get_mut().recv), cx, buf)
+        match self.get_mut().recv.poll_read_buf(cx, buf) {
+            Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(error)) => Poll::Ready(Err(map_read_error(error))),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -489,7 +543,11 @@ impl AsyncWrite for QuicStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        AsyncWrite::poll_write(Pin::new(&mut self.get_mut().send), cx, buf)
+        match Pin::new(&mut self.get_mut().send).poll_write(cx, buf) {
+            Poll::Ready(Ok(written)) => Poll::Ready(Ok(written)),
+            Poll::Ready(Err(error)) => Poll::Ready(Err(map_write_error(error))),
+            Poll::Pending => Poll::Pending,
+        }
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -510,9 +568,16 @@ impl AsyncWrite for QuicStream {
             .as_mut()
             .poll(cx)
         {
-            // None = 对端确认收完所有流数据；Some(_) = 对端 reset。
-            // reset 通常意味着上层已经因为取消/错误而结束，shutdown 不再二次报错。
-            Poll::Ready(Ok(_)) | Poll::Ready(Err(_)) => Poll::Ready(Ok(())),
+            // None = 对端确认收完所有流数据；Some(1) = 对端主动取消。
+            // 其他 reset/连接错误通常意味着上层已经因错误结束，shutdown 不再二次报错。
+            Poll::Ready(Ok(Some(code))) if is_cancel_code(code) => {
+                Poll::Ready(Err(peer_cancelled_io()))
+            }
+            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(error)) if stopped_is_cancelled(&error) => {
+                Poll::Ready(Err(peer_cancelled_io()))
+            }
+            Poll::Ready(Err(_)) => Poll::Ready(Ok(())),
             Poll::Pending => Poll::Pending,
         }
     }
@@ -753,6 +818,39 @@ mod tests {
         assert!(
             matches!(result, Ok(Err(_))),
             "握手必须因为证书指纹不匹配而失败"
+        );
+    }
+
+    /// 对端主动取消时，流上的 io error 必须带 peer-cancelled marker。
+    #[tokio::test]
+    async fn peer_cancel_maps_to_marker() {
+        let mut tx = loopback_transport();
+        let mut rx = loopback_transport();
+        tx.set_credential_fingerprint([0x12; 32]);
+        rx.set_credential_fingerprint([0x12; 32]);
+        let tx_ep = tx.prepare().await.unwrap();
+        let rx_ep = rx.prepare().await.unwrap();
+        let psk = crate::crypto::kdf::derive_wg_psk(&[0x34; 32], 12);
+        let mut tx_conn = tx.establish(Role::Sender, &psk, &rx_ep).await.unwrap();
+        let mut rx_conn = rx.establish(Role::Receiver, &psk, &tx_ep).await.unwrap();
+
+        let (server, client) = tokio::time::timeout(Duration::from_secs(20), async {
+            tokio::join!(tx_conn.listen(), rx_conn.dial())
+        })
+        .await
+        .expect("QUIC 建流超时");
+        let _server = server.unwrap();
+        let mut client = client.unwrap();
+
+        tx_conn.abort_handle().abort();
+        let mut buf = [0u8; 1];
+        let error = tokio::time::timeout(Duration::from_secs(10), client.read(&mut buf))
+            .await
+            .expect("取消后读应返回")
+            .expect_err("取消后读应报错");
+        assert!(
+            crate::transport::iface::is_peer_cancelled(&error),
+            "取消错误必须带 peer-cancelled marker: {error}"
         );
     }
 

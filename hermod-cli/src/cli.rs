@@ -42,11 +42,27 @@ pub enum Command {
     Serve,
 }
 
-/// 传输协议相关参数（tx/rx 共用）。
+/// tx 的传输参数：发送端必须选一个实现，默认 QUIC。
 #[derive(Args, Debug)]
-pub struct TransportArgs {
-    /// Data-plane transport: wireguard (default) or quic
-    #[arg(long, default_value = "wireguard", value_parser = ["wireguard", "quic"])]
+pub struct TxTransportArgs {
+    /// Data-plane transport (default: quic)
+    #[arg(long, default_value = "quic", value_parser = ["wireguard", "quic"])]
+    pub transport: String,
+
+    /// QUIC congestion control (ignored for WireGuard)
+    #[arg(long, default_value = "bbr", value_parser = ["bbr", "cubic", "newreno"])]
+    pub quic_cc: String,
+
+    /// QUIC initial UDP payload in bytes, 1200..=1452 (ignored for WireGuard)
+    #[arg(long, default_value_t = 1200)]
+    pub quic_mtu: u16,
+}
+
+/// rx 的传输参数：默认 auto，跟随发送端的端点头。
+#[derive(Args, Debug)]
+pub struct RxTransportArgs {
+    /// Data-plane transport; auto follows the sender's endpoint header
+    #[arg(long, default_value = "auto", value_parser = ["auto", "wireguard", "quic"])]
     pub transport: String,
 
     /// QUIC congestion control (ignored for WireGuard)
@@ -81,7 +97,7 @@ pub struct TxArgs {
     pub wg_mtu: usize,
 
     #[command(flatten)]
-    pub transport_opts: TransportArgs,
+    pub transport_opts: TxTransportArgs,
 }
 
 /// `rx` 参数。
@@ -107,7 +123,7 @@ pub struct RxArgs {
     pub wg_mtu: usize,
 
     #[command(flatten)]
-    pub transport_opts: TransportArgs,
+    pub transport_opts: RxTransportArgs,
 }
 
 /// `trust` 参数。
@@ -119,4 +135,27 @@ pub struct TrustArgs {
     /// Known SPKI fingerprint (hex); verify before trusting
     #[arg(long)]
     pub fingerprint: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tx_transport_defaults_to_quic() {
+        let cli = Cli::try_parse_from(["hermod", "tx", "file.bin"]).unwrap();
+        match cli.cmd {
+            Command::Tx(args) => assert_eq!(args.transport_opts.transport, "quic"),
+            _ => panic!("expected tx"),
+        }
+    }
+
+    #[test]
+    fn rx_transport_defaults_to_auto() {
+        let cli = Cli::try_parse_from(["hermod", "rx", "1-a-b-c"]).unwrap();
+        match cli.cmd {
+            Command::Rx(args) => assert_eq!(args.transport_opts.transport, "auto"),
+            _ => panic!("expected rx"),
+        }
+    }
 }

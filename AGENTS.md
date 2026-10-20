@@ -25,8 +25,8 @@ Guidance for LLM agents working on this repository.
 
 `hermod-core` holds everything: crypto primitives (`crypto/`), the WebSocket
 signaling client with SPKI pinning (`signal/`), the `Transport` trait and its two
-sibling implementations (`transport/wireguard` — boringtun + smoltcp in-process
-TCP, the default; `transport/quic` — QUIC + TLS 1.3 + BBR, opt-in), shared
+sibling implementations (`transport/quic` — QUIC + TLS 1.3 + BBR, the default;
+`transport/wireguard` — boringtun + smoltcp in-process TCP, optional fallback), shared
 transport-internal HTTP/1.1 (`transport/http`), the session orchestration that
 turns a transfer code into an established transport (`session.rs`), and the tx/rx
 main flow (`orchestrate.rs`). `hermod-cli` is a thin clap shell over

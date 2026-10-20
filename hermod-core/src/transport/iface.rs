@@ -3,8 +3,8 @@
 //! 上层只依赖本模块的 [Transport] / [TransportConnection]；
 //! 换传输协议 = 换实现，不动上层。当前有两个并列实现：
 //!
-//! - [crate::transport::wireguard]：用户态 WireGuard + smoltcp TCP（默认）；
-//! - [crate::transport::quic]：QUIC + TLS 1.3 + BBR（可选）。
+//! - [crate::transport::quic]：QUIC + TLS 1.3 + BBR（默认）；
+//! - [crate::transport::wireguard]：用户态 WireGuard + smoltcp TCP（可选回退）。
 //!
 //! 两个实现互不依赖，只共享本模块的 trait 与 [TransportKind]。
 //!
@@ -30,13 +30,13 @@ impl<T> TransportStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
 /// 数据面传输协议选择。
 ///
-/// 默认仍是 WireGuard；QUIC 必须显式启用（CLI 的 `--transport quic`）。
+/// QUIC 是默认实现；WireGuard 仍可用 `--transport wireguard` 显式选择。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransportKind {
-    /// 用户态 WireGuard + 进程内 TCP（默认，行为保持不变）。
-    #[default]
+    /// 用户态 WireGuard + 进程内 TCP（可选回退）。
     WireGuard,
     /// QUIC（TLS 1.3 + 可插拔拥塞控制，默认 BBR）。
+    #[default]
     Quic,
 }
 
@@ -49,6 +49,23 @@ impl TransportKind {
         }
     }
 
+    /// 加密端点头里的线上编码（稳定值，不要随枚举顺序变化）。
+    pub fn to_wire(self) -> u8 {
+        match self {
+            TransportKind::WireGuard => 1,
+            TransportKind::Quic => 2,
+        }
+    }
+
+    /// 从端点头解析线上编码。
+    pub fn from_wire(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(TransportKind::WireGuard),
+            2 => Some(TransportKind::Quic),
+            _ => None,
+        }
+    }
+
     /// 解析字符串；非法输入返回 `None`。
     pub fn parse(s: &str) -> Option<Self> {
         match s {
@@ -57,6 +74,33 @@ impl TransportKind {
             _ => None,
         }
     }
+}
+
+/// 标记「对端主动取消」的 io::Error payload。
+///
+/// 传输实现把 QUIC 的 cancel close code / RST 映射成这个 marker；HTTP 层用
+/// [is_peer_cancelled] 识别，避免依赖错误字符串或平台相关的 ErrorKind。
+#[derive(Debug)]
+pub(crate) struct PeerCancelledMarker;
+
+impl std::fmt::Display for PeerCancelledMarker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("peer cancelled the transfer")
+    }
+}
+
+impl std::error::Error for PeerCancelledMarker {}
+
+/// 构造带取消 marker 的 io::Error。
+pub(crate) fn peer_cancelled_io() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::ConnectionReset, PeerCancelledMarker)
+}
+
+/// 判断一个 io::Error 是否由对端取消产生。
+pub(crate) fn is_peer_cancelled(error: &std::io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<PeerCancelledMarker>())
 }
 
 impl std::fmt::Display for TransportKind {
@@ -272,14 +316,19 @@ mod tests {
     }
 
     #[test]
-    fn default_transport_is_wireguard() {
-        assert_eq!(TransportKind::default(), TransportKind::WireGuard);
+    fn default_transport_is_quic() {
+        assert_eq!(TransportKind::default(), TransportKind::Quic);
         assert_eq!(TransportKind::parse("quic"), Some(TransportKind::Quic));
         assert_eq!(
             TransportKind::parse("wireguard"),
             Some(TransportKind::WireGuard)
         );
         assert_eq!(TransportKind::parse("nope"), None);
+        for kind in [TransportKind::WireGuard, TransportKind::Quic] {
+            assert_eq!(TransportKind::from_wire(kind.to_wire()), Some(kind));
+        }
+        assert_eq!(TransportKind::from_wire(0), None);
+        assert_eq!(TransportKind::from_wire(3), None);
     }
 
     #[test]

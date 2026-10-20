@@ -33,7 +33,7 @@ pub fn derive_wg_psk(k: &[u8; 32], channel_id: u16) -> [u8; 32] {
     okm
 }
 
-/// 派生隧道内 HTTP 的 URL token（16 字节）。
+/// 派生传输内 HTTP 的 URL token（16 字节）。
 ///
 /// `HKDF-SHA256(ikm=K, salt=channel_id_be16, info="hermod-http-token-v1")`。
 /// 两端各自从 K 派生、**从不过网**；每个会话的 K 都是新的，所以 token 天然一次性。

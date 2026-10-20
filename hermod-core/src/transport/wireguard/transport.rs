@@ -6,10 +6,10 @@
 //!    返回加密 bundle 的明文（由上层用 CPace 密钥 AEAD 加密后经会合层交换）；
 //! 2. [`WireGuardTransport::establish`]：解析对端 bundle、建会话、起驱动任务，
 //!    返回 [`WgConnection`]；
-//! 3. tx 调 `listen`、rx 调 `dial`，拿到的 `BridgeStream` 直接跑隧道内 HTTP。
+//! 3. tx 调 `listen`、rx 调 `dial`，拿到的 `BridgeStream` 直接跑 [crate::transport::http]。
 
 use crate::crypto::cpace::Role;
-use crate::transport::iface::{Transport, TransportConnection};
+use crate::transport::iface::{AbortHandle, Transport, TransportConnection};
 use crate::transport::wireguard::session::{BUNDLE_VERSION, EndpointBundle};
 use crate::transport::wireguard::stack::bridge::{BridgeEnds, BridgeStream, pump_socket};
 use crate::transport::wireguard::stack::driver::{OVERLAY_RX, OVERLAY_TX, TunnelStack};
@@ -46,6 +46,8 @@ pub enum WgError {
     Bundle(#[from] serde_json::Error),
     #[error("peer bundle version mismatch: got {got}, expected {expected}")]
     VersionMismatch { got: u8, expected: u8 },
+    #[error("peer credential fingerprint does not match this session token")]
+    CredentialMismatch,
     #[error("transport not prepared")]
     NotPrepared,
     #[error("driver closed")]
@@ -114,6 +116,10 @@ impl Transport for WireGuardTransport {
     type Error = WgError;
     type Connection = WgConnection;
 
+    fn set_credential_fingerprint(&mut self, fingerprint: [u8; 32]) {
+        self.fingerprint = fingerprint;
+    }
+
     async fn prepare(&mut self) -> Result<Vec<u8>, WgError> {
         let udp = match self.udp_bind {
             Some(addr) => udp::bind_at(addr).await?,
@@ -132,8 +138,8 @@ impl Transport for WireGuardTransport {
             candidates.insert(0, hint);
         }
 
-        // 凭证指纹由会话层填入 SHA-256(HTTP token)；这里先占位 0。
-        let fingerprint = [0u8; 32];
+        // 凭证指纹由会话层通过 set_credential_fingerprint 填入。
+        let fingerprint = self.fingerprint;
 
         crate::log_info!(
             udp_port,
@@ -170,6 +176,9 @@ impl Transport for WireGuardTransport {
                 got: peer.version,
                 expected: BUNDLE_VERSION,
             });
+        }
+        if peer.credential_fingerprint != self.fingerprint {
+            return Err(WgError::CredentialMismatch);
         }
         let udp = self.udp.take().ok_or(WgError::NotPrepared)?;
         let keypair = self.keypair.take().ok_or(WgError::NotPrepared)?;
@@ -241,17 +250,6 @@ enum Command {
     Abort,
 }
 
-/// 从外部中止一个已建立的连接（可 clone，供 Ctrl+C 处理器持有）。
-#[derive(Clone)]
-pub struct AbortHandle(mpsc::Sender<Command>);
-
-impl AbortHandle {
-    /// 请求驱动立即中止连接并给对端发 RST（尽力而为，不阻塞）。
-    pub fn abort(&self) {
-        let _ = self.0.try_send(Command::Abort);
-    }
-}
-
 /// 已建立的 WireGuard 连接（上层用它 listen/dial）。
 pub struct WgConnection {
     http_port: u16,
@@ -288,19 +286,16 @@ impl TransportConnection for WgConnection {
             .map_err(|_| WgError::Closed)?;
         rx.await.map_err(|_| WgError::Closed)?
     }
-}
 
-impl WgConnection {
-    /// 取得一个可 clone 的中止句柄（Ctrl+C 时让对端立刻收到 RST）。
-    pub fn abort_handle(&self) -> AbortHandle {
-        AbortHandle(self.cmd.clone())
+    fn abort_handle(&self) -> AbortHandle {
+        let cmd = self.cmd.clone();
+        AbortHandle::new(move || {
+            let _ = cmd.try_send(Command::Abort);
+        })
     }
 
-    /// 优雅关闭：等待驱动把缓冲里的数据全部送达对端后再返回。
-    ///
-    /// `orchestrate::*` 返回后应调用本方法，否则进程退出会 abort 驱动任务，
-    /// 导致 `POST /done` 的裁决或文件尾数据丢失。
-    pub async fn shutdown(&mut self) -> Result<(), WgError> {
+    async fn shutdown(&mut self) -> Result<(), WgError> {
+        // 等驱动把缓冲里的数据全部送达对端后再返回，避免丢掉 POST /done 的裁决。
         let (reply, rx) = oneshot::channel();
         self.cmd
             .send(Command::Shutdown { reply })
@@ -584,7 +579,11 @@ async fn driver_loop(
 
         // 定时器：握手重试 / 保活（boringtun 不暴露 update_timers）
         if !tunnel.session_ok() {
-            let retry = if is_sender { HANDSHAKE_RETRY } else { RX_FALLBACK };
+            let retry = if is_sender {
+                HANDSHAKE_RETRY
+            } else {
+                RX_FALLBACK
+            };
             if last_handshake.elapsed() >= retry {
                 crate::log_debug!("session not ready, retransmit handshake (role={role:?})");
                 let _ = tunnel.retransmit_handshake().await;
@@ -604,9 +603,10 @@ async fn driver_loop(
             }
         }
     }
-    crate::log_info!("transport driver exited (role={role:?}, inner_rx={inner_rx} inner_tx={inner_tx})");
+    crate::log_info!(
+        "transport driver exited (role={role:?}, inner_rx={inner_rx} inner_tx={inner_tx})"
+    );
 }
-
 
 /// 从内层 IPv4 包解析 TCP 关键字段（仅统计用）：
 /// `(seq, ack, 有载荷, 是 ACK, 载荷长度)`。
@@ -714,12 +714,23 @@ mod tests {
 
         // tx 监听；拿到的流是 BridgeStream（未握手前读会挂起，这不阻塞测试，
         // 因为 listen 立即返回空闲流）
-        let _stream = tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            a_conn.listen(),
-        )
-        .await
-        .expect("listen 应立即返回")
-        .unwrap();
+        let _stream = tokio::time::timeout(std::time::Duration::from_secs(1), a_conn.listen())
+            .await
+            .expect("listen 应立即返回")
+            .unwrap();
+    }
+
+    /// 会话层 token 指纹不一致时，establish 必须在建连前拒绝。
+    #[tokio::test]
+    async fn credential_mismatch_is_rejected() {
+        let mut a = WireGuardTransport::new();
+        let mut b = WireGuardTransport::new();
+        a.set_credential_fingerprint([0x01; 32]);
+        b.set_credential_fingerprint([0x02; 32]);
+        let _a_ep = a.prepare().await.unwrap();
+        let b_ep = b.prepare().await.unwrap();
+        let psk = crate::crypto::kdf::derive_wg_psk(&[0x5b; 32], 7);
+        let err = a.establish(Role::Sender, &psk, &b_ep).await.err();
+        assert!(matches!(err, Some(WgError::CredentialMismatch)));
     }
 }

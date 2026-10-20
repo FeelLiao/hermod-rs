@@ -1,12 +1,12 @@
-//! 隧道内 HTTP 客户端（rx）：一次 GET 拉文件 + `POST /done` 提交裁决。
+//! 传输内 HTTP 客户端（rx）：一次 GET 拉文件 + `POST /done` 提交裁决。
 //!
 //! 对应 DEVELOPMENT.md §3.4/§3.6：rx 拿一次性 token 发 `GET /f/<token>`，
 //! 边收边算 SHA-256，把 body 写入目标；随后 `POST /done` 提交
 //! `{"sha256":..., "size":N}`，由 tx 比对裁决。
 
 use crate::http_meta;
-use crate::transport::wireguard::http::{HttpError, ResponseHead, write_request};
 use crate::transfer::{self, Kind};
+use crate::transport::http::{HttpError, ResponseHead, write_request};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
@@ -25,7 +25,7 @@ pub struct FetchOutcome {
     pub verified: bool,
 }
 
-/// 用一次性 token 从隧道内 tx 拉取文件并提交裁决。
+/// 用一次性 token 从传输内的 tx 拉取文件并提交裁决。
 pub async fn fetch<S, D>(
     stream: S,
     token: &[u8; 16],
@@ -58,16 +58,17 @@ where
         .header(http_meta::CONTENT_DISPOSITION)
         .and_then(http_meta::parse_content_disposition)
         .ok_or_else(|| HttpError::Malformed("missing/invalid Content-Disposition".into()))?;
-    let size = head
-        .content_length()
-        .ok_or_else(|| HttpError::Malformed("missing Content-Length".into()))? as u64;
+    let size =
+        head.content_length()
+            .ok_or_else(|| HttpError::Malformed("missing Content-Length".into()))? as u64;
     crate::log_info!(status = head.status, size, filename = %name, "response headers");
 
     // 2) 边收边算 SHA-256，写入目标
     let mut hasher = Sha256::new();
     let mut received: u64 = 0;
     let mut remaining = size;
-    let mut buf = [0u8; 16 * 1024];
+    // 64 KiB：QUIC/TCP 下都减少 read/write 往返次数。
+    let mut buf = [0u8; 64 * 1024];
     let mut last_log = std::time::Instant::now();
     let mut last_bytes = 0u64;
     let mut write_time = std::time::Duration::ZERO;
@@ -76,7 +77,9 @@ where
         let want = (buf.len() as u64).min(remaining) as usize;
         let n = reader.read(&mut buf[..want]).await?;
         if n == 0 {
-            return Err(HttpError::Malformed("body shorter than Content-Length".into()));
+            return Err(HttpError::Malformed(
+                "body shorter than Content-Length".into(),
+            ));
         }
         hasher.update(&buf[..n]);
         let w = std::time::Instant::now();
@@ -128,6 +131,8 @@ where
         )));
     }
 
+    // 主动发送流结束；QUIC 会等到 tx 确认收到全部数据。
+    w.shutdown().await?;
     crate::log_info!(verified = verdict.status == 200, "verdict");
     Ok(FetchOutcome {
         kind,

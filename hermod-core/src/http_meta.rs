@@ -1,4 +1,4 @@
-//! 隧道内 HTTP 元数据约定（M1.4）。
+//! 传输内 HTTP 元数据约定（M1.4，WireGuard/QUIC 共用）。
 //!
 //! 对应 DEVELOPMENT.md §3.4（隧道内的 TCP 与 HTTP）：
 //! - 响应头 `X-Hermod-Kind: file|text|stream`

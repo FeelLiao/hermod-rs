@@ -5,27 +5,29 @@
 //! ```text
 //! 传输码 → 连 server（SPKI pinning）→ allocate/join → wait_ready
 //!   → CPace 得 K → derive_wg_psk(K, channel_id)
+//!   → 按 --transport 选择实现（默认 WireGuard / 可选 QUIC）
 //!   → prepare 传输（并入 server 观测地址 hint）
-//!   → AEAD 加密交换端点 bundle（blob3/blob4）
-//!   → establish 得到 WgConnection
+//!   → AEAD 加密交换端点字节（blob3/blob4），上层不解析
+//!   → establish 得到 AnyConnection
 //! ```
 //!
-//! tx 与 rx 只在「谁先发 bundle」上不同：
-//! - tx：发 blob3（自己的 bundle）→ 收 blob4（对端 bundle）；
+//! tx 与 rx 只在「谁先发端点」上不同：
+//! - tx：发 blob3（自己的端点）→ 收 blob4（对端端点）；
 //! - rx：收 blob3 → 发 blob4。
 //!
 //! 传输码里的 `channelID-` 前缀只用于信令路由；CPace 的 password 是去掉前缀后的
 //! 单词部分（与 Go 版一致）。
 
 use crate::config::{self, Config};
+use crate::crypto::aead::{self, AeadError};
 use crate::crypto::cpace::Role;
 use crate::crypto::kdf::{derive_http_token, derive_wg_psk};
-use sha2::{Digest, Sha256};
 use crate::crypto::wordlist;
 use crate::signal::client::{self, ObservedAddrs, WsStream};
-use crate::transport::iface::Transport;
-use crate::transport::wireguard::session::{self as bundle, EndpointBundle};
-use crate::transport::wireguard::transport::{WgConnection, WgError, WireGuardTransport};
+use crate::transport::iface::{Transport, TransportKind};
+use crate::transport::quic::transport::CongestionControl;
+use crate::transport::{AnyConnection, AnyTransport, TransportError};
+use sha2::{Digest, Sha256};
 
 /// 会话建立错误。
 #[derive(Debug, thiserror::Error)]
@@ -36,46 +38,60 @@ pub enum SessionError {
     Code(#[from] wordlist::WordlistError),
     #[error("signaling: {0}")]
     Signal(#[from] client::ClientError),
-    #[error("bundle: {0}")]
-    Bundle(#[from] bundle::BundleError),
-    #[error("bundle json: {0}")]
-    Json(#[from] serde_json::Error),
+    #[error("endpoint AEAD: {0}")]
+    Aead(#[from] AeadError),
     #[error("transport: {0}")]
-    Transport(#[from] WgError),
+    Transport(#[from] TransportError),
     #[error("server {url} 未被信任；先运行 `hermod trust {url}`")]
     Untrusted { url: String },
     #[error("配置里的 SPKI 指纹非法: {0}")]
     BadFingerprint(String),
-    #[error("对端 bundle 的凭证指纹与本会话 token 不一致")]
-    FingerprintMismatch,
 }
 
 fn sha256_32(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
 
-/// 会话建立的可选参数（对应 CLI 的 `--wg-mtu` / `--listen`）。
-#[derive(Debug, Clone, Default)]
+/// 会话建立的可选参数（对应 CLI 的 `--transport` / `--wg-mtu` / `--listen` 等）。
+#[derive(Debug, Clone)]
 pub struct SessionOptions {
-    /// 内层 IP MTU（默认 1420）。
+    /// WireGuard 内层 IP MTU（默认 1420；QUIC 忽略）。
     pub mtu: Option<usize>,
     /// UDP 绑定地址（默认 `[::]:0`）。
     pub udp_bind: Option<std::net::SocketAddrV6>,
+    /// 数据面传输协议；默认 WireGuard。
+    pub transport: TransportKind,
+    /// QUIC 拥塞控制；默认 BBR。
+    pub quic_congestion: CongestionControl,
+    /// QUIC 初始 UDP payload；默认 1200（PMTUD 可上调）。
+    pub quic_mtu: Option<u16>,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        Self {
+            mtu: None,
+            udp_bind: None,
+            transport: TransportKind::WireGuard,
+            quic_congestion: CongestionControl::Bbr,
+            quic_mtu: None,
+        }
+    }
 }
 
 /// tx 会话（已建立，`listen` 后发文件）。
 pub struct TxSession {
-    /// 已建立的 WireGuard 连接。
-    pub conn: WgConnection,
-    /// 隧道内 HTTP 的一次性 token（tx 用它拼 `GET /f/<token>`）。
+    /// 已建立的传输连接（WireGuard 或 QUIC）。
+    pub conn: AnyConnection,
+    /// 传输内 HTTP 的一次性 token（tx 用它拼 `GET /f/<token>`）。
     pub token: [u8; 16],
 }
 
 /// rx 会话（已建立，`dial` 后收文件）。
 pub struct RxSession {
-    /// 已建立的 WireGuard 连接。
-    pub conn: WgConnection,
-    /// 隧道内 HTTP 的一次性 token（rx 用同一个 token 拨号）。
+    /// 已建立的传输连接（WireGuard 或 QUIC）。
+    pub conn: AnyConnection,
+    /// 传输内 HTTP 的一次性 token（rx 用同一个 token 拨号）。
     pub token: [u8; 16],
 }
 
@@ -112,12 +128,12 @@ async fn open(config: &Config) -> Result<WsStream, SessionError> {
     Ok(ws)
 }
 
-/// tx：从传输码开始，建立到 rx 的 WireGuard 连接。
+/// tx：从传输码开始，建立到 rx 的传输连接。
 pub async fn sender_session(config: &Config, code: &str) -> Result<TxSession, SessionError> {
     sender_session_with(config, code, &SessionOptions::default()).await
 }
 
-/// tx：同 [`sender_session`]，可指定 MTU / UDP 绑定地址。
+/// tx：同 [`sender_session`]，可指定传输协议 / MTU / UDP 绑定地址。
 pub async fn sender_session_with(
     config: &Config,
     code: &str,
@@ -134,19 +150,26 @@ pub async fn sender_session_with(
         "PAKE handshake complete"
     );
     let token = derive_http_token(&k, channel_id);
-    let conn =
-        exchange_and_establish(&mut ws, channel_id, &k, &token, observed, Role::Sender, opts)
-            .await?;
+    let conn = exchange_and_establish(
+        &mut ws,
+        channel_id,
+        &k,
+        &token,
+        observed,
+        Role::Sender,
+        opts,
+    )
+    .await?;
     // ws 在此 drop → 关闭 WebSocket，释放 server 资源（对应 Go 的显式 Close）
     Ok(TxSession { conn, token })
 }
 
-/// rx：从传输码开始，建立到 tx 的 WireGuard 连接。
+/// rx：从传输码开始，建立到 tx 的传输连接。
 pub async fn receiver_session(config: &Config, code: &str) -> Result<RxSession, SessionError> {
     receiver_session_with(config, code, &SessionOptions::default()).await
 }
 
-/// rx：同 [`receiver_session`]，可指定 MTU / UDP 绑定地址。
+/// rx：同 [`receiver_session`]，可指定传输协议 / MTU / UDP 绑定地址。
 pub async fn receiver_session_with(
     config: &Config,
     code: &str,
@@ -162,13 +185,27 @@ pub async fn receiver_session_with(
         "PAKE handshake complete"
     );
     let token = derive_http_token(&k, channel_id);
-    let conn =
-        exchange_and_establish(&mut ws, channel_id, &k, &token, observed, Role::Receiver, opts)
-            .await?;
+    let conn = exchange_and_establish(
+        &mut ws,
+        channel_id,
+        &k,
+        &token,
+        observed,
+        Role::Receiver,
+        opts,
+    )
+    .await?;
     Ok(RxSession { conn, token })
 }
 
-/// 交换加密端点 bundle，并 establish 传输。
+/// 交换加密端点字节，并 establish 传输。
+///
+/// 关键点：session **不解析**端点内容。它只负责：
+/// 1. 把 SHA-256(token) 交给传输实现；
+/// 2. AES-256-GCM 加密/解密 `prepare()` 返回的 opaque 字节；
+/// 3. 把解密后的字节原样交给 `establish()`。
+///
+/// 端点格式、版本、凭证指纹校验都在各自的传输实现里完成。
 async fn exchange_and_establish(
     ws: &mut WsStream,
     channel_id: u16,
@@ -177,41 +214,43 @@ async fn exchange_and_establish(
     observed: ObservedAddrs,
     role: Role,
     opts: &SessionOptions,
-) -> Result<WgConnection, SessionError> {
+) -> Result<AnyConnection, SessionError> {
+    let fingerprint = sha256_32(token);
     let psk = derive_wg_psk(k, channel_id);
-    let mut transport = WireGuardTransport::new();
-    if let Some(mtu) = opts.mtu {
-        transport.set_mtu(mtu);
-    }
+
+    let mut transport = AnyTransport::new(opts.transport);
     transport.set_udp_bind(opts.udp_bind);
+    if let Some(mtu) = opts.mtu {
+        transport.set_wg_mtu(mtu);
+    }
+    transport.set_quic_congestion(opts.quic_congestion);
+    transport.set_quic_mtu(opts.quic_mtu);
     // server 观测地址作为 server-reflexive 提示（仅 IPv6 生效）
     transport.set_server_hint(observed.public_ipv6.parse().ok());
-    let my_bytes = transport.prepare().await?;
-    let mut my_bundle = EndpointBundle::decode(&my_bytes)?;
-    // 把凭证指纹填成 SHA-256(token)，对端可据此校验 token 一致
-    my_bundle.credential_fingerprint = sha256_32(token);
-    let my_blob = bundle::seal_bundle(k, channel_id, &my_bundle)?;
+    transport.set_credential_fingerprint(fingerprint);
 
-    // tx 先发（blob3）再收（blob4）；rx 先收再发。顺序与 Go 版一致。
-    let peer_bundle = match role {
+    let my_endpoint = transport.prepare().await?;
+    let my_blob = aead::seal(k, &channel_id.to_be_bytes(), &my_endpoint)?;
+
+    // tx 先发（blob3）再收（blob4）；rx 先收再发。顺序与旧版一致。
+    let peer_blob = match role {
         Role::Sender => {
             client::send_blob(ws, channel_id, &my_blob).await?;
-            let peer_blob = client::recv_blob(ws).await?;
-            bundle::open_bundle(k, channel_id, &peer_blob)?
+            client::recv_blob(ws).await?
         }
         Role::Receiver => {
             let peer_blob = client::recv_blob(ws).await?;
             client::send_blob(ws, channel_id, &my_blob).await?;
-            bundle::open_bundle(k, channel_id, &peer_blob)?
+            peer_blob
         }
     };
+    let peer_endpoint = aead::open(k, &channel_id.to_be_bytes(), &peer_blob)?;
 
-    if peer_bundle.credential_fingerprint != sha256_32(token) {
-        return Err(SessionError::FingerprintMismatch);
-    }
-    crate::log_info!("endpoint bundle exchanged, establishing WireGuard");
-    let peer_bytes = peer_bundle.encode()?;
-    Ok(transport.establish(role, &psk, &peer_bytes).await?)
+    crate::log_info!(
+        transport = %opts.transport,
+        "endpoint exchanged, establishing transport"
+    );
+    Ok(transport.establish(role, &psk, &peer_endpoint).await?)
 }
 
 #[cfg(test)]
@@ -228,6 +267,14 @@ mod tests {
             trusted_servers: trusted,
             ..Config::default()
         }
+    }
+
+    /// 默认传输仍是 WireGuard（QUIC 必须显式开启）。
+    #[test]
+    fn default_transport_is_wireguard() {
+        let opts = SessionOptions::default();
+        assert_eq!(opts.transport, TransportKind::WireGuard);
+        assert_eq!(opts.quic_congestion, CongestionControl::Bbr);
     }
 
     /// 已信任的 server → 读出规范化 URL + 指纹。
@@ -270,5 +317,17 @@ mod tests {
         };
         let (url, _) = expected_spki(&cfg).unwrap();
         assert_eq!(url, "wss://relay.example.com:4376");
+    }
+
+    /// 传输协议选择：CLI 字符串 → 枚举。
+    #[test]
+    fn transport_kind_roundtrip() {
+        for (s, kind) in [
+            ("wireguard", TransportKind::WireGuard),
+            ("quic", TransportKind::Quic),
+        ] {
+            assert_eq!(TransportKind::parse(s), Some(kind));
+            assert_eq!(kind.as_str(), s);
+        }
     }
 }

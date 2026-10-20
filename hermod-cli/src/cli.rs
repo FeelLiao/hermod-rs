@@ -1,11 +1,16 @@
 //! 命令行参数（clap derive）。与 Go 版对齐，差异只允许附录 E：
-//! 删除 `--verify/-v`（D12）、新增 `--wg-mtu`。
+//! 删除 `--verify/-v`（D12）、新增 `--wg-mtu`、`--transport`、
+//! `--quic-cc` 与 `--quic-mtu`。
 
 use clap::{Args, Parser, Subcommand};
 
-/// Hermod：CPace + WireGuard 的点对点文件传输。
+/// Hermod：CPace + WireGuard/QUIC 的点对点文件传输。
 #[derive(Parser, Debug)]
-#[command(name = "hermod", version, about = "Hermod - CPace + WireGuard file transfer")]
+#[command(
+    name = "hermod",
+    version,
+    about = "Hermod - CPace + WireGuard/QUIC file transfer"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub cmd: Command,
@@ -37,6 +42,22 @@ pub enum Command {
     Serve,
 }
 
+/// 传输协议相关参数（tx/rx 共用）。
+#[derive(Args, Debug)]
+pub struct TransportArgs {
+    /// Data-plane transport: wireguard (default) or quic
+    #[arg(long, default_value = "wireguard", value_parser = ["wireguard", "quic"])]
+    pub transport: String,
+
+    /// QUIC congestion control (ignored for WireGuard)
+    #[arg(long, default_value = "bbr", value_parser = ["bbr", "cubic", "newreno"])]
+    pub quic_cc: String,
+
+    /// QUIC initial UDP payload in bytes, 1200..=1452 (ignored for WireGuard)
+    #[arg(long, default_value_t = 1200)]
+    pub quic_mtu: u16,
+}
+
 /// `tx` 参数。
 #[derive(Args, Debug)]
 pub struct TxArgs {
@@ -55,9 +76,12 @@ pub struct TxArgs {
     #[arg(short, long, default_value = "[::]:0")]
     pub listen: String,
 
-    /// Inner IP MTU
+    /// WireGuard inner IP MTU (ignored for QUIC)
     #[arg(long, default_value_t = 1400)]
     pub wg_mtu: usize,
+
+    #[command(flatten)]
+    pub transport_opts: TransportArgs,
 }
 
 /// `rx` 参数。
@@ -78,9 +102,12 @@ pub struct RxArgs {
     #[arg(short, long, default_value = "[::]:0")]
     pub listen: String,
 
-    /// Inner IP MTU
+    /// WireGuard inner IP MTU (ignored for QUIC)
     #[arg(long, default_value_t = 1400)]
     pub wg_mtu: usize,
+
+    #[command(flatten)]
+    pub transport_opts: TransportArgs,
 }
 
 /// `trust` 参数。

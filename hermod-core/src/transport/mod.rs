@@ -1,31 +1,221 @@
 //! 传输层（data plane）：抽象「一条已认证的双向字节流」，与具体传输协议解耦。
 //!
-//! ## 为什么要抽象
+//! 当前有两个**并列、互不依赖**的实现：
 //!
-//! 会合层（[`crate::signal`]）拿到共享密钥 K 之后，双方需要一条能跑载荷协议
-//! （隧道内 HTTP）的连接。这条连接**当前**由用户态 WireGuard + 进程内 TCP 提供，
-//! 但上层（载荷协议 + [`crate::transfer`] 语义）不应该绑定 WireGuard。
+//! - [wireguard]：用户态 WireGuard + smoltcp 进程内 TCP（默认，行为不变）；
+//! - [quic]：QUIC + TLS 1.3 + BBR（通过 `--transport quic` 显式启用）。
 //!
-//! 因此传输层对外只暴露一个接口（[`iface::Transport`]）：
-//! - 将来要换传输协议（例如换成 QUIC、或加 TCP 中继），
-//!   **实现同一个接口即可直接替换**，上层代码不感知；
-//! - 具体实现放在子模块里，当前是 [`wireguard`]。
+//! 上层（[crate::session] / [crate::orchestrate]）只依赖 [iface::Transport] /
+//! [iface::TransportConnection]；[AnyTransport] / [AnyConnection] 只是运行时分发，
+//! QUIC 模块本身不引用 WireGuard 的任何类型。
 //!
 //! ## 目录
 //!
 //! ```text
 //! transport/
-//! ├── iface.rs      # 接口（Transport trait）—— 上层只依赖它
-//! └── wireguard/    # 当前实现：用户态 WireGuard + smoltcp TCP + 隧道内 HTTP
-//!     ├── wg/       #   X25519 密钥、boringtun 隧道封装
-//!     ├── stack/    #   smoltcp 设备桥接
-//!     ├── http/     #   隧道内 HTTP/1.1
-//!     ├── udp.rs    #   外层 UDP socket
-//!     ├── addr.rs   #   本机 IPv6 枚举
-//!     └── session.rs#   会话编排（bundle → WG → HTTP）
+//! ├── iface.rs      # trait + TransportKind + AbortHandle
+//! ├── mod.rs        # AnyTransport / AnyConnection 运行时分发
+//! ├── wireguard/    # 默认实现：WireGuard + smoltcp TCP
+//! ├── http/         # 共享的传输内 HTTP/1.1
+//! └── quic/         # 可选实现：QUIC endpoint / TLS 钉扎 / BBR
 //! ```
 
+pub mod http;
 pub mod iface;
+pub mod quic;
 pub mod wireguard;
 
-pub use iface::{Transport, TransportConnection};
+pub use iface::{AbortHandle, Transport, TransportConnection, TransportKind, TransportStream};
+pub use quic::transport::{CongestionControl, QuicConnection, QuicError, QuicTransport};
+pub use wireguard::transport::{WgConnection, WgError, WireGuardTransport};
+
+use crate::crypto::cpace::Role;
+use std::net::{Ipv6Addr, SocketAddrV6};
+use tokio::io::{AsyncRead, AsyncWrite};
+
+/// 两个传输实现统一的错误类型。
+#[derive(Debug, thiserror::Error)]
+pub enum TransportError {
+    #[error("wireguard: {0}")]
+    WireGuard(#[from] WgError),
+    #[error("quic: {0}")]
+    Quic(#[from] QuicError),
+}
+
+/// 运行时分发：按 [TransportKind] 构造对应实现。
+pub enum AnyTransport {
+    /// 用户态 WireGuard + smoltcp TCP。
+    WireGuard(WireGuardTransport),
+    /// QUIC。
+    Quic(QuicTransport),
+}
+
+impl AnyTransport {
+    /// 按 CLI/配置选择构造；默认是 WireGuard。
+    pub fn new(kind: TransportKind) -> Self {
+        match kind {
+            TransportKind::WireGuard => AnyTransport::WireGuard(WireGuardTransport::new()),
+            TransportKind::Quic => AnyTransport::Quic(QuicTransport::new()),
+        }
+    }
+
+    /// 当前选择的协议（日志用）。
+    pub fn kind(&self) -> TransportKind {
+        match self {
+            AnyTransport::WireGuard(_) => TransportKind::WireGuard,
+            AnyTransport::Quic(_) => TransportKind::Quic,
+        }
+    }
+
+    /// UDP 绑定地址（`--listen`）。
+    pub fn set_udp_bind(&mut self, addr: Option<SocketAddrV6>) {
+        match self {
+            AnyTransport::WireGuard(t) => t.set_udp_bind(addr),
+            AnyTransport::Quic(t) => t.set_udp_bind(addr),
+        }
+    }
+
+    /// 信令服务器观测到的本端出口 IPv6（server-reflexive 提示）。
+    pub fn set_server_hint(&mut self, hint: Option<Ipv6Addr>) {
+        match self {
+            AnyTransport::WireGuard(t) => t.set_server_hint(hint),
+            AnyTransport::Quic(t) => t.set_server_hint(hint),
+        }
+    }
+
+    /// WireGuard 内层 IP MTU（QUIC 忽略）。
+    pub fn set_wg_mtu(&mut self, mtu: usize) {
+        if let AnyTransport::WireGuard(t) = self {
+            t.set_mtu(mtu);
+        }
+    }
+
+    /// QUIC 拥塞控制（WireGuard 忽略）。
+    pub fn set_quic_congestion(&mut self, congestion: CongestionControl) {
+        if let AnyTransport::Quic(t) = self {
+            t.set_congestion(congestion);
+        }
+    }
+
+    /// QUIC 初始 UDP payload（WireGuard 忽略）。
+    pub fn set_quic_mtu(&mut self, mtu: Option<u16>) {
+        if let AnyTransport::Quic(t) = self
+            && let Some(mtu) = mtu
+        {
+            t.set_initial_mtu(mtu);
+        }
+    }
+}
+
+impl Transport for AnyTransport {
+    type Error = TransportError;
+    type Connection = AnyConnection;
+
+    fn set_credential_fingerprint(&mut self, fingerprint: [u8; 32]) {
+        match self {
+            AnyTransport::WireGuard(t) => t.set_credential_fingerprint(fingerprint),
+            AnyTransport::Quic(t) => t.set_credential_fingerprint(fingerprint),
+        }
+    }
+
+    async fn prepare(&mut self) -> Result<Vec<u8>, TransportError> {
+        match self {
+            AnyTransport::WireGuard(t) => t.prepare().await.map_err(TransportError::WireGuard),
+            AnyTransport::Quic(t) => t.prepare().await.map_err(TransportError::Quic),
+        }
+    }
+
+    async fn establish(
+        &mut self,
+        role: Role,
+        psk: &[u8; 32],
+        peer_endpoint: &[u8],
+    ) -> Result<AnyConnection, TransportError> {
+        match self {
+            AnyTransport::WireGuard(t) => t
+                .establish(role, psk, peer_endpoint)
+                .await
+                .map(AnyConnection::WireGuard)
+                .map_err(TransportError::WireGuard),
+            AnyTransport::Quic(t) => t
+                .establish(role, psk, peer_endpoint)
+                .await
+                .map(AnyConnection::Quic)
+                .map_err(TransportError::Quic),
+        }
+    }
+}
+
+/// 统一的连接类型；把两个实现的流装箱成同一个 `AsyncRead + AsyncWrite`。
+pub enum AnyConnection {
+    /// WireGuard 连接。
+    WireGuard(WgConnection),
+    /// QUIC 连接。
+    Quic(QuicConnection),
+}
+
+fn box_stream<S>(stream: S) -> Box<dyn TransportStream>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    Box::new(stream)
+}
+
+impl TransportConnection for AnyConnection {
+    type Error = TransportError;
+    type Stream = Box<dyn TransportStream>;
+
+    fn http_port(&self) -> u16 {
+        match self {
+            AnyConnection::WireGuard(c) => c.http_port(),
+            AnyConnection::Quic(c) => c.http_port(),
+        }
+    }
+
+    fn peer_http_port(&self) -> u16 {
+        match self {
+            AnyConnection::WireGuard(c) => c.peer_http_port(),
+            AnyConnection::Quic(c) => c.peer_http_port(),
+        }
+    }
+
+    async fn listen(&mut self) -> Result<Self::Stream, TransportError> {
+        match self {
+            AnyConnection::WireGuard(c) => c
+                .listen()
+                .await
+                .map(box_stream)
+                .map_err(TransportError::WireGuard),
+            AnyConnection::Quic(c) => c
+                .listen()
+                .await
+                .map(box_stream)
+                .map_err(TransportError::Quic),
+        }
+    }
+
+    async fn dial(&mut self) -> Result<Self::Stream, TransportError> {
+        match self {
+            AnyConnection::WireGuard(c) => c
+                .dial()
+                .await
+                .map(box_stream)
+                .map_err(TransportError::WireGuard),
+            AnyConnection::Quic(c) => c.dial().await.map(box_stream).map_err(TransportError::Quic),
+        }
+    }
+
+    fn abort_handle(&self) -> AbortHandle {
+        match self {
+            AnyConnection::WireGuard(c) => c.abort_handle(),
+            AnyConnection::Quic(c) => c.abort_handle(),
+        }
+    }
+
+    async fn shutdown(&mut self) -> Result<(), TransportError> {
+        match self {
+            AnyConnection::WireGuard(c) => c.shutdown().await.map_err(TransportError::WireGuard),
+            AnyConnection::Quic(c) => c.shutdown().await.map_err(TransportError::Quic),
+        }
+    }
+}

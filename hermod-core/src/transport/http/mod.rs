@@ -1,4 +1,4 @@
-//! 隧道内 HTTP/1.1（M4.3）：极简请求/响应编解码。
+//! 传输内 HTTP/1.1（M4.3）：极简请求/响应编解码，WireGuard/QUIC 共用。
 //!
 //! 对应 DEVELOPMENT.md §3.4/§3.6（D11）：tx 起 HTTP server，rx 用一次
 //! `GET /f/<token>` 拉文件，再 `POST /done` 回裁决。这里手写极简解析
@@ -36,9 +36,7 @@ async fn read_line_bounded<R: AsyncBufRead + Unpin>(
     if *total > MAX_HEADER_BYTES {
         return Err(invalid("header too large"));
     }
-    Ok(Some(
-        line.trim_end_matches(['\r', '\n']).to_string(),
-    ))
+    Ok(Some(line.trim_end_matches(['\r', '\n']).to_string()))
 }
 
 /// 解析出的 HTTP 请求头（body 由调用方按 `Content-Length` 读）。
@@ -294,7 +292,10 @@ mod tests {
         let mut reader = BufReader::new(rx);
         let head = ResponseHead::read(&mut reader).await.unwrap();
         assert_eq!(head.status, 200);
-        assert_eq!(head.header("content-type"), Some("application/octet-stream"));
+        assert_eq!(
+            head.header("content-type"),
+            Some("application/octet-stream")
+        );
         assert_eq!(head.content_length(), Some(5));
         let mut body = Vec::new();
         reader.read_to_end(&mut body).await.unwrap();

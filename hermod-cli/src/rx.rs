@@ -2,9 +2,11 @@
 
 use crate::cli::RxArgs;
 use crate::{progress, util, verbosity};
+use hermod_core::TransportConnection;
 use hermod_core::config;
 use hermod_core::orchestrate;
 use hermod_core::session::{self, SessionOptions};
+use hermod_core::transport::{CongestionControl, TransportKind};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,6 +30,9 @@ pub async fn run(
     let opts = SessionOptions {
         mtu: Some(args.wg_mtu),
         udp_bind: Some(util::parse_listen(&args.listen)?),
+        transport: TransportKind::parse(&args.transport_opts.transport).unwrap_or_default(),
+        quic_congestion: CongestionControl::parse(&args.transport_opts.quic_cc).unwrap_or_default(),
+        quic_mtu: Some(args.transport_opts.quic_mtu),
     };
     let mut rx = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
@@ -75,7 +80,7 @@ pub async fn run(
                 "{msg} (received {} bytes)",
                 received.load(Ordering::Relaxed)
             )
-            .into())
+            .into());
         }
     };
     pb.finish_and_clear();
@@ -84,7 +89,10 @@ pub async fn run(
 
     // 对齐 Go：状态打到 stderr（--quiet 抑制）；sha256 放在 info 日志。
     verbosity::status(format!("Saved to {}", receipt.path.display()));
-    verbosity::info(format!("sha256: {}, bytes: {}", receipt.sha256, receipt.size));
+    verbosity::info(format!(
+        "sha256: {}, bytes: {}",
+        receipt.sha256, receipt.size
+    ));
     verbosity::status("Transfer complete.");
     Ok(())
 }

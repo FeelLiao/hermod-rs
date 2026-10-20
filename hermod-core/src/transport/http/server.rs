@@ -1,15 +1,13 @@
-//! 隧道内 HTTP 服务端（tx）：`GET /f/<token>` 发文件、`POST /done` 裁决。
+//! 传输内 HTTP 服务端（tx）：`GET /f/<token>` 发文件、`POST /done` 裁决。
 //!
 //! 对应 DEVELOPMENT.md §3.4/§3.6：tx 起 HTTP server，rx 一次 GET 拉完文件，
 //! 再 POST /done 提交自己的 SHA-256；tx 比对后才允许改名。
 //!
-//! 一条 TCP 连接、keep-alive：GET 与 POST 复用同一条连接。
+//! 一条传输流、keep-alive：GET 与 POST 复用同一条流。
 
 use crate::http_meta;
-use crate::transport::wireguard::http::{
-    HttpError, Request, write_response, write_response_head,
-};
 use crate::transfer::{self, Kind};
+use crate::transport::http::{HttpError, Request, write_response, write_response_head};
 use sha2::{Digest, Sha256};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -78,12 +76,15 @@ where
                 let mut hasher = Sha256::new();
                 let mut sent: u64 = 0;
                 let mut remaining = opts.size;
-                let mut buf = [0u8; 16 * 1024];
+                // 64 KiB：QUIC/TCP 下都减少 read/write 往返次数。
+                let mut buf = [0u8; 64 * 1024];
                 while remaining > 0 {
                     let want = (buf.len() as u64).min(remaining) as usize;
                     let n = body.read(&mut buf[..want]).await?;
                     if n == 0 {
-                        return Err(HttpError::Malformed("body shorter than Content-Length".into()));
+                        return Err(HttpError::Malformed(
+                            "body shorter than Content-Length".into(),
+                        ));
                     }
                     hasher.update(&buf[..n]);
                     w.write_all(&buf[..n]).await?;
@@ -97,9 +98,9 @@ where
                 computed_sha = transfer::hex(&hasher.finalize()[..]);
             }
             ("POST", "/done") => {
-                let n = req
-                    .content_length()
-                    .ok_or_else(|| HttpError::Malformed("POST /done missing content-length".into()))?;
+                let n = req.content_length().ok_or_else(|| {
+                    HttpError::Malformed("POST /done missing content-length".into())
+                })?;
                 let mut body = vec![0u8; n];
                 reader.read_exact(&mut body).await?;
                 let meta = transfer::decode_metadata(&body)
@@ -118,6 +119,8 @@ where
                     (409, "Conflict")
                 };
                 write_response(&mut w, status, reason, &[], b"").await?;
+                // 让传输层把最后的状态码真正送出去；QUIC 会等到对端 ACK 流数据。
+                w.shutdown().await?;
                 return Ok(ServeOutcome {
                     verified,
                     sha256: computed_sha,
@@ -133,7 +136,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::wireguard::http::client::fetch;
+    use crate::transport::http::client::fetch;
 
     /// 服务端 + 客户端（duplex）：GET 拉文件 + POST /done 裁决通过。
     #[tokio::test]
@@ -161,14 +164,9 @@ mod tests {
 
         let mut dest = Vec::new();
         let mut got: u64 = 0;
-        let out = fetch(
-            client_io,
-            &token,
-            &mut dest,
-            Some(&mut |n| got = n),
-        )
-        .await
-        .unwrap();
+        let out = fetch(client_io, &token, &mut dest, Some(&mut |n| got = n))
+            .await
+            .unwrap();
         assert_eq!(dest, data);
         assert_eq!(out.kind, Kind::File);
         assert_eq!(out.name, "greeting.txt");
@@ -179,7 +177,10 @@ mod tests {
         let outcome = server.await.unwrap().unwrap();
         assert!(outcome.verified);
         assert_eq!(outcome.sha256, sha, "tx 边发边算的摘要应与期望一致");
-        assert_eq!(sent.load(std::sync::atomic::Ordering::SeqCst), data.len() as u64);
+        assert_eq!(
+            sent.load(std::sync::atomic::Ordering::SeqCst),
+            data.len() as u64
+        );
         assert_eq!(got, data.len() as u64);
     }
 
@@ -198,7 +199,9 @@ mod tests {
         let (client_io, server_io) = tokio::io::duplex(4096);
         let _server = tokio::spawn(serve(server_io, opts));
         let mut dest = Vec::new();
-        let err = fetch(client_io, &[2u8; 16], &mut dest, None).await.unwrap_err();
+        let err = fetch(client_io, &[2u8; 16], &mut dest, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, HttpError::Malformed(_)));
     }
 }

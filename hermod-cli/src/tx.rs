@@ -2,12 +2,14 @@
 
 use crate::cli::TxArgs;
 use crate::{progress, util, verbosity};
+use hermod_core::TransportConnection;
 use hermod_core::config;
 use hermod_core::crypto::wordlist;
 use hermod_core::orchestrate;
 use hermod_core::session::{self, SessionOptions};
 use hermod_core::transfer::{self, Kind};
-use hermod_core::transport::wireguard::http::server::ServeOptions;
+use hermod_core::transport::http::server::ServeOptions;
+use hermod_core::transport::{CongestionControl, TransportKind};
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
@@ -42,6 +44,9 @@ pub async fn run(
     let opts = SessionOptions {
         mtu: Some(args.wg_mtu),
         udp_bind: Some(util::parse_listen(&args.listen)?),
+        transport: TransportKind::parse(&args.transport_opts.transport).unwrap_or_default(),
+        quic_congestion: CongestionControl::parse(&args.transport_opts.quic_cc).unwrap_or_default(),
+        quic_mtu: Some(args.transport_opts.quic_mtu),
     };
     let mut tx = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
@@ -98,7 +103,9 @@ pub async fn run(
         }
         Kind::Stream => {
             let mut data = Vec::new();
-            std::io::stdin().read_to_end(&mut data).map_err(util::boxed)?;
+            std::io::stdin()
+                .read_to_end(&mut data)
+                .map_err(util::boxed)?;
             let size = data.len() as u64;
             let pb = progress::bar(size, quiet);
             let (tick_tx, tick_rx) = mpsc::channel(1);
@@ -159,7 +166,8 @@ where
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(Box::new(e)),
         Err(msg) => Err(format!(
-            "{msg} ({} bytes written; for large files, check the peer; try --wg-mtu 1200 to rule out path MTU)",
+            "{msg} ({} bytes written; for large files, check the peer; \
+             try --transport wireguard --wg-mtu 1200 or --transport quic --quic-mtu 1200 to rule out path MTU)",
             sent.load(Ordering::Relaxed)
         )
         .into()),

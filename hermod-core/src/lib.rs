@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! 会合（signal）→ 密钥协商（crypto::cpace）→ 加密交换端点清单（transport bundle）
-//!   → 建立传输（transport::wireguard）→ 隧道内 HTTP（transport::wireguard::http）
+//!   → 建立传输（transport::wireguard 或 transport::quic）→ 传输内 HTTP（transport::http）
 //!   → 传输编排（orchestrate）：tx 发文件 / rx 收文件并裁决
 //! ```
 //!
@@ -19,20 +19,21 @@
 //!   的 TLS 客户端、`allocate`/`join`/`wait_ready`/`send_blob`/`recv_blob`
 //!   以及两端的 CPace 握手编排。
 //! - [`transport`]：传输层。先看 [`transport::iface`] 的 [`Transport`]/
-//!   [`TransportConnection`] 契约（上层只依赖它）；具体实现见
-//!   [`transport::wireguard`]（用户态 WireGuard + smoltcp 进程内 TCP + 隧道内
-//!   HTTP，零特权）。换传输协议时只改实现，不动上层。
+//!   [`TransportConnection`] 契约（上层只依赖它）；两个并列实现：
+//!   [`transport::wireguard`]（默认，用户态 WireGuard + smoltcp 进程内 TCP）与
+//!   [`transport::quic`]（可选，QUIC + TLS 1.3 + BBR）。两者互不依赖；
+//!   [`transport::http`] 是共享的传输内 HTTP/1.1。
 //! - [`session`]：会话编排——从**传输码**到已建立的传输连接：
 //!   [`session::sender_session`]（tx）/ [`session::receiver_session`]（rx）。
 //!   它把「信令 → CPace → bundle 加密交换 → 传输 establish」串成一跳，并返回
-//!   隧道内 HTTP 的一次性 `token`（两端从 K 派生，见
+//!   传输内 HTTP 的一次性 `token`（两端从 K 派生，见
 //!   [`crypto::kdf::derive_http_token`]）。
 //! - [`transfer`]：载荷元数据（`Kind`/文件名/大小/SHA-256）、输入分类、
 //!   目标路径安全校验、临时文件路径。
 //! - [`config`]：与 Go 版兼容的配置 schema（YAML 键、默认值、Server URL 规范化）。
-//! - [`http_meta`]：隧道内 HTTP 的头部约定（`X-Hermod-Kind`、`Content-Disposition`、
+//! - [`http_meta`]：传输内 HTTP 的头部约定（`X-Hermod-Kind`、`Content-Disposition`、
 //!   帧格式、一次性 URL token）与抗畸形输入校验。
-//! - [`orchestrate`]：传输编排——把传输连接与隧道内 HTTP 组合成完整的
+//! - [`orchestrate`]：传输编排——把传输连接与传输内 HTTP 组合成完整的
 //!   tx/rx 主流程：
 //!   - [`orchestrate::send_file`] / [`orchestrate::send_text`]：tx 发文件/文本
 //!     （均带可选进度回调）；
@@ -77,8 +78,11 @@ pub mod signal;
 pub mod transfer;
 pub mod transport;
 
-/// 传输层接口契约（便捷再导出）。
+/// 传输层接口与运行时分发（便捷再导出）。
 ///
-/// 上层通常只依赖这两个 trait；具体实现见 [`transport::wireguard`]。
-pub use transport::iface::{Transport, TransportConnection};
-pub use transport::wireguard::transport::AbortHandle;
+/// 上层通常只依赖 [`Transport`] / [`TransportConnection`]；终端用户通过
+/// [`TransportKind`] 选择 [`AnyTransport`]（默认 WireGuard，可选 QUIC）。
+pub use transport::{
+    AbortHandle, AnyConnection, AnyTransport, CongestionControl, Transport, TransportConnection,
+    TransportError, TransportKind,
+};

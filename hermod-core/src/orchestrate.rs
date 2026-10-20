@@ -1,4 +1,4 @@
-//! 传输编排（M4.4）：把「传输连接」与「隧道内 HTTP」组合成 tx / rx 两个动作。
+//! 传输编排（M4.4）：把「传输连接」与「传输内 HTTP」组合成 tx / rx 两个动作。
 //!
 //! - tx：[`serve_file`] 先 `listen`，再用 HTTP server 发文件并收裁决；
 //! - rx：[`fetch_file`] 先 `dial`，再用 HTTP client 拉文件并提交 SHA-256。
@@ -6,18 +6,17 @@
 //! 上层（CLI / GUI）只需提供 `ServeOptions` 与目标写入端，不关心底层是
 //! WireGuard 还是其它传输。
 
+use crate::transport::http::HttpError;
+use crate::transport::http::client::{FetchOutcome, fetch};
+use crate::transport::http::server::{ServeOptions, ServeOutcome, serve};
 use crate::transport::iface::TransportConnection;
-use crate::transport::wireguard::http::HttpError;
-use crate::transport::wireguard::http::client::{FetchOutcome, fetch};
-use crate::transport::wireguard::http::server::{ServeOptions, ServeOutcome, serve};
-use crate::transport::wireguard::transport::{WgConnection, WgError};
 use tokio::io::AsyncWrite;
 
 /// 编排错误：传输层或 HTTP 层。
 #[derive(Debug, thiserror::Error)]
 pub enum OrchestrateError {
     #[error("transport: {0}")]
-    Transport(#[from] WgError),
+    Transport(String),
     #[error("http: {0}")]
     Http(#[from] HttpError),
     #[error("io: {0}")]
@@ -64,33 +63,49 @@ pub struct Receipt {
     pub kind: crate::transfer::Kind,
 }
 
-/// tx：在隧道内监听，服务一次 `GET /f/<token>` + `POST /done`。
-pub async fn serve_file(
-    conn: &mut WgConnection,
+/// tx：在传输内监听，服务一次 `GET /f/<token>` + `POST /done`。
+pub async fn serve_file<C>(
+    conn: &mut C,
     opts: ServeOptions,
-) -> Result<ServeOutcome, OrchestrateError> {
-    let stream = conn.listen().await?;
+) -> Result<ServeOutcome, OrchestrateError>
+where
+    C: TransportConnection,
+{
+    let stream = conn
+        .listen()
+        .await
+        .map_err(|e| OrchestrateError::Transport(e.to_string()))?;
     serve(stream, opts).await.map_err(map_http)
 }
 
-/// rx：向隧道内 tx 拨号，拉文件到 `dest` 并提交裁决。
-pub async fn fetch_file<D: AsyncWrite + Unpin>(
-    conn: &mut WgConnection,
+/// rx：向传输内 tx 拨号，拉文件到 `dest` 并提交裁决。
+pub async fn fetch_file<C, D>(
+    conn: &mut C,
     token: &[u8; 16],
     dest: &mut D,
     progress: Option<&mut dyn FnMut(u64)>,
-) -> Result<FetchOutcome, OrchestrateError> {
-    let stream = conn.dial().await?;
+) -> Result<FetchOutcome, OrchestrateError>
+where
+    C: TransportConnection,
+    D: AsyncWrite + Unpin,
+{
+    let stream = conn
+        .dial()
+        .await
+        .map_err(|e| OrchestrateError::Transport(e.to_string()))?;
     fetch(stream, token, dest, progress).await.map_err(map_http)
 }
 
-/// tx：把本地文件经隧道发给 rx（边发边算 SHA-256）。
-pub async fn send_file(
-    conn: &mut WgConnection,
+/// tx：把本地文件经传输发给 rx（边发边算 SHA-256）。
+pub async fn send_file<C>(
+    conn: &mut C,
     token: [u8; 16],
     path: &std::path::Path,
     progress: Option<Box<dyn FnMut(u64) + Send>>,
-) -> Result<ServeOutcome, OrchestrateError> {
+) -> Result<ServeOutcome, OrchestrateError>
+where
+    C: TransportConnection,
+{
     let file = tokio::fs::File::open(path).await?;
     let size = file.metadata().await?.len();
     let name = path
@@ -110,13 +125,16 @@ pub async fn send_file(
     serve_file(conn, opts).await
 }
 
-/// tx：把一段文本经隧道发给 rx（`Kind::Text`）。
-pub async fn send_text(
-    conn: &mut WgConnection,
+/// tx：把一段文本经传输发给 rx（`Kind::Text`）。
+pub async fn send_text<C>(
+    conn: &mut C,
     token: [u8; 16],
     text: &str,
     progress: Option<Box<dyn FnMut(u64) + Send>>,
-) -> Result<ServeOutcome, OrchestrateError> {
+) -> Result<ServeOutcome, OrchestrateError>
+where
+    C: TransportConnection,
+{
     let data = text.as_bytes().to_vec();
     let size = data.len() as u64;
     let opts = ServeOptions {
@@ -142,12 +160,15 @@ impl Drop for TempGuard {
 /// rx：拉取文件到 `dest_dir`，写临时文件 → 校验 → 原子改名。
 ///
 /// 对应 M4.4：临时文件 O_EXCL + 0600；摘要不一致则删临时文件并报错。
-pub async fn receive(
-    conn: &mut WgConnection,
+pub async fn receive<C>(
+    conn: &mut C,
     token: &[u8; 16],
     dest_dir: &std::path::Path,
     progress: Option<&mut dyn FnMut(u64)>,
-) -> Result<Receipt, OrchestrateError> {
+) -> Result<Receipt, OrchestrateError>
+where
+    C: TransportConnection,
+{
     std::fs::create_dir_all(dest_dir)?;
     // 唯一临时名（避免并发/重名）；create_temp 用 O_EXCL + 0600
     let mut rnd = [0u8; 8];
@@ -156,7 +177,10 @@ pub async fn receive(
         let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
         rng.fill_bytes(&mut rnd);
     }
-    let temp = dest_dir.join(format!(".hermod_{:016x}.hermod_tmp", u64::from_le_bytes(rnd)));
+    let temp = dest_dir.join(format!(
+        ".hermod_{:016x}.hermod_tmp",
+        u64::from_le_bytes(rnd)
+    ));
     let std_file = crate::transfer::create_temp(&temp)?;
     // 守卫在函数返回/被取消时删除临时文件；成功改名后 forget 掉。
     let guard = TempGuard(temp.clone());
@@ -200,9 +224,10 @@ mod tests {
     use super::*;
     use crate::crypto::cpace::Role;
     use crate::crypto::kdf::derive_wg_psk;
+    use crate::transfer::{self, Kind};
+    use crate::transport::WgConnection;
     use crate::transport::iface::Transport;
     use crate::transport::wireguard::transport::WireGuardTransport;
-    use crate::transfer::{self, Kind};
 
     /// 建一对已建立、可 listen/dial 的连接。
     async fn connected_pair() -> (WgConnection, WgConnection) {
@@ -216,7 +241,7 @@ mod tests {
         (tx_conn, rx_conn)
     }
 
-    /// 终极 e2e：两个 WireGuardTransport + 隧道内 HTTP，完整搬运一个文件并裁决。
+    /// 终极 e2e：两个 WireGuardTransport + 传输内 HTTP，完整搬运一个文件并裁决。
     /// 覆盖 WireGuard 握手 → smoltcp TCP → HTTP → SHA-256 全链路。
     #[tokio::test]
     async fn end_to_end_file_transfer() {
@@ -279,5 +304,59 @@ mod tests {
         assert!(serve_out.verified);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// QUIC 全链路：QuicTransport + 传输内 HTTP + SHA-256 裁决。
+    #[tokio::test]
+    async fn quic_end_to_end_file_transfer() {
+        use crate::transport::quic::transport::QuicTransport;
+        use std::net::{Ipv6Addr, SocketAddrV6};
+
+        let mut tx = QuicTransport::new();
+        let mut rx = QuicTransport::new();
+        let bind = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0);
+        tx.set_udp_bind(Some(bind));
+        rx.set_udp_bind(Some(bind));
+        tx.set_credential_fingerprint([0x55; 32]);
+        rx.set_credential_fingerprint([0x55; 32]);
+        let tx_ep = tx.prepare().await.unwrap();
+        let rx_ep = rx.prepare().await.unwrap();
+        let psk = derive_wg_psk(&[0x66u8; 32], 11);
+        let mut tx_conn = tx.establish(Role::Sender, &psk, &rx_ep).await.unwrap();
+        let mut rx_conn = rx.establish(Role::Receiver, &psk, &tx_ep).await.unwrap();
+
+        let data: Vec<u8> = (0..4 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+        let token = [0x77u8; 16];
+        let sha = transfer::hash_bytes(&data);
+        let opts = ServeOptions {
+            token,
+            kind: Kind::File,
+            name: "quic.bin".into(),
+            size: data.len() as u64,
+            body: Box::new(std::io::Cursor::new(data.clone())),
+            progress: None,
+        };
+        let mut dest = Vec::new();
+        let (serve_out, fetch_out) =
+            tokio::time::timeout(std::time::Duration::from_secs(60), async {
+                tokio::join!(
+                    serve_file(&mut tx_conn, opts),
+                    fetch_file(&mut rx_conn, &token, &mut dest, None),
+                )
+            })
+            .await
+            .expect("QUIC HTTP 传输超时");
+
+        let serve_out = serve_out.unwrap();
+        let fetch_out = fetch_out.unwrap();
+        assert_eq!(dest, data);
+        assert_eq!(fetch_out.name, "quic.bin");
+        assert_eq!(fetch_out.sha256, sha);
+        assert!(fetch_out.verified);
+        assert!(serve_out.verified);
+        assert_eq!(serve_out.sha256, sha);
+
+        tx_conn.shutdown().await.unwrap();
+        rx_conn.shutdown().await.unwrap();
     }
 }

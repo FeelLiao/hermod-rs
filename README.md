@@ -1,8 +1,9 @@
 # Hermod (Rust)
 
-Hermod transfers files and text directly between peers over an encrypted WireGuard
-tunnel. No data passes through the signaling server — it only helps the two peers
-find each other.
+Hermod transfers files and text directly between peers over an encrypted tunnel.
+WireGuard is the default data plane; an optional **QUIC** data plane (TLS 1.3 +
+BBR) can be selected with `--transport quic`. No data passes through the signaling
+server — it only helps the two peers find each other.
 
 The project is named after Hermod, the messenger god in Norse mythology — the primary
 courier of the Æsir, best known for riding to Hel to negotiate the return of Baldr.
@@ -17,7 +18,10 @@ signaling protocol, CPace PAKE, and transfer-code format.
 ## What it does
 
 - End-to-end encrypted transfer over **user-space WireGuard** (boringtun) carrying a
-  small in-process TCP/IP stack (smoltcp) with tunnel-internal HTTP/1.1
+  small in-process TCP/IP stack (smoltcp), or over **QUIC** (quinn) with TLS 1.3
+  certificate pinning and BBR congestion control
+- Transport is selected per session: `--transport wireguard` (default) or
+  `--transport quic`; both sides must use the same value
 - Password-authenticated key exchange (**CPace over P-256**) — no shared secret beyond
   the transfer code
 - **Zero privilege**: everything runs in userspace — no root, no TUN device, no network
@@ -67,7 +71,7 @@ does not ship a server yet (D13); use the Go server:
 
 The file lands in the current directory.
 
-> **IPv6 requirement:** both peers need IPv6 connectivity. The WireGuard tunnel is
+> **IPv6 requirement:** both peers need IPv6 connectivity. Both data planes are
 > established over IPv6 UDP; if a peer is behind a firewall that blocks inbound UDP,
 > the connection may fail. There is no IPv4 fallback or NAT traversal.
 
@@ -97,7 +101,10 @@ hermod tx [INPUT] [flags]
 | `--server` | `-s` | `wss://oracle.stariverfeel.eu.org:4376` | Signaling server URL (saved as default when specified) |
 | `--words` | `-w` | `3` | Number of words in the transfer code |
 | `--listen` | `-l` | `[::]:0` | Local UDP bind address (IPv6) |
-| `--wg-mtu` | | `1400` | Inner IP MTU (outer packet = inner + 80) |
+| `--transport` | | `wireguard` | Data plane: `wireguard` or `quic` (both peers must match) |
+| `--wg-mtu` | | `1400` | WireGuard inner IP MTU (outer packet = inner + 80) |
+| `--quic-cc` | | `bbr` | QUIC congestion control: `bbr`, `cubic`, or `newreno` (QUIC only) |
+| `--quic-mtu` | | `1200` | Initial QUIC UDP payload, clamped to 1200–1452; PMTUD may raise it (QUIC only) |
 
 **Examples:**
 ```bash
@@ -112,6 +119,9 @@ tar czf - ./project | ./hermod tx -
 
 # Smaller inner MTU for lossy/PPPoE paths (outer ≈ 1280 bytes)
 ./hermod tx big.fa --wg-mtu 1200
+
+# Use the QUIC data plane with BBR (both peers must pass --transport quic)
+./hermod tx big.fa --transport quic --quic-cc bbr
 ```
 
 ### rx — receive
@@ -125,7 +135,10 @@ hermod rx [CODE] [flags]
 | `--server` | `-s` | `wss://oracle.stariverfeel.eu.org:4376` | Signaling server URL (saved as default when specified) |
 | `--destination` | `-d` | current directory | Output directory |
 | `--listen` | `-l` | `[::]:0` | Local UDP bind address (IPv6) |
-| `--wg-mtu` | | `1400` | Inner IP MTU (must match the sender) |
+| `--transport` | | `wireguard` | Data plane: `wireguard` or `quic` (must match the sender) |
+| `--wg-mtu` | | `1400` | WireGuard inner IP MTU (must match the sender) |
+| `--quic-cc` | | `bbr` | QUIC congestion control: `bbr`, `cubic`, or `newreno` (QUIC only) |
+| `--quic-mtu` | | `1200` | Initial QUIC UDP payload, 1200–1452 (must match the sender) |
 
 **Examples:**
 ```bash
@@ -134,6 +147,9 @@ hermod rx [CODE] [flags]
 
 # Save to a specific directory
 ./hermod rx 3-apple-banana-cherry -d ~/downloads/
+
+# Receive over QUIC (matching --transport on the sender)
+./hermod rx 3-apple-banana-cherry --transport quic
 ```
 
 ### serve — run a signaling server
@@ -180,23 +196,36 @@ The config holds the `server_url`, TLS settings, and the `trusted_servers` map
    as a hint. No UDP reflector is needed — IPv6 has no NAT.
 5. Both peers run a **CPace PAKE** handshake over the signaling channel to establish a
    shared key `K`, authenticated by the passphrase.
-6. Each side derives a WireGuard pre-shared key `PSK = HKDF-SHA256(K, channel_id,
-   "hermod-wg-psk-v1")` and generates an ephemeral X25519 key pair. An encrypted
-   endpoint bundle (WireGuard public key + UDP port + IPv6 candidates) is AEAD-sealed
-   with `K` and exchanged through the signaling relay — the server never learns it.
-7. A **WireGuard handshake** is performed over IPv6 UDP. Both sides send handshake
-   initiations to all candidates (opening firewall pinholes); the sender initiates, the
-   receiver responds.
-8. Inside the tunnel, an in-process TCP/IP stack (smoltcp) carries **HTTP/1.1**: the
-   sender serves `GET /f/<token>`, the receiver pulls the whole payload while hashing
-   SHA-256, then posts the digest to `POST /done`. The sender compares the digest with
-   its own and only then completes the transfer.
+6. Each side `prepare`s its selected transport and produces an opaque endpoint
+   bundle. The bundle is AEAD-sealed with `K` and exchanged through the signaling
+   relay — the server never learns it. The bundle also carries
+   `SHA-256(token)` so each side can reject a peer from a different session.
+7. **WireGuard** (default): each side generates an ephemeral X25519 key pair and
+   derives `PSK = HKDF-SHA256(K, channel_id, "hermod-wg-psk-v1")`. A WireGuard
+   handshake runs over IPv6 UDP; then an in-process TCP/IP stack (smoltcp) carries
+   HTTP/1.1.
+   **QUIC** (`--transport quic`): the sender generates an ephemeral self-signed
+   certificate and the receiver pins its SHA-256 from the encrypted bundle. The sender
+   is the QUIC server (tx `listen` = `accept_bi`), the receiver is the QUIC client
+   (rx `dial` = `open_bi`), and HTTP/1.1 runs on one bidirectional QUIC stream.
+   The receiver first sends a 32-byte session fingerprint (SHA-256 of the token);
+   the sender rejects streams without it before handing the stream to HTTP.
+8. In both cases the sender serves `GET /f/<token>`; the receiver pulls the whole
+   payload while hashing SHA-256, then posts the digest to `POST /done`. The sender
+   compares the digest with its own and only then completes the transfer. QUIC
+   defaults to **BBR** and uses 64 MiB stream/connection windows, 8 MiB UDP socket
+   buffers, and PMTUD.
 
 ## Tuning
 
-- **LAN throughput**: the inner TCP window defaults to 1 MiB. On a fast LAN you can
-  raise it with `HERMOD_TCP_SOCKET_BUF` (bytes, e.g. `4194304` for 4 MiB) on both
-  sides. Keep it small on lossy WAN paths — a large window amplifies bufferbloat.
+- **WireGuard LAN throughput**: the inner TCP window defaults to 1 MiB. On a fast LAN
+  you can raise it with `HERMOD_TCP_SOCKET_BUF` (bytes, e.g. `4194304` for 4 MiB) on
+  both sides. Keep it small on lossy WAN paths — a large window amplifies bufferbloat.
+- **QUIC throughput**: BBR is the default and is the recommended choice on lossy
+  paths. Compare with `--quic-cc cubic` / `--quic-cc newreno` if needed. QUIC uses
+  64 MiB stream and connection receive windows, a 64 MiB send window, 8 MiB UDP
+  socket buffers, and PMTUD from 1200 to 1452. On PPPoE/lossy paths start with
+  `--quic-mtu 1200`; on clean LAN/WAN paths PMTUD will raise it automatically.
 - Check `--verbose info`'s `receive progress ... write_pct`: if it is high, the
   receiving disk is the bottleneck, not the network.
 
@@ -204,11 +233,13 @@ The config holds the `server_url`, TLS settings, and the `trusted_servers` map
 
 | Property | Mechanism |
 |---|---|
-| Confidentiality | WireGuard with per-session ephemeral X25519 keys + a PSK derived from the CPace key |
-| Authentication | CPace PAKE — only someone with the transfer code can connect |
+| Confidentiality (WireGuard) | WireGuard with per-session ephemeral X25519 keys + a PSK derived from the CPace key |
+| Confidentiality (QUIC) | TLS 1.3 with a per-session ephemeral self-signed certificate |
+| Authentication | CPace PAKE — only someone with the transfer code can connect; QUIC pins the server certificate fingerprint from the CPace-encrypted bundle |
+| Client authorization (QUIC) | A 32-byte session fingerprint preamble (SHA-256 of the one-time token) before HTTP; TLS client certificates are not required |
 | Integrity | SHA-256 verified on both sides; the sender renames/releases only after the digest matches |
 | Server cannot read data | Payload never touches the signaling server; the endpoint bundle is encrypted with the CPace key |
-| Session isolation | Fresh ephemeral keys and PSK per session; the PSK is never transmitted |
+| Session isolation | Fresh ephemeral keys/PSK (WireGuard) or certificate (QUIC) per session; the one-time token is never sent to the signaling server |
 
 > Note: unlike the Go version, the Rust implementation is **classical-only** (no
 > post-quantum ML-KEM) and **does not implement SAS out-of-band verification**
@@ -231,10 +262,12 @@ hermod-core/           all protocol, tunnel, and transfer logic
   src/crypto/          CPace PAKE, HKDF, AES-256-GCM, EFF wordlist
   src/signal/          WebSocket signaling protocol, SPKI pinning, client
   src/session.rs       transfer code → established transport orchestration
-  src/transport/       Transport trait + WireGuard implementation
-    wireguard/wg/      X25519 keys, boringtun wrapper, endpoint roaming
-    wireguard/stack/   smoltcp device/driver + AsyncRead/AsyncWrite bridge
-    wireguard/http/    in-tunnel HTTP/1.1 (server + client)
+  src/transport/       Transport trait + runtime dispatcher
+    wireguard/         WireGuard data plane (default)
+      wg/              X25519 keys, boringtun wrapper, endpoint roaming
+      stack/           smoltcp device/driver + AsyncRead/AsyncWrite bridge
+    quic/              QUIC data plane (optional): TLS pinning, BBR, streams
+    http/              shared transport-internal HTTP/1.1 (server + client)
   src/orchestrate.rs   tx/rx transfer main flow
 hermod-cli/            thin CLI shell (clap) over hermod-core
 ```

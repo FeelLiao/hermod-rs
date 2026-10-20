@@ -24,18 +24,24 @@ Guidance for LLM agents working on this repository.
 ## Architecture (one paragraph)
 
 `hermod-core` holds everything: crypto primitives (`crypto/`), the WebSocket
-signaling client with SPKI pinning (`signal/`), the `Transport` trait and its
-WireGuard implementation (`transport/` — boringtun tunnel + smoltcp in-process
-TCP + in-tunnel HTTP), the session orchestration that turns a transfer code into
-an established transport (`session.rs`), and the tx/rx main flow
-(`orchestrate.rs`). `hermod-cli` is a thin clap shell over `hermod-core`.
+signaling client with SPKI pinning (`signal/`), the `Transport` trait and its two
+sibling implementations (`transport/wireguard` — boringtun + smoltcp in-process
+TCP, the default; `transport/quic` — QUIC + TLS 1.3 + BBR, opt-in), shared
+transport-internal HTTP/1.1 (`transport/http`), the session orchestration that
+turns a transfer code into an established transport (`session.rs`), and the tx/rx
+main flow (`orchestrate.rs`). `hermod-cli` is a thin clap shell over
+`hermod-core`. The two transports do not depend on each other; `AnyTransport` /
+`AnyConnection` only dispatch at runtime.
 
 ## Testing notes
 
 - The crypto modules use official vectors (RFC 7748, RFC 9380, RFC 5869) as
   independent baselines.
 - The transport has local end-to-end tests that exercise the full chain
-  (WireGuard handshake → smoltcp TCP → HTTP → SHA-256 verdict) over the host's
+  (WireGuard handshake → smoltcp TCP → HTTP → SHA-256 verdict, and QUIC
+  handshake → bidirectional stream → HTTP → SHA-256 verdict) over the host's
   own IPv6 addresses, so no external server is needed.
+- The QUIC throughput benchmark is ignored by default:
+  `cargo test -p hermod-core --release -- --ignored quic_throughput`.
 - Tests that need a real signaling server are not run by CI in this sandbox;
   verify against a live server before relying on them.

@@ -16,8 +16,11 @@ npm run tauri dev
 ```
 
 `npm run build` validates TypeScript and bundles the frontend. `npm run tauri build`
-builds the native desktop package. `cargo build -p hermod-cli --release` continues
-to build just the CLI. A plain `cargo build` defaults to core + CLI; workspace
+builds AppImage on Linux and app/DMG on macOS. Windows builds the executable
+without an installer; from the repository root, run
+`./scripts/package-windows-zip.ps1` in PowerShell to create the portable ZIP.
+`cargo build -p hermod-cli --release` continues to build just the CLI.
+A plain `cargo build` defaults to core + CLI; workspace
 checks include the GUI and therefore require the native GUI build dependencies.
 
 Linux (Ubuntu 22.04+):
@@ -131,9 +134,9 @@ builds these artifacts on native runners:
 
 | Platform | Assets |
 | --- | --- |
-| Windows x64 GUI | `hermod-windows-x86_64-test-signed.msix`, public `.cer`, `INSTALL.txt` |
+| Windows x64 GUI | `hermod-windows-x86_64.zip` only (executable, README and optional Store packaging tools) |
 | Android ARM64 GUI | `hermod-android-arm64-test-signed.apk` |
-| Linux x64 GUI | `hermod-linux-x86_64.AppImage`, `hermod-linux-x86_64.deb` |
+| Linux x64 GUI | `hermod-linux-x86_64.AppImage` only |
 | macOS Intel / ARM GUI | `hermod-macos-{x86_64,arm64}-unnotarized.dmg` and `.app.tar.gz` |
 | Existing CLI | `hermod-windows-x86_64.exe`, `hermod-linux-x86_64-musl`, `hermod-android-aarch64` |
 
@@ -143,9 +146,9 @@ Manual dispatch builds downloadable Actions artifacts without publishing.
 Only the release job has `contents: write`; default `GITHUB_TOKEN` is sufficient.
 No personal token or signing secrets are needed for the current test workflow.
 
-This change prepares version **0.3.0**. After synchronizing the commit, either run
+This change prepares version **0.3.1**. After synchronizing the commit, either run
 **build-and-release** manually to download test builds, or push the matching
-`v0.3.0` tag to build and publish all assets together. No tag is created by the
+`v0.3.1` tag to build and publish all assets together. No tag is created by the
 local build.
 
 For subsequent releases, update the workspace version in `Cargo.toml`,
@@ -155,31 +158,70 @@ The tag must exactly match `v<major.minor.patch>`. For example, after choosing a
 unused version, committing and pushing the changes, push its matching tag.
 This repository change alone does not publish a release or run hosted CI.
 
-- **Windows:** install WebView2 if absent. Follow the included `INSTALL.txt` to
-  trust the matching test `.cer` in `LocalMachine\TrustedPeople` and install the
-  MSIX. This changes trust only for that certificate; no global verification is
-  disabled. The private key is never an artifact. Each run creates a new test
-  certificate. Export your inbox before uninstalling an older test installation
-  if Windows rejects an update. See Microsoft's
-  [MSIX signing guide](https://learn.microsoft.com/en-us/windows/msix/package/sign-msix-package-guide).
+- **Windows:** extract the entire ZIP and launch `hermod-app.exe`. Install the
+  Microsoft Edge WebView2 Evergreen Runtime if absent. The unsigned executable
+  can trigger SmartScreen; obtain it from a trusted release. No certificate import
+  or MSIX installation is needed. Settings and received files still live in the
+  user's app-data directory; they are not stored next to the executable. See the
+  included `README.txt`. CI produces no Windows GUI MSIX, MSI, NSIS installer,
+  public certificate or separate installation-text asset.
 - **Android:** APK is zipaligned (including 16 KB native-library alignment),
   signed and verified with a temporary test key. Allow installation from the
   source you use to open it. Different builds have different signing keys:
   export your inbox, then uninstall the previous test APK before installing a
   new one. No in-place update guarantee is provided by this test workflow.
-- **Linux:** make AppImage executable (`chmod +x`) or install the `.deb` with
-  `sudo apt install ./hermod-linux-x86_64.deb`. The Ubuntu 22.04 build baseline
-  needs a compatible WebKitGTK desktop; an AppImage is not the static musl CLI.
+- **Linux:** make `hermod-linux-x86_64.AppImage` executable with `chmod +x`, then
+  launch it. GUI builds produce only AppImage, with no deb/rpm. The Ubuntu 22.04
+  baseline needs a compatible WebKitGTK desktop; an AppImage is not the static musl CLI.
   Some systems need FUSE or `--appimage-extract-and-run`.
 - **macOS:** packages are ad-hoc signed, **not notarized**. Gatekeeper may block
   them; only authorize a downloaded test build you trust via system security
   settings. Both Intel and Apple Silicon are built separately. No Apple ID,
   production Developer ID certificate or notarization credentials are included.
 
-Production publishing needs persistent protected signing keys/certificates and
-macOS notarization. The current scripts intentionally generate test identities;
-configure production signing before promising stable installer upgrades or store
-submission. See [Android signing](https://v2.tauri.app/distribute/sign/android/) and
+### Microsoft Store submission from the Windows ZIP
+
+**Do not upload the ordinary ZIP to Partner Center.** The Store accepts MSIX/AppX
+packages and their bundle/upload variants. For MSIX distribution it signs the
+package after certification, so a purchased signing certificate is not needed.
+See Microsoft's [package requirements](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements)
+and [signing guide](https://learn.microsoft.com/en-us/windows/msix/package/sign-msix-package-guide).
+
+The ZIP includes `Store/package-msix.ps1`, the manifest template and icons. On
+Windows, install the Windows SDK with x64 MakeAppx. Reserve your app name in
+Partner Center, then copy the exact **Package/Identity/Name**,
+**Package/Identity/Publisher** and **Package/Properties/PublisherDisplayName**
+values from **Product management > Product identity**. Use the reserved app name
+for `DisplayName`. See [app identity details](https://learn.microsoft.com/en-us/windows/apps/publish/view-app-identity-details).
+
+In PowerShell, from the extracted ZIP folder, replace all example values:
+
+```powershell
+.\Store\package-msix.ps1 -BinaryDirectory . `
+  -IdentityName 'YOUR_PACKAGE_IDENTITY_NAME' `
+  -Publisher 'CN=YOUR_PUBLISHER_ID' `
+  -PublisherDisplayName 'YOUR_PUBLISHER_NAME' `
+  -DisplayName 'YOUR_RESERVED_APP_NAME' `
+  -PackageVersion '1.0.0.0'
+```
+
+Upload `store-output/hermod-windows-x86_64-store-unsigned.msix`, not the ZIP.
+Use an unused four-part Store package version: each component is at most 65535,
+first component nonzero and last component zero. This is independent of the
+app's `0.x.y` release version. The same script works from the repository under
+`scripts/` with `-BinaryDirectory` pointing to an extracted ZIP or a Windows
+release build. It does not compile, sign, or modify certificate stores, and it
+is not invoked by GitHub Actions. The unsigned MSIX is a submission package,
+not a signed sideload installer.
+
+The native Rust app requires `runFullTrust`; explain its file-transfer purpose
+in the submission and validate with the Windows App Certification Kit. The
+package does not include WebView2: verify runtime availability on clean Windows
+machines before publishing. This helper does not guarantee Store certification.
+
+Android production updates need a persistent protected signing key; macOS
+production distribution needs Developer ID signing and notarization. See
+[Android signing](https://v2.tauri.app/distribute/sign/android/) and
 [macOS signing](https://v2.tauri.app/distribute/sign/macos/).
 
 ## Verification

@@ -37,7 +37,7 @@ signaling protocol, CPace PAKE, and transfer-code format.
 cd hermod-app
 npm ci
 npm run tauri dev
-# Package on the current desktop OS:
+# Build on the current desktop OS (Windows ZIP step: see APP_BUILD.md):
 npm run tauri build
 ```
 
@@ -61,6 +61,10 @@ Linux build dependencies (Ubuntu 22.04+):
 sudo apt install build-essential pkg-config cmake perl clang \
   libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 ```
+
+Windows GUI releases are portable ZIPs; Linux GUI releases are AppImages.
+Existing CLI artifacts are also included. A Microsoft Store submission requires
+repackaging the Windows ZIP as MSIX using the included Store tools.
 
 See [APP_BUILD.md](APP_BUILD.md) for Android setup, file lifecycle, installation,
 release artifacts and platform testing. Desktop builds reuse the CLI trust config

@@ -1,5 +1,5 @@
 {
-  "name": "hermod-app", "version": "0.3.0", "private": true, "type": "module",
+  "name": "hermod-app", "version": "0.3.1", "private": true, "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0", "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1", "tauri": "tauri",

@@ -1,19 +1,46 @@
-Hermod TEST MSIX installation (Windows 10 2004+ / Windows 11, x64)
+Hermod for Windows 10 2004+ / Windows 11 (x64)
 
-This package is self-signed for testing, not Microsoft Store or production signed.
-Verify the release SHA256SUMS and obtain all files from the same trusted release.
-The .cer contains only the public certificate; no private signing key is shipped.
+Run the app
+-----------
+1. Verify the ZIP against SHA256SUMS from the same trusted GitHub Release.
+2. Extract the entire ZIP into a folder, then double-click hermod-app.exe.
+   Node.js, Rust, administrator access and a test certificate are not required.
+3. Install Microsoft Edge WebView2 Evergreen Runtime if it is missing:
+   https://developer.microsoft.com/microsoft-edge/webview2/
+4. Allow the app's IPv6 connection if Windows Firewall prompts.
+   Both peers need reachable IPv6. The initial upload budget is 8 Mbps;
+   adjust it in Settings for your connection.
 
-1. Install the Microsoft Edge WebView2 Evergreen Runtime if it is not already
-   installed: https://developer.microsoft.com/microsoft-edge/webview2/
-2. In an elevated PowerShell window, from the downloaded asset directory:
-   Import-Certificate -FilePath .\hermod-windows-test-certificate.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
-3. As your normal user:
-   Add-AppxPackage .\hermod-windows-x86_64-test-signed.msix
-4. Start "Hermod (Test)" from the Start menu. Allow its IPv6 network connection
-   if Windows Firewall prompts; both peers need reachable IPv6.
+The executable is unsigned; Windows SmartScreen may show a warning. Only run
+downloads you trust. This ZIP does not disable Windows security checks.
+The app keeps settings and received files in your user app-data directory,
+not beside the executable. Use Inbox > Save a copy to export received files.
 
-A new test certificate is created on every build. Trust the matching certificate
-before reinstalling. If Windows rejects an update, export your inbox first, then
-uninstall the old test package and install the new one. Uninstall removes private
-app data. Test certificates are NOT a production signing or update mechanism.
+Microsoft Store submission (publisher only)
+------------------------------------------
+An ordinary ZIP cannot be uploaded as a Microsoft Store app package.
+The optional Store/ tools convert this extracted app into an unsigned MSIX;
+there is no need to compile the Windows client again or buy a signing certificate.
+
+Install the Windows SDK (including x64 MakeAppx). In Partner Center, reserve
+your app name and copy these exact values from Product management > Product
+identity: Package/Identity/Name, Package/Identity/Publisher, and
+Package/Properties/PublisherDisplayName. Use your reserved app name for DisplayName.
+
+From PowerShell in the extracted ZIP directory, replace the example values:
+
+  .\Store\package-msix.ps1 -BinaryDirectory . -IdentityName 'YOUR_PACKAGE_IDENTITY_NAME' -Publisher 'CN=YOUR_PUBLISHER_ID' -PublisherDisplayName 'YOUR_PUBLISHER_NAME' -DisplayName 'YOUR_RESERVED_APP_NAME' -PackageVersion '1.0.0.0'
+
+Choose an unused Store version: four numbers (0..65535), the first nonzero,
+the last zero. Store package versions are separate from the app's release version.
+Upload store-output/hermod-windows-x86_64-store-unsigned.msix to Partner Center,
+not this ZIP. The Store signs the package after it passes certification.
+This unsigned MSIX is not intended for double-click installation outside the Store.
+
+The manifest requests runFullTrust for the native Rust application. Explain
+its file-transfer use in the submission and test with the Windows App
+Certification Kit. WebView2 remains a prerequisite; it is not included in
+this package. Store approval and runtime availability must be checked on Windows.
+
+https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements
+https://learn.microsoft.com/en-us/windows/apps/publish/view-app-identity-details

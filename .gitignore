@@ -31,3 +31,4 @@ hermod-app/plugins/documents/android/.gradle/
 hermod-app/plugins/documents/android/build/
 /dist/
 hermod-app/plugins/documents/android/.tauri/
+/store-output/

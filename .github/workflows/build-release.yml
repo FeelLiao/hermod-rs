@@ -107,7 +107,7 @@ jobs:
           - os: ubuntu-22.04
             label: linux-x86_64
             target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
+            bundles: appimage
           - os: windows-latest
             label: windows-x86_64
             target: x86_64-pc-windows-msvc
@@ -152,16 +152,15 @@ jobs:
         env:
           RUSTFLAGS: '-C target-feature=+crt-static'
         run: npm run tauri -- build --ci --target x86_64-pc-windows-msvc --no-bundle -- --locked
-      - name: Build and test-sign MSIX
+      - name: Package portable Windows ZIP
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./scripts/package-msix.ps1 -BinaryDirectory target/x86_64-pc-windows-msvc/release
+        run: ./scripts/package-windows-zip.ps1 -BinaryDirectory target/x86_64-pc-windows-msvc/release
       - name: Stage Linux packages
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/bundle/appimage/*.AppImage dist/hermod-linux-x86_64.AppImage
-          cp target/${{ matrix.target }}/release/bundle/deb/*.deb dist/hermod-linux-x86_64.deb
       - name: Stage unnotarized macOS packages
         if: runner.os == 'macOS'
         run: |
@@ -258,8 +257,9 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
-            GUI test distribution: Windows MSIX is self-signed (install the matching .cer; see INSTALL.txt).
+            Windows GUI: extract hermod-windows-x86_64.zip and run hermod-app.exe (unsigned; WebView2 required).
+            For Microsoft Store submission, use the included Store tools to create an unsigned MSIX with your Partner Center identity; ZIP itself is not a Store package.
             Android APK uses a new test signing key on each build; export your inbox before uninstalling an older test APK.
-            macOS apps are ad-hoc signed and NOT notarized. Linux AppImage and deb require a compatible desktop.
+            macOS apps are ad-hoc signed and NOT notarized. Linux GUI is distributed only as AppImage and requires a compatible desktop.
             All existing CLI artifacts are included. SHA256SUMS covers every package.
             Both peers need reachable IPv6; this release does not add IPv4 traversal or a file relay.

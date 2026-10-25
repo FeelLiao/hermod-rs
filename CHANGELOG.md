@@ -6,6 +6,24 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-25
+
+### Changed
+
+- Windows GUI releases now contain only a portable ZIP; Linux GUI releases only
+  AppImage. Android, macOS and the existing CLI release artifacts are preserved.
+- Windows ZIP includes runtime instructions and optional tools to create an
+  unsigned Microsoft Store MSIX using the publisher's own Partner Center identity.
+  Ordinary ZIP files cannot be submitted directly as Store app packages.
+- Platform-specific Tauri defaults disable Windows installers and keep macOS
+  app/DMG bundles while limiting Linux to AppImage.
+
+### Fixed
+
+- Windows releases no longer depend on ephemeral MSIX certificates or the failing
+  self-signed certificate-chain verification step. Manual Store packaging does
+  not sign packages or change certificate trust stores.
+
 ## [0.3.0] - 2026-10-25
 
 ### Added

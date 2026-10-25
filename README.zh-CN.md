@@ -150,6 +150,9 @@ QUIC 支持 BBR/CUBIC/NewReno。不兼容组合会报错，不会静默忽略。
 
 Android 在 Actions 中只编译、签名并检查 ARM64 APK，不运行安卓模拟器或界面测试。
 
+Actions 分为两个工作流：`CI` 负责分支推送和 PR 检查；`Build and release` 复用同一套检查，
+通过后才打包。推送 `master` 只检查，推送 `v*` 标签才发布 Release；手动运行只生成 Actions 构建产物，不发布。
+
 [构建与发布](APP_BUILD.md) · [架构与贡献指南](AGENTS.md) · [更新日志](CHANGELOG.md) · [许可证](LICENSE)
 
 项目灵感来自 [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole)。协议采用 CPace、

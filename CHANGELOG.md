@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-25
+
+### Changed
+
+- Split branch/PR quality checks into `ci.yml` and tag/manual packaging into
+  `build-release.yml`. Packaging reuses CI at the same commit and waits for it;
+  only a version-tag push publishes a Release. Manual runs only build artifacts.
+- Bump workspace, frontend and Tauri versions to 0.4.2 and Android versionCode to 40200.
+
+### Fixed
+
+- Count complete dictionary words in CLI/GUI interoperability checks. Random codes
+  containing `yo-yo` previously caused a false word-count failure in CI. Add
+  deterministic coverage for the full wordlist and hyphenated-code password round trips;
+  the transfer-code format and protocol behavior remain unchanged.
+
 ## [0.4.1] - 2026-10-25
 
 ### Changed

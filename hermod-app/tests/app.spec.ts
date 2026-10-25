@@ -36,7 +36,7 @@ test.beforeEach(async ({ page }) => {
         switch (command) {
           case "bootstrap":
             return {
-              version: "0.4.1",
+              version: "0.4.2",
               ipv6: ["2001:db8::1"],
               platform: "linux",
               settings: structuredClone(settings),

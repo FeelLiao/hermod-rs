@@ -1,7 +1,9 @@
 //! 使用真实 CLI 进程和 GUI 应用层进行互通，不依赖外部信令服务。
 use futures_util::{SinkExt, StreamExt};
 use hermod_app_lib::app::{Engine, storage};
-use hermod_core::{config::Config, signal::protocol::Message, transfer};
+use hermod_core::{
+    config::Config, crypto::wordlist::EFF_SHORT_WORDLIST, signal::protocol::Message, transfer,
+};
 use std::{path::Path, process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -73,6 +75,60 @@ async fn complete(engine: &Engine) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
+
+// 按词表完整匹配；yo-yo 自带连字符，不能用分隔符数量推算生成词数。
+fn generated_word_count(code: &str) -> Option<usize> {
+    let (channel, mut remaining) = code.split_once('-')?;
+    channel.parse::<u16>().ok()?;
+    let mut count = 0;
+    loop {
+        let suffix = EFF_SHORT_WORDLIST.iter().find_map(|word| {
+            remaining
+                .strip_prefix(word)
+                .filter(|suffix| suffix.is_empty() || suffix.starts_with('-'))
+        })?;
+        count += 1;
+        if suffix.is_empty() {
+            return Some(count);
+        }
+        remaining = suffix.strip_prefix('-')?;
+    }
+}
+
+#[test]
+fn generated_word_count_handles_every_dictionary_word() {
+    for word in EFF_SHORT_WORDLIST {
+        let code = format!("42-acid-{word}-acorn-acre-acts");
+        assert_eq!(generated_word_count(&code), Some(5), "{code}");
+    }
+    for (code, expected) in [
+        ("42-yo-yo-acid-acorn-acre-acts", 5),
+        ("42-acid-acorn-acre-acts-yo-yo", 5),
+        ("42-yo-yo-yo-yo-yo-yo-yoyo-yo-yo", 5),
+        ("42-acid-acorn-acre", 3),
+        ("42-acid-acorn-acre-acts-afar-affix", 6),
+    ] {
+        assert_eq!(generated_word_count(code), Some(expected), "{code}");
+    }
+}
+
+#[test]
+fn generated_word_count_rejects_invalid_codes() {
+    for code in [
+        "invalid-acid-acorn-acre",
+        "65536-acid-acorn-acre",
+        "42-acid-unknown-acorn",
+        "42-acidacorn-acre-acts",
+        "42-acid--acorn-acre",
+        "42-acid-acorn-acre-",
+        "42-acid-yo-acorn",
+        "42-",
+        "42",
+    ] {
+        assert_eq!(generated_word_count(code), None, "{code}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn cli_and_gui_interoperate_both_directions_with_files_and_text() {
     tokio::time::timeout(Duration::from_secs(180), async {
@@ -118,7 +174,7 @@ async fn cli_and_gui_interoperate_both_directions_with_files_and_text() {
                             }
                             tokio::time::sleep(Duration::from_millis(20)).await;
                         };
-                        assert_eq!(code.split('-').count(), 6);
+                        assert_eq!(generated_word_count(&code), Some(5), "{code}");
                         let mut changed = engine.settings();
                         changed.connection.transport = if protocol == "wireguard" {
                             "quic"

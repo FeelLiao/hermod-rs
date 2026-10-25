@@ -1,8 +1,9 @@
-# Building and releasing Hermod 0.4.1
+# Building and releasing Hermod 0.4.2
 
 [User guide](README.md) · [中文使用说明](README.zh-CN.md)
 
-Release builds run in `.github/workflows/build-release.yml`. Local validation is
+Branch and PR checks run in `.github/workflows/ci.yml`. Release builds run in
+`.github/workflows/build-release.yml` and reuse those checks. Local validation is
 Linux-only. Windows installation/runtime checks run in Actions. Android builds and
 signs the ARM64 APK in Actions and checks the resulting package; no Android emulator
 or runtime tests run. A successful Linux build does not verify other platforms.
@@ -62,7 +63,7 @@ npm test --prefix hermod-app
 cd hermod-app
 APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri -- build --ci --bundles appimage -- --locked
 cd ..
-hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.1_amd64.AppImage
+hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.2_amd64.AppImage
 CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release --target x86_64-unknown-linux-musl -p hermod-cli
 readelf -l target/x86_64-unknown-linux-musl/release/hermod
 ```
@@ -139,7 +140,7 @@ Authenticode root-chain check is not a reason to place a test leaf certificate i
 See Microsoft's [certificate guidance](https://learn.microsoft.com/windows/msix/package/create-certificate-package-signing)
 and [WebView2 distribution guidance](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution).
 
-Android retains `org.hermod.transfer`; `versionCode=40100` for 0.4.1. Increase the code
+Android retains `org.hermod.transfer`; `versionCode=40200` for 0.4.2. Increase the code
 on every release and keep the signing key and alias. Neither the public certificate
 nor an MSIX signed as HermodTest grants a Microsoft Store publisher identity. Store
 submission is a separate process using the identity assigned by Partner Center.
@@ -208,7 +209,21 @@ an automated release gate.
 
 ## Pipeline and publishing
 
-Pushes and PRs run Linux quality checks. Tags and manual workflow dispatch also build:
+The workflows have separate responsibilities:
+
+| Event | Workflow | Result |
+| --- | --- | --- |
+| Push to `master` or another branch; pull request | `CI` (`ci.yml`) | Linux quality checks only |
+| Push a `v*` tag | `Build and release` (`build-release.yml`) | Quality checks, all platform packages, then Release |
+| Manually run `Build and release` on a branch or tag | `Build and release` | Quality checks and downloadable Actions artifacts; no Release |
+
+The release workflow calls `ci.yml` through `workflow_call` at the same commit,
+using GitHub's [reusable workflow mechanism](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows).
+All package jobs depend on that call succeeding. Test commands have one source of
+truth, and a tag does not start a second standalone CI run. CI has read-only repository
+permissions and does not receive signing secrets; publishing alone gets `contents: write`.
+
+Tags and manual runs build the following packages after the checks pass:
 
 | Runner | Output |
 | --- | --- |
@@ -218,7 +233,7 @@ Pushes and PRs run Linux quality checks. Tags and manual workflow dispatch also 
 | `ubuntu-22.04-arm` | ARM64 AppImage and musl CLI |
 | `ubuntu-22.04` + Android SDK | ARM64 Tauri APK |
 
-Only tags publish. Every required job must succeed first. `check-release-files.py`
+Only version-tag pushes publish. Every required job must succeed first. `check-release-files.py`
 requires an exact nine-file allowlist: seven programs, `Hermod-Test.cer`, and
 `Install-Hermod.ps1`. No checksums, ZIPs, debs, debug symbols, build logs, private keys
 or canceled-platform programs are uploaded to Release. Internal Actions artifact
@@ -229,7 +244,7 @@ After reviewing the commit and configuring signing secrets, the maintainer pushe
 
 ```bash
 git push origin master
-git push origin v0.4.1
+git push origin v0.4.2
 ```
 
 Do not move an already published tag to hide a failed build. Fix it in a new commit

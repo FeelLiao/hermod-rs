@@ -1,9 +1,7 @@
 name: Build and release
 on:
   push:
-    branches: ['**']
     tags: ['v*']
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
@@ -15,42 +13,11 @@ env:
 
 jobs:
   verify:
-    name: Linux quality gates
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: hermod-app/package-lock.json
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: quality-v040
-      - name: Native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config cmake perl clang libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-      - run: node scripts/check-release-version.mjs
-      - run: npm ci && npm run build
-        working-directory: hermod-app
-      - run: npx playwright install --with-deps chromium && npm test
-        working-directory: hermod-app
-      - name: Local IPv6 test interface
-        run: |
-          sudo ip link add hermodtest type dummy
-          sudo ip link set hermodtest up
-          sudo ip -6 address add fd00:1234::1/64 dev hermodtest nodad
-      - run: cargo fmt --all -- --check
-      - run: cargo test --workspace --locked
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+    name: Pre-release checks
+    uses: ./.github/workflows/ci.yml
 
   linux:
     name: Linux ${{ matrix.arch }} GUI and CLI
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     needs: verify
     strategy:
       fail-fast: false
@@ -109,7 +76,6 @@ jobs:
 
   windows:
     name: Windows ${{ matrix.arch }} MSIX
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     needs: verify
     strategy:
       fail-fast: false
@@ -189,7 +155,6 @@ jobs:
 
   android:
     name: Android ARM64 APK
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     needs: verify
     runs-on: ubuntu-22.04
     steps:
@@ -269,7 +234,7 @@ jobs:
   release:
     name: Publish all verified programs
     needs: [verify, linux, windows, android]
-    if: github.ref_type == 'tag'
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-22.04
     permissions:
       contents: write

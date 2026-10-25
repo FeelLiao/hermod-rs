@@ -66,4 +66,7 @@ check real window creation. Windows CI validates signing identity and native MSI
 installation/launch. Android CI only builds and signs the ARM64 APK, then checks its
 signature, SDK versions, ABI and alignment. Android emulator, instrumentation and
 Android UI tests are not run. API/toolchain versions are pinned in APP_BUILD.md and Gradle.
-The workflow gates publishing on all jobs, then enforces an exact Release file allowlist.
+`ci.yml` checks branch pushes and PRs and exposes the same checks via `workflow_call`.
+`build-release.yml` runs for version-tag pushes and manual dispatch, reuses CI at the same
+commit, and gates all packaging on it. Only version-tag pushes publish, after all jobs
+succeed and an exact Release file allowlist is enforced. Manual runs only build artifacts.

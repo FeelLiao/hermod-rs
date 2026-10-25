@@ -259,6 +259,25 @@ mod tests {
         assert_eq!(words, vec!["acid", "acorn", "acre", "acts"]);
     }
 
+    /// 连字符属于词表词项时，解析后重新拼接仍须保留原始 PAKE 口令。
+    #[test]
+    fn hyphenated_word_preserves_password() {
+        let index = EFF_SHORT_WORDLIST
+            .iter()
+            .position(|word| *word == "yo-yo")
+            .unwrap();
+        let mut bytes = 42u16.to_be_bytes().to_vec();
+        for index in [index, 0, 1, 2, 3] {
+            bytes.extend_from_slice(&u16::try_from(index).unwrap().to_be_bytes());
+        }
+        let (channel, code) = generate_transfer_code(&mut TestRng::new(&bytes), 5);
+        assert_eq!(channel, 42);
+        assert_eq!(code, "42-yo-yo-acid-acorn-acre-acts");
+        let (parsed_channel, words) = parse_transfer_code(&code).unwrap();
+        assert_eq!(parsed_channel, channel);
+        assert_eq!(words.join("-"), "yo-yo-acid-acorn-acre-acts");
+    }
+
     /// 少于 3 个词：生成时按 3 个词处理（与 Go 一致）。
     #[test]
     fn generate_min_words() {

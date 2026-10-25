@@ -28,7 +28,8 @@ Choose your device's CPU architecture, not the architecture of the sender.
 
 There are no macOS, Windows CLI or Android CLI release builds. Release attachments
 contain only the seven programs, public Windows certificate and `.ps1` installer.
-GitHub also provides automatic source archives.
+GitHub also provides automatic source archives. Android CI builds and signs the APK
+and checks the package; it does not run Android emulator or UI tests.
 
 ## Before connecting
 
@@ -91,7 +92,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./hermod-linux-x64.AppImage
 **Android:** allow APK installation from your download application, then open the APK.
 Only ARM64 is published. Minimum SDK is 34; compile/target SDK is 37. Keep the same
 signing keys when upgrading. For old releases signed with a temporary key, **export
-all inbox files before uninstalling** and installing v0.4.0. The same precaution
+all inbox files before uninstalling** and installing v0.4.1. The same precaution
 applies to Windows packages with a different prior signing identity. Uninstalling can
 remove private application data.
 

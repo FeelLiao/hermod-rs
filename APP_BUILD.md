@@ -1,10 +1,11 @@
-# Building and releasing Hermod 0.4.0
+# Building and releasing Hermod 0.4.1
 
 [User guide](README.md) · [中文使用说明](README.zh-CN.md)
 
 Release builds run in `.github/workflows/build-release.yml`. Local validation is
-Linux-only; Windows and Android installation/runtime validation belongs to their
-Actions jobs. A successful Linux build is not evidence that those jobs have passed.
+Linux-only. Windows installation/runtime checks run in Actions. Android builds and
+signs the ARM64 APK in Actions and checks the resulting package; no Android emulator
+or runtime tests run. A successful Linux build does not verify other platforms.
 
 ## Repository layout
 
@@ -15,7 +16,6 @@ Actions jobs. A successful Linux build is not evidence that those jobs have pass
 - `hermod-app/src-tauri/src`: desktop and Android Tauri commands; background job monitoring.
 - `hermod-app/plugins/documents`: Android SAF, permissions, system color and foreground notification adapters. No native UI screens.
 - `hermod-app/android`: pinned Android Gradle template; generated Tauri shell stays ignored under `src-tauri/gen/android`.
-- `hermod-app/android-tests`: emulator tests and a debug-only document provider.
 - `hermod-app/packaging`: flat MSIX manifest and public `.ps1` installer template; no `windows` subdirectory.
 - `hermod-app/scripts`: GUI packaging, signing initialization and platform smoke checks.
 - `scripts`: repository-wide version and Release allowlist checks. CI helpers are not Release attachments.
@@ -62,7 +62,7 @@ npm test --prefix hermod-app
 cd hermod-app
 APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri -- build --ci --bundles appimage -- --locked
 cd ..
-hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.0_amd64.AppImage
+hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.1_amd64.AppImage
 CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release --target x86_64-unknown-linux-musl -p hermod-cli
 readelf -l target/x86_64-unknown-linux-musl/release/hermod
 ```
@@ -118,8 +118,8 @@ gh secret set ANDROID_KEY_PASSWORD < signing-private/android-password
 ```
 
 These commands are for the maintainer to run. Missing signing secrets make the package
-jobs fail before toolchain setup and compilation. PR checks use Android debug signing
-only for disposable emulator builds; those APKs are not published. See
+jobs fail before toolchain setup and compilation. Pushes and PRs run Linux quality
+checks; Android release builds run for tags and manual workflow dispatch. See
 [GitHub's repository secret instructions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
 
 If only secrets were missing, configure them and re-run the failed jobs. If source or
@@ -139,7 +139,7 @@ Authenticode root-chain check is not a reason to place a test leaf certificate i
 See Microsoft's [certificate guidance](https://learn.microsoft.com/windows/msix/package/create-certificate-package-signing)
 and [WebView2 distribution guidance](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution).
 
-Android retains `org.hermod.transfer`; `versionCode=40000` for 0.4.0. Increase the code
+Android retains `org.hermod.transfer`; `versionCode=40100` for 0.4.1. Increase the code
 on every release and keep the signing key and alias. Neither the public certificate
 nor an MSIX signed as HermodTest grants a Microsoft Store publisher identity. Store
 submission is a separate process using the identity assigned by Partner Center.
@@ -173,9 +173,8 @@ from Kotlin `e:` compilation errors; inspect the first error and `What went wron
 section, not only Tauri's final Gradle exit-code wrapper.
 
 CI runs `tauri android init`, applies the template, then runs `tauri android build`
-for one ABI. Release uses ARM64 and the fixed keystore; x86_64 is only for debug emulator
-tests. Gradle's release tasks reject missing signing secrets. All GUI-related Android
-source and tooling live under `hermod-app`.
+for ARM64 with the fixed keystore. Gradle's release tasks reject missing signing
+secrets. All GUI-related Android source and tooling live under `hermod-app`.
 
 The native plugin uses `ACTION_OPEN_DOCUMENT`, `ACTION_OPEN_DOCUMENT_TREE` and
 `ACTION_CREATE_DOCUMENT`. Persisted grants belong to the selected export directory;
@@ -200,19 +199,16 @@ have their own permission. There is no fixed orientation or aspect ratio. Materi
 uses the Android system accent seed, system dark/light mode, bottom navigation on phones
 and a navigation rail on tablets. No native Material screens are maintained.
 
-Android CI runs API 34 and API 37 instrumentation on unpublished x86_64 builds; API 37
-uses the 16 KB system image. Checks exercise WebView/Rust loading, settings across
-activity recreation, a real SAF picker with unknown-length and revoked documents,
-API 37 permission denial, foreground-service survival and notification cancellation.
-Linux tests cover actual transfers, bounded streaming and failed exports. Browser tests
-exercise the same React flows on desktop, phone and tablet. These are complementary
-checks; physical SAF providers and OEM background policies still need device acceptance.
-The fixture document provider is only included in debug APKs.
+Android CI only compiles and signs the ARM64 APK, then verifies its signature,
+minimum/target SDK, native ABI, ZIP alignment and every ELF load segment's 16 KB
+alignment. It does not install an emulator or run instrumentation, Android UI tests
+or a separate Android lint task. Linux tests cover transfers, bounded streaming and
+failed exports; browser tests cover the desktop GUI. Android runtime behavior is not
+an automated release gate.
 
 ## Pipeline and publishing
 
-Pushes and PRs run Linux quality checks and Android API 34/37 tests. Tags and manual
-workflow dispatch also build:
+Pushes and PRs run Linux quality checks. Tags and manual workflow dispatch also build:
 
 | Runner | Output |
 | --- | --- |
@@ -233,7 +229,7 @@ After reviewing the commit and configuring signing secrets, the maintainer pushe
 
 ```bash
 git push origin master
-git push origin v0.4.0
+git push origin v0.4.1
 ```
 
 Do not move an already published tag to hide a failed build. Fix it in a new commit

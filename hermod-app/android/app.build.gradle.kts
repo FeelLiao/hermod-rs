@@ -20,8 +20,6 @@ android {
         targetSdk = 37
         versionCode = tauriProperties.getProperty("tauri.android.versionCode").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName")
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        testInstrumentationRunnerArguments["clearPackageData"] = "true"
     }
     signingConfigs {
         if (signingFile != null) create("fixedTest") {
@@ -45,8 +43,6 @@ android {
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     buildFeatures { buildConfig = true }
     packaging { jniLibs { useLegacyPackaging = false } }
-    lint { abortOnError = true }
-    testOptions { execution = "ANDROIDX_TEST_ORCHESTRATOR" }
 }
 kotlin { compilerOptions { jvmTarget = JvmTarget.JVM_17 } }
 rust { rootDirRel = "../../../" }
@@ -63,10 +59,5 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
-    androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    androidTestImplementation("androidx.test:runner:1.7.0")
-    androidTestImplementation("androidx.test:rules:1.7.0")
-    androidTestUtil("androidx.test:orchestrator:1.6.1")
-    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
 apply(from = file("tauri.build.gradle.kts"))

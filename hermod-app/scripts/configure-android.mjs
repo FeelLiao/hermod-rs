@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, cpSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, cpSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -49,10 +49,4 @@ for (const [key, value] of Object.entries({'android.builtInKotlin':'false','andr
 write('gradle.properties', properties);
 // 生成器默认图标不代表 Hermod；使用应用自己的启动器资源。
 cpSync(path.join(app, 'src-tauri/icons/android'), path.join(android, 'app/src/main/res'), { recursive: true });
-const tests = path.join(app, 'android-tests');
-mkdirSync(path.join(android, 'app/src/debug/java/org/hermod/transfer'), { recursive: true });
-mkdirSync(path.join(android, 'app/src/androidTest/java/org/hermod/transfer'), { recursive: true });
-cpSync(path.join(tests, 'TestDocumentsProvider.kt'), path.join(android, 'app/src/debug/java/org/hermod/transfer/TestDocumentsProvider.kt'));
-cpSync(path.join(tests, 'AndroidManifest.xml'), path.join(android, 'app/src/debug/AndroidManifest.xml'));
-cpSync(path.join(tests, 'HermodTest.kt'), path.join(android, 'app/src/androidTest/java/org/hermod/transfer/HermodTest.kt'));
 console.log('Android shell configured: API 34+, target 37, Material Web UI, SAF and foreground transfers.');

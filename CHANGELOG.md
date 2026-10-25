@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-25
+
+### Changed
+
+- Android CI builds and signs only the ARM64 APK, retaining signature, SDK, ABI
+  and 16 KB alignment checks. Release publishing no longer waits for emulator jobs.
+- Bump workspace, frontend and Tauri versions to 0.4.1 and Android versionCode to 40100.
+
+### Removed
+
+- Android API 34/37 emulator jobs, x86_64 test APK builds, instrumentation fixtures,
+  test dependencies, test-copy generation steps and the separate Android lint task.
+- Android phone/tablet browser test projects; desktop browser and Rust tests remain.
+
 ### Fixed
 
 - Declare the Android document plugin's Activity dependency directly so its

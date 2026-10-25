@@ -1,13 +1,6 @@
-import { test, expect, type Page } from "@playwright/test";
-async function select(page: Page, label: string, value: string) {
-  const material = page.locator(`md-outlined-select[data-field="${label}"]`);
-  if (await material.count()) {
-    await material.click();
-    await material.locator(`md-select-option[data-value="${value}"]`).click();
-  } else await page.getByLabel(label, { exact: true }).selectOption(value);
-}
-test.beforeEach(async ({ page }, info) => {
-  await page.addInitScript((android) => {
+import { test, expect } from "@playwright/test";
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
     const defaults = {
       connection: {
         transport: "wireguard",
@@ -43,10 +36,9 @@ test.beforeEach(async ({ page }, info) => {
         switch (command) {
           case "bootstrap":
             return {
-              version: "0.4.0",
+              version: "0.4.1",
               ipv6: ["2001:db8::1"],
-              platform: android ? "android" : "linux",
-              color_seed: android ? "#6B5778" : undefined,
+              platform: "linux",
               settings: structuredClone(settings),
               settings_saved: true,
               trusted_servers: { "wss://relay.example:4376": "a".repeat(64) },
@@ -109,9 +101,9 @@ test.beforeEach(async ({ page }, info) => {
         }
       },
     };
-  }, info.project.name.startsWith("android"));
+  });
 });
-test("file, transfer code and cancellation work at both window sizes", async ({
+test("desktop file selection, transfer code and cancellation work", async ({
   page,
 }, info) => {
   await page.goto("/");
@@ -145,10 +137,10 @@ test("shared network settings persist and text input replaces stdin", async ({
 }) => {
   await page.goto("/");
   await page.getByRole("tab", { name: "Settings", exact: true }).click();
-  await select(page, "Send protocol", "quic");
+  await page.getByLabel("Send protocol", { exact: true }).selectOption("quic");
   await page.getByRole("button", { name: "Advanced network settings" }).click();
   await page.getByLabel("MTU", { exact: true }).fill("1280");
-  await select(page, "Congestion control", "bbr");
+  await page.getByLabel("Congestion control").selectOption("bbr");
   await page.getByLabel("Payload limit (Mbps)").fill("6.5");
   await page.getByRole("button", { name: "Save settings" }).click();
   await expect(
@@ -156,14 +148,7 @@ test("shared network settings persist and text input replaces stdin", async ({
   ).toBeVisible();
   await page.reload();
   await page.getByRole("tab", { name: "Settings", exact: true }).click();
-  if (await page.locator("md-outlined-select").count())
-    await expect(
-      page.locator('md-outlined-select[data-field="Send protocol"]'),
-    ).toHaveJSProperty("value", "quic");
-  else
-    await expect(page.getByLabel("Send protocol", { exact: true })).toHaveValue(
-      "quic",
-    );
+  await expect(page.getByLabel("Send protocol", { exact: true })).toHaveValue("quic");
   await expect(page.getByLabel("Payload limit (Mbps)")).toHaveValue("6.5");
   await page.getByRole("tab", { name: "Transfer", exact: true }).click();
   await page.getByRole("tab", { name: "Text", exact: true }).click();

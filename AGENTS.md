@@ -61,8 +61,9 @@ The ignored QUIC throughput benchmark is opt-in:
 `cargo test -p hermod-core --release -- --ignored quic_throughput`.
 No public signaling service is required for the quality gate.
 
-Browser tests validate Fluent desktop and Material phone/tablet UIs through mocked IPC. Native Linux AppImage smoke tests
+Browser tests validate Fluent desktop UI through mocked IPC. Native Linux AppImage smoke tests
 check real window creation. Windows CI validates signing identity and native MSIX
-installation/launch. Android CI tests API 34 and 37 with an unpublished x86_64 ABI;
-only signed ARM64 APKs ship. API/toolchain versions are pinned in APP_BUILD.md and Gradle.
+installation/launch. Android CI only builds and signs the ARM64 APK, then checks its
+signature, SDK versions, ABI and alignment. Android emulator, instrumentation and
+Android UI tests are not run. API/toolchain versions are pinned in APP_BUILD.md and Gradle.
 The workflow gates publishing on all jobs, then enforces an exact Release file allowlist.

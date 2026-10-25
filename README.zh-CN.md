@@ -148,6 +148,8 @@ QUIC 支持 BBR/CUBIC/NewReno。不兼容组合会报错，不会静默忽略。
 - **导出失败**：收件箱副本仍在，重新选择可写目录后导出；Android 重新授权目录。
 - **Windows 签名不匹配**：从同一个 Release 重新下载三份文件，不要把陌生证书导入 Root。
 
+Android 在 Actions 中只编译、签名并检查 ARM64 APK，不运行安卓模拟器或界面测试。
+
 [构建与发布](APP_BUILD.md) · [架构与贡献指南](AGENTS.md) · [更新日志](CHANGELOG.md) · [许可证](LICENSE)
 
 项目灵感来自 [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole)。协议采用 CPace、

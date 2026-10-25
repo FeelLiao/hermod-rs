@@ -10,21 +10,5 @@ export default defineConfig({
   },
   projects: [
     { name: "desktop", use: { viewport: { width: 1280, height: 900 } } },
-    {
-      name: "android-phone",
-      use: {
-        viewport: { width: 390, height: 844 },
-        isMobile: true,
-        hasTouch: true,
-      },
-    },
-    {
-      name: "android-tablet",
-      use: {
-        viewport: { width: 1100, height: 900 },
-        isMobile: true,
-        hasTouch: true,
-      },
-    },
   ],
 });

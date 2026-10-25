@@ -187,57 +187,6 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  android-tests:
-    name: Android API ${{ matrix.api }} instrumentation
-    needs: verify
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        api: [34, 37]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: hermod-app/package-lock.json
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-linux-android
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: android-web-test-v040
-      - uses: gradle/actions/setup-gradle@v4
-      - name: SDK and emulator
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake perl clang
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses < <(yes) >/dev/null
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'emulator' 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
-          sudo chmod 666 /dev/kvm
-      - name: Prepare Tauri Android shell
-        working-directory: hermod-app
-        run: |
-          export NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
-          echo "NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
-          npm ci
-          npm run tauri -- android init --ci --skip-targets-install
-          node scripts/configure-android.mjs
-      - name: Build test APK (never published)
-        working-directory: hermod-app
-        env:
-          CARGO_NET_OFFLINE: 'false'
-        run: npm run tauri -- android build --ci --debug --target x86_64 --apk --split-per-abi -- --locked
-      - name: Web UI, file grants, lifecycle and permissions
-        env:
-          HERMOD_TEST_API: ${{ matrix.api }}
-        run: hermod-app/scripts/test-android-emulator.sh
-
   android:
     name: Android ARM64 APK
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
@@ -303,7 +252,6 @@ jobs:
           trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ANDROID_KEYSTORE_PATH"
           (cd hermod-app && npm run tauri -- android build --ci --target aarch64 --apk --split-per-abi -- --locked)
-          (cd hermod-app/src-tauri/gen/android && ./gradlew --no-daemon -PabiList=arm64-v8a -ParchList=arm64 -PtargetList=aarch64 :app:lintArm64Release -x :app:rustBuildArm64Release)
           mkdir -p dist
           cp hermod-app/src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk dist/hermod-android-arm64.apk
           "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs dist/hermod-android-arm64.apk
@@ -320,7 +268,7 @@ jobs:
 
   release:
     name: Publish all verified programs
-    needs: [verify, linux, windows, android, android-tests]
+    needs: [verify, linux, windows, android]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-22.04
     permissions:

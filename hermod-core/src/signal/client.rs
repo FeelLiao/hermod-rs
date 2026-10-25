@@ -9,7 +9,9 @@ use crate::signal::tls::pinned_client_config;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::{connect_async_tls_with_config, Connector, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
+};
 
 /// 信令 WebSocket 流类型（明文或 TLS 由 URL scheme 决定）。
 pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -166,7 +168,18 @@ pub async fn sender_handshake(
     channel_id: u16,
     password: &str,
 ) -> Result<([u8; 32], ObservedAddrs), ClientError> {
+    sender_handshake_with_ready(stream, channel_id, password, || {}).await
+}
+
+/// 频道创建成功回调；不在网络尚未连接时显示可用传输码。
+pub async fn sender_handshake_with_ready(
+    stream: &mut WsStream,
+    channel_id: u16,
+    password: &str,
+    on_ready: impl FnOnce() + Send,
+) -> Result<([u8; 32], ObservedAddrs), ClientError> {
     let observed = allocate(stream, channel_id).await?;
+    on_ready();
     wait_ready(stream).await?;
 
     let (session, my_pub) =
@@ -258,19 +271,15 @@ mod tests {
 
     async fn run_test_relay(mut tx: ServerWs, mut rx: ServerWs) {
         // tx 的 allocate → 回 ok
-        let alloc: Message = serde_json::from_str(
-            tx.next().await.unwrap().unwrap().to_text().unwrap(),
-        )
-        .unwrap();
+        let alloc: Message =
+            serde_json::from_str(tx.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
         let channel_id = alloc.channel_id;
         let ok_json = serde_json::to_string(&Message::ok(channel_id, b"{}".to_vec())).unwrap();
         tx.send(WsMessage::text(ok_json)).await.unwrap();
 
         // rx 的 join → 回 ok，并通知 tx ready
-        let join: Message = serde_json::from_str(
-            rx.next().await.unwrap().unwrap().to_text().unwrap(),
-        )
-        .unwrap();
+        let join: Message =
+            serde_json::from_str(rx.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
         assert_eq!(join.channel_id, channel_id);
         let ok_json = serde_json::to_string(&Message::ok(join.channel_id, b"{}".to_vec())).unwrap();
         rx.send(WsMessage::text(ok_json)).await.unwrap();

@@ -1,0 +1,19 @@
+Hermod TEST MSIX installation (Windows 10 2004+ / Windows 11, x64)
+
+This package is self-signed for testing, not Microsoft Store or production signed.
+Verify the release SHA256SUMS and obtain all files from the same trusted release.
+The .cer contains only the public certificate; no private signing key is shipped.
+
+1. Install the Microsoft Edge WebView2 Evergreen Runtime if it is not already
+   installed: https://developer.microsoft.com/microsoft-edge/webview2/
+2. In an elevated PowerShell window, from the downloaded asset directory:
+   Import-Certificate -FilePath .\hermod-windows-test-certificate.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+3. As your normal user:
+   Add-AppxPackage .\hermod-windows-x86_64-test-signed.msix
+4. Start "Hermod (Test)" from the Start menu. Allow its IPv6 network connection
+   if Windows Firewall prompts; both peers need reachable IPv6.
+
+A new test certificate is created on every build. Trust the matching certificate
+before reinstalling. If Windows rejects an update, export your inbox first, then
+uninstall the old test package and install the new one. Uninstall removes private
+app data. Test certificates are NOT a production signing or update mechanism.

@@ -111,7 +111,20 @@ pub fn classify_input(arg: &str, is_stdin_piped: bool) -> (Kind, String) {
 /// 目标目录之外（如 `../../etc/passwd`）。
 pub fn safe_destination_path(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, TransferError> {
     // 1. 只取最后一段文件名，剥掉所有目录分量（兼容 / 和 \）。
-    let mut base = file_base(name).to_string();
+    let mut base: String = file_base(name).chars()
+        .map(|c| if c.is_control() || "<>:\"|?*".contains(c) { '_' } else { c })
+        .collect();
+    // 使用各平台都能接受的文件名，避免 Windows 保留设备名和末尾点/空格。
+    base = base.trim_end_matches(['.', ' ']).to_string();
+    let stem = base.split('.').next().unwrap_or("").to_ascii_uppercase();
+    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ["COM", "LPT"].iter().any(|prefix| stem.strip_prefix(prefix)
+            .is_some_and(|suffix| matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))) {
+        base.insert(0, '_');
+    }
+    // 给去重后缀和临时文件扩展名留空间，并且不截断 UTF-8 字符。
+    while base.len() > 200 { base.pop(); }
+    base = base.trim_end_matches(['.', ' ']).to_string();
     // 2. 空 / "." / ".." 都归为占位名 "received"（与 Go 一致）。
     if base.is_empty() || base == "." || base == ".." {
         base = "received".to_string();
@@ -190,7 +203,7 @@ mod tests {
     /// 每个测试一个独立临时目录（放系统 temp 下，避免污染工作区）。
     fn temp_dir(tag: &str) -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let d = std::env::temp_dir().join(format!("hermod-transfer-{tag}-{n}"));
+        let d = std::env::temp_dir().join(format!("hermod-transfer-{}-{tag}-{n}", std::process::id()));
         fs::create_dir_all(&d).unwrap();
         d
     }
@@ -303,6 +316,23 @@ mod tests {
             safe_destination_path(&dir, "report.pdf").unwrap(),
             dir.join("report.pdf")
         );
+    }
+
+    #[test]
+    fn names_are_portable_across_desktop_and_mobile_filesystems() {
+        let dir = temp_dir("portable");
+        for (input, expected) in [
+            ("CON.txt", "_CON.txt"), ("aux", "_aux"), ("LPT1.zip", "_LPT1.zip"),
+            ("report:2026?.zip", "report_2026_.zip"), ("trailing. ", "trailing"),
+            ("地球 3.0.zip", "地球 3.0.zip"), ("bad\0name", "bad_name"),
+        ] {
+            assert_eq!(safe_destination_path(&dir, input).unwrap(), dir.join(expected));
+        }
+        let name = "地球".repeat(100);
+        let path = safe_destination_path(&dir, &name).unwrap();
+        assert!(path.file_name().unwrap().to_str().unwrap().len() <= 200);
+        fs::write(&path, "content").unwrap();
+        assert_ne!(safe_destination_path(&dir, &name).unwrap(), path);
     }
 
     #[test]

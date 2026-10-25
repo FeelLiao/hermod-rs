@@ -5,6 +5,7 @@
 //!
 //! 一条传输流、keep-alive：GET 与 POST 复用同一条流。
 
+use crate::bandwidth::{BandwidthLimit, Pacer, RECEIVE_LIMIT_HEADER};
 use crate::http_meta;
 use crate::transfer::{self, Kind};
 use crate::transport::http::{HttpError, Request, write_response, write_response_head};
@@ -42,6 +43,18 @@ pub async fn serve<S>(stream: S, opts: ServeOptions) -> Result<ServeOutcome, Htt
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    serve_with_limit(stream, opts, BandwidthLimit::UNLIMITED).await
+}
+
+/// 限制写入传输层的速率，同时遵守接收端在加密请求中声明的预算。
+pub async fn serve_with_limit<S>(
+    stream: S,
+    opts: ServeOptions,
+    limit: BandwidthLimit,
+) -> Result<ServeOutcome, HttpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let (r, mut w) = tokio::io::split(stream);
     let mut reader = BufReader::new(r);
     let path = http_meta::token_path(&opts.token);
@@ -62,6 +75,19 @@ where
         crate::log_info!(method = %req.method, path = %req.path, "request received");
         match (req.method.as_str(), req.path.as_str()) {
             ("GET", p) if p == path => {
+                let peer_limit = req
+                    .header(RECEIVE_LIMIT_HEADER)
+                    .map(str::parse::<u64>)
+                    .transpose()
+                    .map_err(|_| HttpError::Malformed("invalid receive bandwidth limit".into()))?
+                    .map(BandwidthLimit::from_bytes_per_second)
+                    .unwrap_or_default();
+                let effective = limit.stricter(peer_limit);
+                let pacer = Pacer::new(effective);
+                crate::log_info!(
+                    limit_mbps = effective.mbps(),
+                    "payload bandwidth limit (0 = unlimited)"
+                );
                 let cd = http_meta::content_disposition(&opts.name)?;
                 let kind = http_meta::x_hermod_kind_value(opts.kind);
                 let headers = [
@@ -79,7 +105,7 @@ where
                 // 64 KiB：QUIC/TCP 下都减少 read/write 往返次数。
                 let mut buf = [0u8; 64 * 1024];
                 while remaining > 0 {
-                    let want = (buf.len() as u64).min(remaining) as usize;
+                    let want = (pacer.chunk_len() as u64).min(remaining) as usize;
                     let n = body.read(&mut buf[..want]).await?;
                     if n == 0 {
                         return Err(HttpError::Malformed(
@@ -87,6 +113,7 @@ where
                         ));
                     }
                     hasher.update(&buf[..n]);
+                    pacer.wait(n).await;
                     w.write_all(&buf[..n]).await?;
                     remaining -= n as u64;
                     sent += n as u64;
@@ -137,6 +164,52 @@ where
 mod tests {
     use super::*;
     use crate::transport::http::client::fetch;
+
+    /// 大容量 duplex 避免读端反压伪装成发送端限速；测量最后一次写入回调。
+    #[tokio::test]
+    async fn sender_paces_payload_and_honors_receiver_budget() {
+        use crate::transport::http::client::fetch_with_limit;
+        use std::{
+            sync::{Arc, Mutex},
+            time::{Duration, Instant},
+        };
+        for (tx_limit, rx_limit) in [("0.8", "0"), ("0", "0.8"), ("1.6", "0.8")] {
+            let data = vec![0x42; 50_000];
+            let final_write = Arc::new(Mutex::new(None));
+            let observed = final_write.clone();
+            let options = ServeOptions {
+                token: [7; 16],
+                kind: Kind::File,
+                name: "paced.bin".into(),
+                size: data.len() as u64,
+                body: Box::new(std::io::Cursor::new(data.clone())),
+                progress: Some(Box::new(move |n| {
+                    if n == 50_000 {
+                        *observed.lock().unwrap() = Some(Instant::now());
+                    }
+                })),
+            };
+            let (rx, tx) = tokio::io::duplex(1024 * 1024);
+            let started = Instant::now();
+            let mut dest = Vec::new();
+            let (sent, received) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::try_join!(
+                    serve_with_limit(tx, options, tx_limit.parse().unwrap()),
+                    fetch_with_limit(rx, &[7; 16], &mut dest, None, rx_limit.parse().unwrap())
+                )
+            })
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                final_write.lock().unwrap().unwrap().duration_since(started)
+                    >= Duration::from_millis(500)
+            );
+            assert_eq!(dest, data);
+            assert!(sent.verified && received.verified);
+            assert_eq!(sent.sha256, received.sha256);
+        }
+    }
 
     /// 服务端 + 客户端（duplex）：GET 拉文件 + POST /done 裁决通过。
     #[tokio::test]

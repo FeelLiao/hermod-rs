@@ -69,6 +69,7 @@
 //! 注意：真实的 PSK 必须来自 CPace 握手（[`crypto::cpace`]）后的
 //! [`crypto::kdf::derive_wg_psk`]，上面 `k = [0u8; 32]` 只是占位。
 
+pub mod bandwidth;
 pub mod config;
 pub mod crypto;
 pub mod http_meta;

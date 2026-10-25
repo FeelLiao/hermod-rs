@@ -9,3 +9,25 @@
 /docs
 
 # Nested Go reference repo (has its own git history/remote)
+
+# Tauri 和前端生成文件
+**/node_modules/
+/hermod-app/dist/
+/hermod-app/src-tauri/gen/android/.gradle/
+/hermod-app/src-tauri/gen/android/.idea/
+/hermod-app/src-tauri/gen/android/local.properties
+/hermod-app/src-tauri/gen/android/key.properties
+/hermod-app/src-tauri/gen/android/**/build/
+**/*.jks
+**/*.keystore
+**/*.pfx
+/hermod-app/test-results/
+/hermod-app/playwright-report/
+
+# Android 工程由锁定版本的 Tauri CLI 生成，原生插件源码单独跟踪。
+hermod-app/src-tauri/gen/
+hermod-app/plugins/documents/permissions/schemas/
+hermod-app/plugins/documents/android/.gradle/
+hermod-app/plugins/documents/android/build/
+/dist/
+hermod-app/plugins/documents/android/.tauri/

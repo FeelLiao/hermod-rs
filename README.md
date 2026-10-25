@@ -32,6 +32,40 @@ signaling protocol, CPace PAKE, and transfer-code format.
 
 ## Quick start
 
+**Tauri app (Windows, Linux, macOS and Android):**
+```bash
+cd hermod-app
+npm ci
+npm run tauri dev
+# Package on the current desktop OS:
+npm run tauri build
+```
+
+The GUI uses **Tauri 2 + Material Design 3**, with a desktop navigation rail,
+phone bottom navigation, system/light/dark themes, sending/receiving, code copying,
+cancellation, progress, RTT, SHA-256 verification and an editable bandwidth budget.
+The old egui/eframe app has been replaced. Node.js is needed to build, not to run
+an installed app. Fonts and UI assets are bundled; no CDN is contacted.
+
+Use the system picker to select a file. Completed downloads appear in the private
+**Inbox**; **Save a copy** opens the platform's save dialog. Android uses authorized
+`content://` document streams, not guessed filesystem paths or broad storage
+permissions. Export important files before uninstalling the app.
+
+The GUI starts with an **8 Mbps payload cap**. Adjust this to about 70–85% of your
+actual upload capacity; 8 Mbps is only a starting value, not a bandwidth estimate.
+CLI defaults remain unlimited. Both peers still need reachable **IPv6**.
+
+Linux build dependencies (Ubuntu 22.04+):
+```bash
+sudo apt install build-essential pkg-config cmake perl clang \
+  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+```
+
+See [APP_BUILD.md](APP_BUILD.md) for Android setup, file lifecycle, installation,
+release artifacts and platform testing. Desktop builds reuse the CLI trust config
+unless an app-specific `config.yaml` exists; Android uses the pinned default relay.
+
 **Build:**
 ```bash
 cargo build --release -p hermod-cli
@@ -75,6 +109,51 @@ The file lands in the current directory.
 > established over IPv6 UDP; if a peer is behind a firewall that blocks inbound UDP,
 > the connection may fail. There is no IPv4 fallback or NAT traversal.
 
+## Keep browsing responsive
+
+An unrestricted upload can fill the uplink queue and delay other requests.
+Both CLI commands accept `--limit-mbps` (decimal Mbps, 0 = unlimited):
+
+```bash
+# Example: on a measured 20 Mbps uplink, start with a 15 Mbps payload cap
+./hermod tx report.pdf --limit-mbps 15
+./hermod rx CODE --limit-mbps 15
+```
+
+The sender applies the lower of its own cap and the receiver's requested cap.
+Use upgraded peers for sender-side pacing requested by the receiver. The GUI
+starts at a visible 10 Mbps cap that you can change or disable. The CLI preserves
+unlimited operation unless a cap is supplied. This is a payload budget, so allow
+headroom for protocol overhead, retransmissions and other applications. Start
+at 70–85% of measured **upload** capacity. See the
+[investigation and reproducible latency comparison](NETWORK_PERFORMANCE.md).
+
+## IPv6 in WSL 2
+
+Adding a made-up IPv6 address does not provide an Internet route. If Windows
+already has working IPv6 but the WSL NAT interface has only `fe80::` addresses,
+use [Microsoft's mirrored networking mode](https://learn.microsoft.com/en-us/windows/wsl/networking#mirrored-mode-networking)
+on supported Windows 11 versions. Back up `%USERPROFILE%\.wslconfig`, then add
+this key to its existing `[wsl2]` section:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+```
+
+Save work in all WSL terminals and stop containers that must not be interrupted.
+Run `wsl --shutdown` from **Windows PowerShell**, then reopen WSL and check:
+
+```bash
+ip -6 address show scope global
+ip -6 route show default
+```
+
+The setting takes effect only after restarting WSL. A global address and default
+route are prerequisites, not proof that the peer's UDP path is reachable. Host
+and router firewalls must permit the transfer. Hermod does not disable firewalls
+or assign duplicate Windows addresses to the guest.
+
 ## Usage
 
 ### Global flags
@@ -101,6 +180,7 @@ hermod tx [INPUT] [flags]
 | `--server` | `-s` | `wss://oracle.stariverfeel.eu.org:4376` | Signaling server URL (saved as default when specified) |
 | `--words` | `-w` | `3` | Number of words in the transfer code |
 | `--listen` | `-l` | `[::]:0` | Local UDP bind address (IPv6) |
+| `--limit-mbps` | | `0` | Payload cap in Mbps; 0 = unlimited. Leave upload headroom for browsing. |
 | `--transport` | | `quic` | Data plane: `quic` or `wireguard`; receiver auto-follows by default |
 | `--wg-mtu` | | `1400` | WireGuard inner IP MTU (outer packet = inner + 80; WireGuard only) |
 | `--quic-cc` | | `bbr` | QUIC congestion control: `bbr`, `cubic`, or `newreno` (QUIC only) |
@@ -138,6 +218,7 @@ hermod rx [CODE] [flags]
 | `--server` | `-s` | `wss://oracle.stariverfeel.eu.org:4376` | Signaling server URL (saved as default when specified) |
 | `--destination` | `-d` | current directory | Output directory |
 | `--listen` | `-l` | `[::]:0` | Local UDP bind address (IPv6) |
+| `--limit-mbps` | | `0` | Receiver payload cap in Mbps; sent to upgraded senders. 0 = unlimited. |
 | `--transport` | | `auto` | `auto` follows the sender; `wireguard`/`quic` forces and verifies |
 | `--wg-mtu` | | `1400` | WireGuard inner IP MTU (must match the sender; WireGuard only) |
 | `--quic-cc` | | `bbr` | QUIC congestion control: `bbr`, `cubic`, or `newreno` (QUIC only) |

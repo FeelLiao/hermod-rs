@@ -92,6 +92,14 @@ pub struct TxArgs {
     #[arg(short, long, default_value = "[::]:0")]
     pub listen: String,
 
+    /// 文件载荷限速；为网页请求保留上行余量，0 保留原来的不限速模式。
+    #[arg(
+        long,
+        default_value = "0",
+        help = "Payload limit in Mbps (0 = unlimited); use 70-85% of upload capacity"
+    )]
+    pub limit_mbps: hermod_core::bandwidth::BandwidthLimit,
+
     /// WireGuard inner IP MTU (ignored for QUIC)
     #[arg(long, default_value_t = 1400)]
     pub wg_mtu: usize,
@@ -117,6 +125,14 @@ pub struct RxArgs {
     /// UDP bind address (IPv6)
     #[arg(short, long, default_value = "[::]:0")]
     pub listen: String,
+
+    /// 文件载荷限速；为网页请求保留上行余量，0 保留原来的不限速模式。
+    #[arg(
+        long,
+        default_value = "0",
+        help = "Payload limit in Mbps (0 = unlimited); use 70-85% of upload capacity"
+    )]
+    pub limit_mbps: hermod_core::bandwidth::BandwidthLimit,
 
     /// WireGuard inner IP MTU (ignored for QUIC)
     #[arg(long, default_value_t = 1400)]

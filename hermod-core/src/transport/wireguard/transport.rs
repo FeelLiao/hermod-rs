@@ -11,7 +11,7 @@
 use crate::crypto::cpace::Role;
 use crate::transport::iface::{AbortHandle, Transport, TransportConnection};
 use crate::transport::wireguard::session::{BUNDLE_VERSION, EndpointBundle};
-use crate::transport::wireguard::stack::bridge::{BridgeEnds, BridgeStream, pump_socket};
+use crate::transport::wireguard::stack::bridge::{BridgeStream, pump_socket};
 use crate::transport::wireguard::stack::driver::{OVERLAY_RX, OVERLAY_TX, TunnelStack};
 use crate::transport::wireguard::udp;
 use crate::transport::wireguard::wg::driver::WireGuardTunnel;
@@ -320,7 +320,26 @@ async fn driver_loop(
     peer_http: u16,
     mut cmd_rx: mpsc::Receiver<Command>,
 ) {
-    let mut bridged: Vec<(smoltcp::iface::SocketHandle, BridgeEnds)> = Vec::new();
+    // 文件异步打开和桌面调度可能慢于接收端拨号；握手前先准备 TCP 监听。
+    let (stream, ends) = BridgeStream::new();
+    let h = stack.add_tcp(TunnelStack::new_tcp_socket());
+    let local = if role == Role::Sender {
+        OVERLAY_TX
+    } else {
+        OVERLAY_RX
+    };
+    if let Err(error) = stack.listen(
+        h,
+        smoltcp::wire::IpListenEndpoint {
+            addr: Some(ipv4_addr(local)),
+            port: local_http,
+        },
+    ) {
+        crate::log_warn!(%error, "could not prepare HTTP listener");
+        return;
+    }
+    let mut listener = Some(stream);
+    let mut bridged = vec![(h, ends)];
     let mut ticker = tokio::time::interval(TICK);
     let mut last_keepalive = Instant::now();
     /// rx 的超时兜底：3 秒仍未建立才自己发起。
@@ -401,15 +420,7 @@ async fn driver_loop(
                 match cmd {
                     Command::Listen { reply } => {
                         crate::log_info!(port = local_http, "listening");
-                        let (stream, ends) = BridgeStream::new();
-                        let h = stack.add_tcp(TunnelStack::new_tcp_socket());
-                        let local = if role == Role::Sender { OVERLAY_TX } else { OVERLAY_RX };
-                        let _ = stack.listen(
-                            h,
-                            smoltcp::wire::IpListenEndpoint { addr: Some(ipv4_addr(local)), port: local_http },
-                        );
-                        bridged.push((h, ends));
-                        let _ = reply.send(Ok(stream));
+                        let _ = reply.send(listener.take().ok_or(WgError::Closed));
                     }
                     Command::Dial { reply } => {
                         crate::log_info!(peer_http, "dialing");

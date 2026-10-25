@@ -32,6 +32,7 @@ pub async fn run(
         value => Some(TransportKind::parse(value).unwrap_or_default()),
     };
     let opts = SessionOptions {
+        bandwidth_limit: args.limit_mbps,
         mtu: Some(args.wg_mtu),
         udp_bind: Some(util::parse_listen(&args.listen)?),
         transport,
@@ -70,11 +71,12 @@ pub async fn run(
         got2.store(n, Ordering::Relaxed);
         let _ = tick_tx.try_send(());
     };
-    let fut = orchestrate::receive(
+    let fut = orchestrate::receive_with_limit(
         &mut rx.conn,
         &rx.token,
         Path::new(&dest),
         Some(&mut on_progress),
+        args.limit_mbps,
     );
     let receipt = match progress::with_idle_timeout(fut, tick_rx, IDLE).await {
         Ok(Ok(r)) => r,

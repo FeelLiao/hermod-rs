@@ -93,6 +93,13 @@ impl AnyTransport {
         }
     }
 
+    /// 限速时缩小 QUIC 应用队列，载荷节流由共享 HTTP 层执行。
+    pub fn set_bandwidth_limit(&mut self, limit: crate::bandwidth::BandwidthLimit) {
+        if let AnyTransport::Quic(t) = self {
+            t.set_bandwidth_limit(limit);
+        }
+    }
+
     /// QUIC 拥塞控制（WireGuard 忽略）。
     pub fn set_quic_congestion(&mut self, congestion: CongestionControl) {
         if let AnyTransport::Quic(t) = self {

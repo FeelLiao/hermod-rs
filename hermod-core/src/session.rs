@@ -77,6 +77,8 @@ fn sha256_32(data: &[u8]) -> [u8; 32] {
 /// 会话建立的可选参数（对应 CLI 的 `--transport` / `--wg-mtu` / `--listen` 等）。
 #[derive(Debug, Clone)]
 pub struct SessionOptions {
+    /// 载荷限速，同时用于控制 QUIC 排队窗口。
+    pub bandwidth_limit: crate::bandwidth::BandwidthLimit,
     /// WireGuard 内层 IP MTU（默认 1420；QUIC 忽略）。
     pub mtu: Option<usize>,
     /// UDP 绑定地址（默认 `[::]:0`）。
@@ -94,6 +96,7 @@ pub struct SessionOptions {
 impl Default for SessionOptions {
     fn default() -> Self {
         Self {
+            bandwidth_limit: crate::bandwidth::BandwidthLimit::UNLIMITED,
             mtu: None,
             udp_bind: None,
             // 默认 auto：接收端跟随发送端；发送端用 sender_default()。
@@ -163,7 +166,19 @@ fn parse_hex32(s: &str) -> Option<[u8; 32]> {
 async fn open(config: &Config) -> Result<WsStream, SessionError> {
     let (url, spki) = expected_spki(config)?;
     crate::log_info!(server = %url, "connecting to signaling server");
-    let ws = client::connect_pinned(&url, spki).await?;
+    let ws = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        client::connect_pinned(&url, spki),
+    )
+    .await
+    .map_err(|_| {
+        client::ClientError::Ws(tokio_tungstenite::tungstenite::Error::Io(
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "signaling connection timed out after 15s; check IPv6 connectivity and the server",
+            ),
+        ))
+    })??;
     crate::log_info!("websocket connection established");
     Ok(ws)
 }
@@ -179,11 +194,22 @@ pub async fn sender_session_with(
     code: &str,
     opts: &SessionOptions,
 ) -> Result<TxSession, SessionError> {
+    sender_session_with_ready(config, code, opts, || {}).await
+}
+
+/// 信令频道创建成功后才公布传输码，GUI 可显示准确的等待状态。
+pub async fn sender_session_with_ready(
+    config: &Config,
+    code: &str,
+    opts: &SessionOptions,
+    on_ready: impl FnOnce() + Send,
+) -> Result<TxSession, SessionError> {
     let (channel_id, words) = wordlist::parse_transfer_code(code)?;
     let password = words.join("-");
     let mut ws = open(config).await?;
     crate::log_info!(channel_id, "waiting for receiver to join channel");
-    let (k, observed) = client::sender_handshake(&mut ws, channel_id, &password).await?;
+    let (k, observed) =
+        client::sender_handshake_with_ready(&mut ws, channel_id, &password, on_ready).await?;
     crate::log_info!(
         public_v6 = %observed.public_ipv6,
         public_v4 = %observed.public_ipv4,
@@ -250,6 +276,7 @@ fn build_transport(
     if let Some(mtu) = opts.mtu {
         transport.set_wg_mtu(mtu);
     }
+    transport.set_bandwidth_limit(opts.bandwidth_limit);
     transport.set_quic_congestion(opts.quic_congestion);
     transport.set_quic_mtu(opts.quic_mtu);
     // server 观测地址作为 server-reflexive 提示（仅 IPv6 生效）

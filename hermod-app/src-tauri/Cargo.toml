@@ -1,0 +1,36 @@
+[package]
+name = "hermod-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "hermod_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+hermod-core = { path = "../../hermod-core" }
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-dialog = "2.8.3"
+tauri-plugin-fs = "2.7.1"
+tauri-plugin-clipboard-manager = "2.5.0"
+tauri-plugin-documents = { path = "../plugins/documents" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "fs", "io-util"] }
+getrandom = { version = "0.4", features = ["sys_rng"] }
+rand_core = "0.10"
+if-addrs = "0.15"
+
+[dev-dependencies]
+tokio-tungstenite = "0.30"
+futures-util = "0.3"
+
+[lints]
+workspace = true
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+tauri-plugin-single-instance = "2"

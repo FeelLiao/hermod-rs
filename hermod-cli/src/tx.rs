@@ -33,16 +33,15 @@ pub async fn run(
     // 0) 先确认 server 已信任，避免打印一个用不了的传输码
     hermod_core::session::expected_spki(&cfg).map_err(util::boxed)?;
 
-    // 1) 生成并打印传输码（stdout 只放这个）
+    // 1) 生成传输码，频道创建成功后才在回调中打印到 stderr。
     let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
     let (_channel_id, code) = wordlist::generate_transfer_code(&mut rng, args.words);
-    // 对齐 Go：传输码打到 stderr，格式 "Transfer code: <code>"；不受 --quiet 抑制。
-    eprintln!("Transfer code: {code}");
 
     // 2) 建会话
     verbosity::debug(format!("server_url={}", cfg.server_url));
     let transport = TransportKind::parse(&args.transport_opts.transport).unwrap_or_default();
     let opts = SessionOptions {
+        bandwidth_limit: args.limit_mbps,
         mtu: Some(args.wg_mtu),
         udp_bind: Some(util::parse_listen(&args.listen)?),
         transport: Some(transport),
@@ -51,7 +50,9 @@ pub async fn run(
     };
     let mut tx = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
-        session::sender_session_with(&cfg, &code, &opts),
+        session::sender_session_with_ready(&cfg, &code, &opts, || {
+            eprintln!("Transfer code: {code}")
+        }),
     )
     .await
     .map_err(|_| "handshake timed out")?
@@ -86,7 +87,13 @@ pub async fn run(
                 sent2.store(n, Ordering::Relaxed);
                 let _ = tick_tx.try_send(());
             }));
-            let fut = orchestrate::send_file(&mut tx.conn, tx.token, path, progress);
+            let fut = orchestrate::send_file_with_limit(
+                &mut tx.conn,
+                tx.token,
+                path,
+                progress,
+                args.limit_mbps,
+            );
             let out = run_with_idle(fut, tick_rx, sent).await?;
             pb.finish_and_clear();
             finish_and_shutdown(&mut tx, out.verified, total, &out.sha256).await?;
@@ -109,7 +116,13 @@ pub async fn run(
                 sent2.store(n, Ordering::Relaxed);
                 let _ = tick_tx.try_send(());
             }));
-            let fut = orchestrate::send_text(&mut tx.conn, tx.token, &args.input, progress);
+            let fut = orchestrate::send_text_with_limit(
+                &mut tx.conn,
+                tx.token,
+                &args.input,
+                progress,
+                args.limit_mbps,
+            );
             let out = run_with_idle(fut, tick_rx, sent).await?;
             pb.finish_and_clear();
             finish_and_shutdown(&mut tx, out.verified, total, &out.sha256).await?;
@@ -144,7 +157,7 @@ pub async fn run(
                 body: Box::new(std::io::Cursor::new(data)),
                 progress,
             };
-            let fut = orchestrate::serve_file(&mut tx.conn, serve_opts);
+            let fut = orchestrate::serve_file_with_limit(&mut tx.conn, serve_opts, args.limit_mbps);
             let out = run_with_idle(fut, tick_rx, sent).await?;
             pb.finish_and_clear();
             finish_and_shutdown(&mut tx, out.verified, size, &out.sha256).await?;

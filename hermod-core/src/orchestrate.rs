@@ -6,9 +6,10 @@
 //! 上层（CLI / GUI）只需提供 `ServeOptions` 与目标写入端，不关心底层是
 //! WireGuard 还是其它传输。
 
+use crate::bandwidth::BandwidthLimit;
 use crate::transport::http::HttpError;
-use crate::transport::http::client::{FetchOutcome, fetch};
-use crate::transport::http::server::{ServeOptions, ServeOutcome, serve};
+use crate::transport::http::client::{FetchOutcome, fetch_with_limit};
+use crate::transport::http::server::{ServeOptions, ServeOutcome, serve_with_limit};
 use crate::transport::iface::TransportConnection;
 use tokio::io::AsyncWrite;
 
@@ -75,11 +76,25 @@ pub async fn serve_file<C>(
 where
     C: TransportConnection,
 {
+    serve_file_with_limit(conn, opts, BandwidthLimit::UNLIMITED).await
+}
+
+/// 带文件载荷速率上限的版本（0 为不限速）。
+pub async fn serve_file_with_limit<C>(
+    conn: &mut C,
+    opts: ServeOptions,
+    limit: BandwidthLimit,
+) -> Result<ServeOutcome, OrchestrateError>
+where
+    C: TransportConnection,
+{
     let stream = conn
         .listen()
         .await
         .map_err(|e| OrchestrateError::Transport(e.to_string()))?;
-    serve(stream, opts).await.map_err(map_http)
+    serve_with_limit(stream, opts, limit)
+        .await
+        .map_err(map_http)
 }
 
 /// rx：向传输内 tx 拨号，拉文件到 `dest` 并提交裁决。
@@ -87,7 +102,22 @@ pub async fn fetch_file<C, D>(
     conn: &mut C,
     token: &[u8; 16],
     dest: &mut D,
-    progress: Option<&mut dyn FnMut(u64)>,
+    progress: Option<&mut (dyn FnMut(u64) + Send)>,
+) -> Result<FetchOutcome, OrchestrateError>
+where
+    C: TransportConnection,
+    D: AsyncWrite + Unpin,
+{
+    fetch_file_with_limit(conn, token, dest, progress, BandwidthLimit::UNLIMITED).await
+}
+
+/// 带文件载荷速率上限的版本（0 为不限速）。
+pub async fn fetch_file_with_limit<C, D>(
+    conn: &mut C,
+    token: &[u8; 16],
+    dest: &mut D,
+    progress: Option<&mut (dyn FnMut(u64) + Send)>,
+    limit: BandwidthLimit,
 ) -> Result<FetchOutcome, OrchestrateError>
 where
     C: TransportConnection,
@@ -97,7 +127,9 @@ where
         .dial()
         .await
         .map_err(|e| OrchestrateError::Transport(e.to_string()))?;
-    fetch(stream, token, dest, progress).await.map_err(map_http)
+    fetch_with_limit(stream, token, dest, progress, limit)
+        .await
+        .map_err(map_http)
 }
 
 /// tx：把本地文件经传输发给 rx（边发边算 SHA-256）。
@@ -106,6 +138,20 @@ pub async fn send_file<C>(
     token: [u8; 16],
     path: &std::path::Path,
     progress: Option<Box<dyn FnMut(u64) + Send>>,
+) -> Result<ServeOutcome, OrchestrateError>
+where
+    C: TransportConnection,
+{
+    send_file_with_limit(conn, token, path, progress, BandwidthLimit::UNLIMITED).await
+}
+
+/// 带文件载荷速率上限的版本（0 为不限速）。
+pub async fn send_file_with_limit<C>(
+    conn: &mut C,
+    token: [u8; 16],
+    path: &std::path::Path,
+    progress: Option<Box<dyn FnMut(u64) + Send>>,
+    limit: BandwidthLimit,
 ) -> Result<ServeOutcome, OrchestrateError>
 where
     C: TransportConnection,
@@ -126,7 +172,7 @@ where
         body: Box::new(file),
         progress,
     };
-    serve_file(conn, opts).await
+    serve_file_with_limit(conn, opts, limit).await
 }
 
 /// tx：把一段文本经传输发给 rx（`Kind::Text`）。
@@ -135,6 +181,20 @@ pub async fn send_text<C>(
     token: [u8; 16],
     text: &str,
     progress: Option<Box<dyn FnMut(u64) + Send>>,
+) -> Result<ServeOutcome, OrchestrateError>
+where
+    C: TransportConnection,
+{
+    send_text_with_limit(conn, token, text, progress, BandwidthLimit::UNLIMITED).await
+}
+
+/// 带文件载荷速率上限的版本（0 为不限速）。
+pub async fn send_text_with_limit<C>(
+    conn: &mut C,
+    token: [u8; 16],
+    text: &str,
+    progress: Option<Box<dyn FnMut(u64) + Send>>,
+    limit: BandwidthLimit,
 ) -> Result<ServeOutcome, OrchestrateError>
 where
     C: TransportConnection,
@@ -149,7 +209,7 @@ where
         body: Box::new(std::io::Cursor::new(data)),
         progress,
     };
-    serve_file(conn, opts).await
+    serve_file_with_limit(conn, opts, limit).await
 }
 
 /// 临时文件 RAII 清理：Drop 时删除（含 future 被取消/panic 的情况）。
@@ -168,7 +228,21 @@ pub async fn receive<C>(
     conn: &mut C,
     token: &[u8; 16],
     dest_dir: &std::path::Path,
-    progress: Option<&mut dyn FnMut(u64)>,
+    progress: Option<&mut (dyn FnMut(u64) + Send)>,
+) -> Result<Receipt, OrchestrateError>
+where
+    C: TransportConnection,
+{
+    receive_with_limit(conn, token, dest_dir, progress, BandwidthLimit::UNLIMITED).await
+}
+
+/// 带文件载荷速率上限的版本（0 为不限速）。
+pub async fn receive_with_limit<C>(
+    conn: &mut C,
+    token: &[u8; 16],
+    dest_dir: &std::path::Path,
+    progress: Option<&mut (dyn FnMut(u64) + Send)>,
+    limit: BandwidthLimit,
 ) -> Result<Receipt, OrchestrateError>
 where
     C: TransportConnection,
@@ -190,7 +264,7 @@ where
     let guard = TempGuard(temp.clone());
     let mut file = tokio::fs::File::from_std(std_file);
 
-    let out = match fetch_file(conn, token, &mut file, progress).await {
+    let out = match fetch_file_with_limit(conn, token, &mut file, progress, limit).await {
         Ok(out) => out,
         Err(e) => {
             let _ = std::fs::remove_file(&temp);
@@ -331,18 +405,21 @@ mod tests {
 
         let data = vec![0x5a_u8; 64 * 1024 * 1024];
         let token = [0x93u8; 16];
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let progress_started = started.clone();
         let opts = ServeOptions {
             token,
             kind: Kind::File,
             name: "cancel.bin".into(),
             size: data.len() as u64,
             body: Box::new(std::io::Cursor::new(data)),
-            progress: None,
+            progress: Some(Box::new(move |_| { progress_started.notify_one(); })),
         };
         let mut dest = Vec::new();
         let abort = rx_conn.abort_handle();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            // 等到文件载荷真正开始，避免机器负载高时在 TLS 握手阶段取消。
+            started.notified().await;
             abort.abort();
         });
 

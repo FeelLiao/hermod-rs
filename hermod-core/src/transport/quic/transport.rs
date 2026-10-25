@@ -144,6 +144,7 @@ pub struct QuicTransport {
     credential_fingerprint: [u8; 32],
     bind: Option<SocketAddrV6>,
     server_hint: Option<Ipv6Addr>,
+    bandwidth_limit: crate::bandwidth::BandwidthLimit,
     congestion: CongestionControl,
     initial_mtu: u16,
 }
@@ -157,6 +158,7 @@ impl QuicTransport {
             credential_fingerprint: [0u8; 32],
             bind: None,
             server_hint: None,
+            bandwidth_limit: crate::bandwidth::BandwidthLimit::UNLIMITED,
             congestion: CongestionControl::Bbr,
             initial_mtu: DEFAULT_MTU,
         }
@@ -172,7 +174,12 @@ impl QuicTransport {
         self.server_hint = hint;
     }
 
-    /// 设置拥塞控制算法。
+    /// 限速时控制应用层排队窗口。
+    pub fn set_bandwidth_limit(&mut self, limit: crate::bandwidth::BandwidthLimit) {
+        self.bandwidth_limit = limit;
+    }
+
+    /// 设置拥塞控制。
     pub fn set_congestion(&mut self, congestion: CongestionControl) {
         self.congestion = congestion;
     }
@@ -273,7 +280,7 @@ impl Transport for QuicTransport {
             ));
         }
 
-        let transport = transport_config(self.congestion, self.initial_mtu);
+        let transport = transport_config(self.congestion, self.initial_mtu, self.bandwidth_limit);
         let runtime: Arc<dyn quinn::Runtime> = Arc::new(quinn::TokioRuntime);
         crate::log_info!(
             role = ?role,
@@ -695,6 +702,7 @@ async fn accept_task(
 fn transport_config(
     congestion: CongestionControl,
     initial_mtu: u16,
+    limit: crate::bandwidth::BandwidthLimit,
 ) -> Arc<quinn::TransportConfig> {
     let mut config = quinn::TransportConfig::default();
     config.max_idle_timeout(Some(
@@ -702,9 +710,10 @@ fn transport_config(
             .try_into()
             .expect("30s idle timeout fits in QUIC VarInt"),
     ));
-    config.stream_receive_window(VarInt::from_u32(IO_WINDOW as u32));
-    config.receive_window(VarInt::from_u32(IO_WINDOW as u32));
-    config.send_window(IO_WINDOW);
+    let window = limit.window(IO_WINDOW);
+    config.stream_receive_window(VarInt::from_u32(window as u32));
+    config.receive_window(VarInt::from_u32(window as u32));
+    config.send_window(window);
     config.keep_alive_interval(Some(KEEPALIVE));
     config.initial_rtt(INITIAL_RTT);
     config.min_mtu(DEFAULT_MTU);

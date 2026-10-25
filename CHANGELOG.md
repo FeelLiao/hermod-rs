@@ -4,6 +4,39 @@ All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/), and this project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.3.0] - 2026-10-25
+
+### Added
+
+- Tauri 2 app for Windows, Linux, macOS and Android, replacing the egui prototype.
+  Material Design 3 with desktop/phone layouts, dark mode, progress/RTT, transfer
+  codes, cancellation, private verified inbox, native selection and export.
+- Android document URI streaming, unknown-length staging and a foreground transfer
+  service; no broad storage permissions or file contents passed through JavaScript.
+- Test-signed Windows MSIX and Android APK, Linux AppImage/deb and unnotarized
+  macOS Intel/ARM apps/DMGs in the unified GitHub Release workflow. Existing three
+  command-line outputs are preserved; all release assets receive SHA-256 checksums.
+- Per-transfer `--limit-mbps` on both CLI commands and an editable desktop cap.
+  Payload is paced before transport writes; upgraded senders honor the receiver's
+  budget. Limited QUIC sessions use smaller application windows.
+- An isolated IPv6 latency reproduction example.
+- WSL mirrored-networking setup and upload queueing investigation documentation.
+
+### Fixed
+
+- Portable receive filenames handle Windows device names, forbidden characters,
+  trailing dots/spaces and overlong Unicode names without overwriting files.
+- QUIC HTTP cancellation test waits for payload progress instead of a fixed sleep,
+  preventing cancellation during the handshake under build load.
+
+- Transfer codes appear only after signaling channel allocation succeeds, and
+  signaling connection setup has a 15-second timeout.
+- WireGuard opens its HTTP listener before its handshake to allow asynchronous
+  file opening and desktop scheduling without racing a fast receiver.
+- Test temporary directories include process IDs to avoid stale-run collisions.
+
 ## [0.2.1] - 2026-10-20
 
 ### Changed

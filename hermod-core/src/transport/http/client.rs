@@ -4,6 +4,7 @@
 //! 边收边算 SHA-256，把 body 写入目标；随后 `POST /done` 提交
 //! `{"sha256":..., "size":N}`，由 tx 比对裁决。
 
+use crate::bandwidth::{BandwidthLimit, Pacer, RECEIVE_LIMIT_HEADER};
 use crate::http_meta;
 use crate::transfer::{self, Kind};
 use crate::transport::http::{HttpError, ResponseHead, write_request};
@@ -30,19 +31,43 @@ pub async fn fetch<S, D>(
     stream: S,
     token: &[u8; 16],
     dest: &mut D,
-    mut progress: Option<&mut dyn FnMut(u64)>,
+    progress: Option<&mut (dyn FnMut(u64) + Send)>,
 ) -> Result<FetchOutcome, HttpError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
     D: AsyncWrite + Unpin,
 {
+    fetch_with_limit(stream, token, dest, progress, BandwidthLimit::UNLIMITED).await
+}
+
+/// 向发送端声明接收预算；本地读端限速也兼容不认识新请求头的旧发送端。
+pub async fn fetch_with_limit<S, D>(
+    stream: S,
+    token: &[u8; 16],
+    dest: &mut D,
+    mut progress: Option<&mut (dyn FnMut(u64) + Send)>,
+    limit: BandwidthLimit,
+) -> Result<FetchOutcome, HttpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    D: AsyncWrite + Unpin,
+{
+    let pacer = Pacer::new(limit);
     let (r, mut w) = tokio::io::split(stream);
     let mut reader = BufReader::new(r);
     let path = http_meta::token_path(token);
 
     // 1) GET /f/<token>
     crate::log_info!(path = %path, "GET");
-    write_request(&mut w, "GET", &path, &[("Host", "hermod")], &[]).await?;
+    let receive_limit = limit.bytes_per_second().to_string();
+    write_request(
+        &mut w,
+        "GET",
+        &path,
+        &[("Host", "hermod"), (RECEIVE_LIMIT_HEADER, &receive_limit)],
+        &[],
+    )
+    .await?;
     let head = ResponseHead::read(&mut reader).await?;
     if head.status != 200 {
         return Err(HttpError::Malformed(format!(
@@ -74,13 +99,14 @@ where
     let mut write_time = std::time::Duration::ZERO;
     let started = std::time::Instant::now();
     while remaining > 0 {
-        let want = (buf.len() as u64).min(remaining) as usize;
+        let want = (pacer.chunk_len() as u64).min(remaining) as usize;
         let n = reader.read(&mut buf[..want]).await?;
         if n == 0 {
             return Err(HttpError::Malformed(
                 "body shorter than Content-Length".into(),
             ));
         }
+        pacer.wait(n).await;
         hasher.update(&buf[..n]);
         let w = std::time::Instant::now();
         dest.write_all(&buf[..n]).await?;

@@ -93,7 +93,10 @@ mod tests {
             KeyPair::from_private_bytes(ALICE_PRIV).public_bytes(),
             ALICE_PUB
         );
-        assert_eq!(KeyPair::from_private_bytes(BOB_PRIV).public_bytes(), BOB_PUB);
+        assert_eq!(
+            KeyPair::from_private_bytes(BOB_PRIV).public_bytes(),
+            BOB_PUB
+        );
     }
 
     /// Diffie-Hellman 共享密钥与 RFC 7748 一致（双向一致）。

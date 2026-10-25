@@ -4,15 +4,17 @@ plugins {
 }
 android {
     namespace = "org.hermod.documents"
-    compileSdk = 36
-    defaultConfig { minSdk = 24 }
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
+    defaultConfig { minSdk = 34 }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }
-kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8 } }
+kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 } }
 dependencies {
+    implementation("androidx.documentfile:documentfile:1.1.0")
     implementation(project(":tauri-android"))
-    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.core:core-ktx:1.19.1")
 }

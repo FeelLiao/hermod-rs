@@ -32,3 +32,10 @@ workspace = true
 [[bin]]
 name = "hermod"
 path = "src/main.rs"
+
+[dev-dependencies]
+hermod-app = { path = "../hermod-app/src-tauri" }
+tokio = { version = "1", features = ["process", "io-util"] }
+tokio-tungstenite = "0.30"
+futures-util = "0.3"
+serde_json = "1"

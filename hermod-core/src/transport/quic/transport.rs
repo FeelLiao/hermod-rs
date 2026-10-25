@@ -1,4 +1,4 @@
-//! QUIC 传输实现（默认数据面）。
+//! QUIC 传输实现（可选数据面）。
 //!
 //! ## 为什么用 QUIC
 //!
@@ -147,6 +147,7 @@ pub struct QuicTransport {
     bandwidth_limit: crate::bandwidth::BandwidthLimit,
     congestion: CongestionControl,
     initial_mtu: u16,
+    mtu_limit: u16,
 }
 
 impl QuicTransport {
@@ -161,10 +162,11 @@ impl QuicTransport {
             bandwidth_limit: crate::bandwidth::BandwidthLimit::UNLIMITED,
             congestion: CongestionControl::Bbr,
             initial_mtu: DEFAULT_MTU,
+            mtu_limit: MAX_MTU,
         }
     }
 
-    /// 设置 UDP 绑定地址（`--listen`；默认 `[::]:0`）。
+    /// 设置 UDP 绑定地址（内部测试用；默认 `[::]:0`）。
     pub fn set_udp_bind(&mut self, addr: Option<SocketAddrV6>) {
         self.bind = addr;
     }
@@ -184,7 +186,11 @@ impl QuicTransport {
         self.congestion = congestion;
     }
 
-    /// 设置初始 QUIC UDP payload（会被夹到 1200..=1452）。
+    /// 设置已校验的 UDP 载荷上限，限制初始值和路径 MTU 探测。
+    pub fn set_mtu_limit(&mut self, mtu: u16) {
+        self.mtu_limit = mtu;
+    }
+
     pub fn set_initial_mtu(&mut self, mtu: u16) {
         self.initial_mtu = mtu.clamp(DEFAULT_MTU, MAX_MTU);
     }
@@ -280,7 +286,17 @@ impl Transport for QuicTransport {
             ));
         }
 
-        let transport = transport_config(self.congestion, self.initial_mtu, self.bandwidth_limit);
+        let transport = transport_config_with_limit(
+            self.congestion,
+            self.initial_mtu,
+            self.mtu_limit,
+            self.bandwidth_limit,
+        );
+        // 同时向对端声明接收上限，避免只有接收端配置 MTU 时发送端仍使用更大的报文。
+        let mut endpoint_config = quinn::EndpointConfig::default();
+        endpoint_config
+            .max_udp_payload_size(self.mtu_limit)
+            .map_err(|e| QuicError::Config(e.to_string()))?;
         let runtime: Arc<dyn quinn::Runtime> = Arc::new(quinn::TokioRuntime);
         crate::log_info!(
             role = ?role,
@@ -304,8 +320,7 @@ impl Transport for QuicTransport {
                     .map_err(|e| QuicError::Config(e.to_string()))?;
                 let mut client = quinn::ClientConfig::new(Arc::new(crypto));
                 client.transport_config(transport);
-                let endpoint =
-                    quinn::Endpoint::new(quinn::EndpointConfig::default(), None, socket, runtime)?;
+                let endpoint = quinn::Endpoint::new(endpoint_config, None, socket, runtime)?;
                 let (tx, rx) = oneshot::channel();
                 tokio::spawn(connect_task(endpoint.clone(), client, peer_addrs, tx));
                 QuicConnection::new(endpoint, rx, credential_fingerprint)
@@ -323,12 +338,8 @@ impl Transport for QuicTransport {
                     .map_err(|e| QuicError::Config(e.to_string()))?;
                 let mut server = quinn::ServerConfig::with_crypto(Arc::new(crypto));
                 server.transport_config(transport);
-                let endpoint = quinn::Endpoint::new(
-                    quinn::EndpointConfig::default(),
-                    Some(server),
-                    socket,
-                    runtime,
-                )?;
+                let endpoint =
+                    quinn::Endpoint::new(endpoint_config, Some(server), socket, runtime)?;
                 let (tx, rx) = oneshot::channel();
                 tokio::spawn(accept_task(endpoint.clone(), tx));
                 QuicConnection::new(endpoint, rx, credential_fingerprint)
@@ -699,9 +710,10 @@ async fn accept_task(
 }
 
 /// 构造高吞吐 QUIC transport 配置：BBR + 大窗口 + PMTUD + 低 ACK 延迟。
-fn transport_config(
+fn transport_config_with_limit(
     congestion: CongestionControl,
     initial_mtu: u16,
+    mtu_limit: u16,
     limit: crate::bandwidth::BandwidthLimit,
 ) -> Arc<quinn::TransportConfig> {
     let mut config = quinn::TransportConfig::default();
@@ -717,8 +729,10 @@ fn transport_config(
     config.keep_alive_interval(Some(KEEPALIVE));
     config.initial_rtt(INITIAL_RTT);
     config.min_mtu(DEFAULT_MTU);
-    config.initial_mtu(initial_mtu.clamp(DEFAULT_MTU, MAX_MTU));
-    config.mtu_discovery_config(Some(quinn::MtuDiscoveryConfig::default()));
+    config.initial_mtu(initial_mtu.clamp(DEFAULT_MTU, mtu_limit));
+    let mut discovery = quinn::MtuDiscoveryConfig::default();
+    discovery.upper_bound(mtu_limit);
+    config.mtu_discovery_config(Some(discovery));
 
     // ACK 频率扩展：更快反馈带宽/RTT 样本，代价是多一点 ACK 流量。
     let mut ack = quinn::AckFrequencyConfig::default();
@@ -788,8 +802,16 @@ mod tests {
     /// 两个 QUICTransport 在本机回环完成 TLS 握手 + 双向流传输。
     #[tokio::test]
     async fn end_to_end_stream() {
+        for (tx_cap, rx_cap) in [(1452, 1200), (1280, 1452), (1452, 1452)] {
+            transfer_at_mtu_cap(tx_cap, rx_cap).await;
+        }
+    }
+    async fn transfer_at_mtu_cap(tx_cap: u16, rx_cap: u16) {
+        let cap = tx_cap.min(rx_cap);
         let mut tx = loopback_transport();
         let mut rx = loopback_transport();
+        tx.set_mtu_limit(tx_cap);
+        rx.set_mtu_limit(rx_cap);
         tx.set_credential_fingerprint([0x11; 32]);
         rx.set_credential_fingerprint([0x11; 32]);
         let tx_ep = tx.prepare().await.unwrap();
@@ -824,6 +846,16 @@ mod tests {
         assert_eq!(got, expected);
 
         let mut rx_conn = client_task.await.unwrap();
+        for connection in [&mut tx_conn, &mut rx_conn] {
+            let mtu = connection
+                .connection()
+                .await
+                .unwrap()
+                .stats()
+                .path
+                .current_mtu;
+            assert!((1200..=cap).contains(&mtu), "MTU {mtu} exceeds cap {cap}");
+        }
         tx_conn.shutdown().await.unwrap();
         rx_conn.shutdown().await.unwrap();
     }

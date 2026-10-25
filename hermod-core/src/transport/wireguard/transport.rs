@@ -65,9 +65,10 @@ pub struct WireGuardTransport {
     /// server 观测到的对端出口地址（信令层 `ObservedAddrs.public_ipv6`）。
     /// Go 版把它作为 server-reflexive 候选放在最前；这里同语义。
     server_hint: Option<std::net::Ipv6Addr>,
-    /// 内层 IP MTU（默认 1420，可 `--wg-mtu` 覆盖）。
+    /// 内层 IP MTU（默认 1400，可 `--mtu` 覆盖）。
     mtu: usize,
-    /// UDP 绑定地址（`--listen`；默认 `[::]:0`）。
+    congestion: smoltcp::socket::tcp::CongestionControl,
+    /// UDP 绑定地址（内部测试用；默认 `[::]:0`）。
     udp_bind: Option<std::net::SocketAddrV6>,
 }
 
@@ -83,6 +84,7 @@ impl WireGuardTransport {
             overlay: OVERLAY_TX,
             server_hint: None,
             mtu: crate::transport::wireguard::stack::device::IP_MTU,
+            congestion: smoltcp::socket::tcp::CongestionControl::Cubic,
             udp_bind: None,
         }
     }
@@ -96,11 +98,15 @@ impl WireGuardTransport {
     }
 
     /// 设置内层 IP MTU（默认 1420）。
+    pub fn set_congestion(&mut self, value: smoltcp::socket::tcp::CongestionControl) {
+        self.congestion = value;
+    }
+
     pub fn set_mtu(&mut self, mtu: usize) {
         self.mtu = mtu;
     }
 
-    /// 设置 UDP 绑定地址（`--listen`；默认 `[::]:0`）。
+    /// 设置 UDP 绑定地址（内部测试用；默认 `[::]:0`）。
     pub fn set_udp_bind(&mut self, addr: Option<std::net::SocketAddrV6>) {
         self.udp_bind = addr;
     }
@@ -211,7 +217,8 @@ impl Transport for WireGuardTransport {
         );
         let endpoint = PeerEndpoint::new(peer.ipv6_candidates.clone(), peer.udp_port);
         let tunnel = WireGuardTunnel::new(session, udp, endpoint);
-        let stack = TunnelStack::new(overlay, seed, self.mtu);
+        let mut stack = TunnelStack::new(overlay, seed, self.mtu);
+        stack.set_congestion(self.congestion);
 
         crate::log_info!(
             role = ?role,

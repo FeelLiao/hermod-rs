@@ -14,7 +14,7 @@
 use der::asn1::AnyRef;
 use der::{Decode, Encode, Reader, Tag, TagNumber};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider};
+use rustls::crypto::{CryptoProvider, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, Error, SignatureScheme};
 use sha2::{Digest, Sha256};
@@ -125,7 +125,12 @@ impl ServerCertVerifier for PinnedVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, Error> {
-        verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     /// TLS1.3 签名验证：同上。
@@ -135,11 +140,18 @@ impl ServerCertVerifier for PinnedVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, Error> {
-        verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider.signature_verification_algorithms.supported_schemes()
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 
@@ -186,7 +198,12 @@ impl ServerCertVerifier for CaptureVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, Error> {
-        verify_tls12_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
@@ -195,11 +212,18 @@ impl ServerCertVerifier for CaptureVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, Error> {
-        verify_tls13_signature(message, cert, dss, &self.provider.signature_verification_algorithms)
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        self.provider.signature_verification_algorithms.supported_schemes()
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
     }
 }
 
@@ -208,8 +232,7 @@ impl ServerCertVerifier for CaptureVerifier {
 /// 供 `hermod trust` 使用：首次信任时调用，把结果存进 `config.trusted_servers`。
 /// 调用方应在展示给用户确认后（或与已知指纹比对后）才落盘。
 pub async fn fetch_server_spki(url: &str) -> Result<[u8; 32], TlsError> {
-    let captured: Arc<std::sync::Mutex<Option<Vec<u8>>>> =
-        Arc::new(std::sync::Mutex::new(None));
+    let captured: Arc<std::sync::Mutex<Option<Vec<u8>>>> = Arc::new(std::sync::Mutex::new(None));
     let provider = rustls::crypto::aws_lc_rs::default_provider();
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider.clone()))
         .with_safe_default_protocol_versions()
@@ -256,7 +279,8 @@ mod tests {
         "6af685ca8184bd39d7",
     );
     // 独立基准：openssl x509 -pubkey | openssl pkey -pubin -outform DER | sha256sum
-    const TEST_CERT_SPKI_FP: &str = "e6f42d0f550114985ae4a655e53f5566385509c38552642c53685d18bd516514";
+    const TEST_CERT_SPKI_FP: &str =
+        "e6f42d0f550114985ae4a655e53f5566385509c38552642c53685d18bd516514";
 
     fn unhex(s: &str) -> Vec<u8> {
         (0..s.len())

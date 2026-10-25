@@ -31,9 +31,17 @@ pub struct Config {
     pub server_url: String,
     #[serde(rename = "tls_configuration", default = "default_tls_config")]
     pub tls: TlsConfig,
-    #[serde(rename = "server_cert_pem", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "server_cert_pem",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub server_cert_pem: String,
-    #[serde(rename = "server_key_pem", default, skip_serializing_if = "String::is_empty")]
+    #[serde(
+        rename = "server_key_pem",
+        default,
+        skip_serializing_if = "String::is_empty"
+    )]
     pub server_key_pem: String,
     #[serde(
         rename = "trusted_servers",
@@ -69,7 +77,10 @@ fn default_server_url() -> String {
 
 fn default_trusted_servers() -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
-    m.insert(DEFAULT_SERVER_URL.to_string(), DEFAULT_SERVER_FINGERPRINT.to_string());
+    m.insert(
+        DEFAULT_SERVER_URL.to_string(),
+        DEFAULT_SERVER_FINGERPRINT.to_string(),
+    );
     m
 }
 
@@ -103,6 +114,11 @@ pub fn dir() -> PathBuf {
     }
     #[cfg(not(windows))]
     {
+        if let Some(directory) =
+            std::env::var_os("XDG_CONFIG_HOME").filter(|d| Path::new(d).is_absolute())
+        {
+            return PathBuf::from(directory).join("hermod");
+        }
         if let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home).join(".config").join("hermod");
         }
@@ -255,9 +271,14 @@ trusted_servers:
             cfg.tls.cipher_suites,
             vec!["TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256"]
         );
-        assert!(cfg.server_cert_pem.starts_with("-----BEGIN CERTIFICATE-----"));
+        assert!(
+            cfg.server_cert_pem
+                .starts_with("-----BEGIN CERTIFICATE-----")
+        );
         assert_eq!(
-            cfg.trusted_servers.get("wss://relay.example.com:4376").unwrap(),
+            cfg.trusted_servers
+                .get("wss://relay.example.com:4376")
+                .unwrap(),
             "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
         );
     }
@@ -269,7 +290,9 @@ trusted_servers:
         assert_eq!(cfg.server_url, "wss://other:9999");
         assert_eq!(cfg.tls.prefer_curves, vec!["X25519MLKEM768"]); // 默认曲线保留
         assert_eq!(
-            cfg.trusted_servers.get(DEFAULT_SERVER_URL).map(String::as_str),
+            cfg.trusted_servers
+                .get(DEFAULT_SERVER_URL)
+                .map(String::as_str),
             Some(DEFAULT_SERVER_FINGERPRINT)
         );
         // 空 YAML → 全部默认
@@ -313,10 +336,7 @@ trusted_servers:
         );
         assert!(normalize_server_url("").is_err());
         assert!(normalize_server_url("wss:///nohost").is_err());
-        assert_eq!(
-            normalize_server_url("[::1]").unwrap(),
-            "wss://[::1]:4376"
-        );
+        assert_eq!(normalize_server_url("[::1]").unwrap(), "wss://[::1]:4376");
         assert_eq!(
             normalize_server_url("wss://[::1]:8080/path?x=1").unwrap(),
             "wss://[::1]:8080"

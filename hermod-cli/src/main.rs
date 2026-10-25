@@ -3,7 +3,6 @@
 mod cli;
 mod progress;
 mod rx;
-mod serve;
 mod trust;
 mod tty;
 mod tx;
@@ -84,6 +83,5 @@ async fn run(
         cli::Command::Tx(a) => tx::run(a, abort_slot).await,
         cli::Command::Rx(a) => rx::run(a, abort_slot).await,
         cli::Command::Trust(a) => trust::run(a).await,
-        cli::Command::Serve => serve::run().await,
     }
 }

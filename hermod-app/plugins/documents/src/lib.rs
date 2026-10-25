@@ -1,33 +1,19 @@
-//! Android 文档元数据和传输前台服务；文件流由官方 fs 插件打开。
+//! Android SAF、动态配色和前台服务适配；流通过官方 fs 插件安全打开。
 use tauri::{Runtime, plugin::TauriPlugin};
-
-#[derive(serde::Deserialize)]
-pub struct DocumentInfo {
-    pub name: String,
-    pub size: Option<u64>,
-}
-
 #[cfg(target_os = "android")]
 pub struct Documents<R: Runtime>(tauri::plugin::PluginHandle<R>);
-
 #[cfg(target_os = "android")]
 impl<R: Runtime> Documents<R> {
-    pub fn describe(&self, uri: &str) -> Result<DocumentInfo, String> {
+    pub fn call<T: serde::de::DeserializeOwned>(
+        &self,
+        command: &str,
+        args: serde_json::Value,
+    ) -> Result<T, String> {
         self.0
-            .run_mobile_plugin("describe", serde_json::json!({ "uri": uri }))
-            .map_err(|e| e.to_string())
-    }
-    pub fn set_active(&self, active: bool) -> Result<(), String> {
-        self.0
-            .run_mobile_plugin::<serde_json::Value>(
-                "setActive",
-                serde_json::json!({ "active": active }),
-            )
-            .map(|_| ())
+            .run_mobile_plugin(command, args)
             .map_err(|e| e.to_string())
     }
 }
-
 pub fn init<R: Runtime>() -> TauriPlugin<R> {
     tauri::plugin::Builder::new("documents")
         .setup(|_app, _api| {

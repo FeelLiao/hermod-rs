@@ -17,7 +17,9 @@ pub async fn run(args: TrustArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // 先规范化（无端口时补 4376），保证 trust 与 tx/rx 连的是同一地址。
     let normalized = config::normalize_server_url(&url).map_err(util::boxed)?;
-    let fp = tls::fetch_server_spki(&normalized).await.map_err(util::boxed)?;
+    let fp = tls::fetch_server_spki(&normalized)
+        .await
+        .map_err(util::boxed)?;
     let hex = transfer::hex(&fp);
     if let Some(expect) = &args.fingerprint
         && !expect.eq_ignore_ascii_case(&hex)

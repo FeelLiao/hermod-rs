@@ -5,8 +5,7 @@ use crate::{progress, util, verbosity};
 use hermod_core::TransportConnection;
 use hermod_core::config;
 use hermod_core::orchestrate;
-use hermod_core::session::{self, SessionOptions};
-use hermod_core::transport::{CongestionControl, TransportKind};
+use hermod_core::session;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,18 +26,7 @@ pub async fn run(
     }
 
     verbosity::debug(format!("server_url={}", cfg.server_url));
-    let transport = match args.transport_opts.transport.as_str() {
-        "auto" => None,
-        value => Some(TransportKind::parse(value).unwrap_or_default()),
-    };
-    let opts = SessionOptions {
-        bandwidth_limit: args.limit_mbps,
-        mtu: Some(args.wg_mtu),
-        udp_bind: Some(util::parse_listen(&args.listen)?),
-        transport,
-        quic_congestion: CongestionControl::parse(&args.transport_opts.quic_cc).unwrap_or_default(),
-        quic_mtu: Some(args.transport_opts.quic_mtu),
-    };
+    let opts = args.network.options(&args.transport, true)?;
     let mut rx = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         session::receiver_session_with(&cfg, &args.code, &opts),
@@ -76,7 +64,7 @@ pub async fn run(
         &rx.token,
         Path::new(&dest),
         Some(&mut on_progress),
-        args.limit_mbps,
+        args.network.limit_mbps,
     );
     let receipt = match progress::with_idle_timeout(fut, tick_rx, IDLE).await {
         Ok(Ok(r)) => r,

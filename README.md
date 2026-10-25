@@ -1,376 +1,179 @@
-# Hermod (Rust)
+# Hermod
 
-Hermod transfers files and text directly between peers over an encrypted tunnel.
-**QUIC** (TLS 1.3 + BBR) is the default data plane; WireGuard remains available
-with `--transport wireguard`. No data passes through the signaling server — it
-only helps the two peers find each other.
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-The project is named after Hermod, the messenger god in Norse mythology — the primary
-courier of the Æsir, best known for riding to Hel to negotiate the return of Baldr.
+**Send a file or text directly to another device with a short transfer code.**
+Hermod is an encrypted, peer-to-peer **IPv6** transfer tool written in Rust. Files
+travel between your devices; the signaling server only helps them connect.
 
-Hermod was inspired by [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole),
-a Python tool that transfers files between computers using short, human-readable codes.
+- **Desktop GUI:** Tauri 2, React and Microsoft's official Fluent UI React v9 (Fluent 2).
+- **Android GUI:** Tauri with Google’s official Material Design 3 Web components, dynamic colors and adaptive navigation.
+- **Linux CLI:** static musl binaries for terminals and automation.
+- **Two protocols:** WireGuard by default when sending; QUIC is available. Receivers automatically follow the sender.
+- Files, text, cancellation, progress, adjustable bandwidth, server fingerprint pinning and SHA-256 verification.
+- Runs in userspace: no VPN configuration, TUN interface or administrator privileges for transfers.
 
-This is a **from-scratch Rust implementation** of the Hermod protocol. The Go
-implementation lives in the sibling `hermod-go` repository and shares the same
-signaling protocol, CPace PAKE, and transfer-code format.
+## Download
 
-## What it does
+Get programs from [GitHub Releases](https://github.com/FeelLiao/hermod-rs/releases/latest).
+Choose your device's CPU architecture, not the architecture of the sender.
 
-- End-to-end encrypted transfer over **QUIC** (quinn) with TLS 1.3 certificate
-  pinning and BBR congestion control, or over **user-space WireGuard** (boringtun)
-  with a small in-process TCP/IP stack (smoltcp)
-- The sender chooses the transport; the receiver defaults to **auto** and follows
-  the sender's endpoint header. `--transport` can still force a value on either side.
-- Password-authenticated key exchange (**CPace over P-256**) — no shared secret beyond
-  the transfer code
-- **Zero privilege**: everything runs in userspace — no root, no TUN device, no network
-  interface changes
-- **IPv6-only** (no IPv4, no NAT hole punching)
-- Transfers files, text snippets, or stdin
-- Works with the Go signaling server (or any hosted one)
+| Device | Files to download |
+| --- | --- |
+| Windows 10 2004+ / Windows 11, x64 | `hermod-windows-x64.msix`, `Hermod-Test.cer`, `Install-Hermod.ps1` |
+| Windows on ARM64 | `hermod-windows-arm64.msix`, the same certificate and PowerShell script |
+| Linux desktop x64 / ARM64 | `hermod-linux-x64.AppImage` / `hermod-linux-arm64.AppImage` |
+| Linux terminal x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
+| Android 14+ ARM64 | `hermod-android-arm64.apk` |
 
-## Quick start
+There are no macOS, Windows CLI or Android CLI release builds. Release attachments
+contain only the seven programs, public Windows certificate and `.ps1` installer.
+GitHub also provides automatic source archives.
 
-**Tauri app (Windows, Linux, macOS and Android):**
-```bash
-cd hermod-app
-npm ci
-npm run tauri dev
-# Build on the current desktop OS (Windows ZIP step: see APP_BUILD.md):
-npm run tauri build
+## Before connecting
+
+**Both peers need reachable IPv6 and permission to exchange UDP traffic.** IPv4-only
+networks, IPv4 NAT traversal and relay transfers are not supported. An IPv6 address
+by itself does not guarantee that your router or firewall permits incoming traffic.
+The default signaling server is `wss://oracle.stariverfeel.eu.org:4376`; its SPKI
+fingerprint is built in. A transfer code becomes usable after the server allocates it.
+
+WSL NAT commonly lacks usable IPv6. On supported Windows 11/WSL systems, enable
+`networkingMode=mirrored` in the Windows user profile's `.wslconfig`, then run
+`wsl --shutdown` from Windows. Your Windows network must already have IPv6. Assigning
+an arbitrary IPv6 address does not provide Internet routing. See [network troubleshooting](NETWORK_PERFORMANCE.md).
+
+## GUI: three steps
+
+1. On the sender, choose **File** and select a document, or choose **Text** and enter a message. Start sending.
+2. Share the complete code privately. On the receiver, enter it under **Receive** and connect.
+3. Wait for **SHA-256 verified**. Open **Inbox → Save a copy**, or choose a default export folder in Settings.
+
+Verified files remain in a private inbox until deleted. Failed exports and expired
+Android folder permissions do not delete that copy. Text arrives as a text file.
+Cancellation or process termination discards unfinished transfers; there is no resume.
+Android uses system document permissions, never unrestricted storage access. Rust owns the transfer and a foreground service provides progress and cancellation; activity recreation does not restart it.
+On Android 17, grant Nearby devices/local network access for peer transfers. Notification
+permission enables the visible progress notification; denying it does not grant storage access.
+
+Settings cover send/receive protocol, MTU, congestion control, bandwidth, code length,
+server, fingerprint trust, receive folder, log level, reduced notifications and theme.
+They persist locally. Each new transfer takes a settings snapshot; saving changes does
+not reconfigure a running connection. The default GUI cap is **8 Mbps**: adjust it to
+your uplink, typically starting at 70–85% of measured upload capacity.
+
+## Installation and upgrades
+
+**Windows:** put the three matching downloads in one directory. From a normal-user
+PowerShell window in that directory, run:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-Hermod.ps1
 ```
 
-The GUI uses **Tauri 2 + Material Design 3**, with a desktop navigation rail,
-phone bottom navigation, system/light/dark themes, sending/receiving, code copying,
-cancellation, progress, RTT, SHA-256 verification and an editable bandwidth budget.
-The old egui/eframe app has been replaced. Node.js is needed to build, not to run
-an installed app. Fonts and UI assets are bundled; no CDN is contacted.
+This execution policy applies to that process only. The installer checks the certificate,
+signature identity and architecture, directs you to Microsoft's WebView2 runtime if
+needed, requests administrator permission **only for public certificate import into
+LocalMachine\TrustedPeople**, then installs MSIX as the original user. Windows verifies
+the complete signed package during deployment. No root certificate or global policy is
+modified. These are fixed test-signed sideload packages, not Store submission packages.
+Do not upload them to Partner Center under an unrelated publisher identity.
 
-Use the system picker to select a file. Completed downloads appear in the private
-**Inbox**; **Save a copy** opens the platform's save dialog. Android uses authorized
-`content://` document streams, not guessed filesystem paths or broad storage
-permissions. Export important files before uninstalling the app.
-
-The GUI starts with an **8 Mbps payload cap**. Adjust this to about 70–85% of your
-actual upload capacity; 8 Mbps is only a starting value, not a bandwidth estimate.
-CLI defaults remain unlimited. Both peers still need reachable **IPv6**.
-
-Linux build dependencies (Ubuntu 22.04+):
-```bash
-sudo apt install build-essential pkg-config cmake perl clang \
-  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-```
-
-Windows GUI releases are portable ZIPs; Linux GUI releases are AppImages.
-Existing CLI artifacts are also included. A Microsoft Store submission requires
-repackaging the Windows ZIP as MSIX using the included Store tools.
-
-See [APP_BUILD.md](APP_BUILD.md) for Android setup, file lifecycle, installation,
-release artifacts and platform testing. Desktop builds reuse the CLI trust config
-unless an app-specific `config.yaml` exists; Android uses the pinned default relay.
-
-**Build:**
-```bash
-cargo build --release -p hermod-cli
-# → target/release/hermod
-```
-
-**Fully static binary (musl)** — no glibc dependency:
-```bash
-rustup target add x86_64-unknown-linux-musl
-sudo apt install musl-tools cmake        # cmake is needed by aws-lc-sys (rustls)
-cargo build --release --target x86_64-unknown-linux-musl -p hermod-cli
-# → target/x86_64-unknown-linux-musl/release/hermod
-```
-
-**Start a signaling server** (one machine, reachable by both peers) — the Rust version
-does not ship a server yet (D13); use the Go server:
-```bash
-# from the hermod-go repository
-./hermod serve
-```
-
-**Pin the server certificate** (run once on each client):
-```bash
-./hermod trust wss://your-server:4376
-```
-
-**Send a file:**
-```bash
-./hermod tx report.pdf
-# Prints a transfer code to stderr, e.g.: 3-apple-banana-cherry
-```
-
-**Receive:**
-```bash
-./hermod rx 3-apple-banana-cherry
-```
-
-The file lands in the current directory.
-
-> **IPv6 requirement:** both peers need IPv6 connectivity. Both data planes are
-> established over IPv6 UDP; if a peer is behind a firewall that blocks inbound UDP,
-> the connection may fail. There is no IPv4 fallback or NAT traversal.
-
-## Keep browsing responsive
-
-An unrestricted upload can fill the uplink queue and delay other requests.
-Both CLI commands accept `--limit-mbps` (decimal Mbps, 0 = unlimited):
+**Linux:** Ubuntu 22.04 or newer compatible desktops are the build baseline:
 
 ```bash
-# Example: on a measured 20 Mbps uplink, start with a 15 Mbps payload cap
-./hermod tx report.pdf --limit-mbps 15
-./hermod rx CODE --limit-mbps 15
+chmod +x hermod-linux-x64.AppImage
+./hermod-linux-x64.AppImage
+# If FUSE is unavailable:
+APPIMAGE_EXTRACT_AND_RUN=1 ./hermod-linux-x64.AppImage
 ```
 
-The sender applies the lower of its own cap and the receiver's requested cap.
-Use upgraded peers for sender-side pacing requested by the receiver. The GUI
-starts at a visible 10 Mbps cap that you can change or disable. The CLI preserves
-unlimited operation unless a cap is supplied. This is a payload budget, so allow
-headroom for protocol overhead, retransmissions and other applications. Start
-at 70–85% of measured **upload** capacity. See the
-[investigation and reproducible latency comparison](NETWORK_PERFORMANCE.md).
+**Android:** allow APK installation from your download application, then open the APK.
+Only ARM64 is published. Minimum SDK is 34; compile/target SDK is 37. Keep the same
+signing keys when upgrading. For old releases signed with a temporary key, **export
+all inbox files before uninstalling** and installing v0.4.0. The same precaution
+applies to Windows packages with a different prior signing identity. Uninstalling can
+remove private application data.
 
-## IPv6 in WSL 2
-
-Adding a made-up IPv6 address does not provide an Internet route. If Windows
-already has working IPv6 but the WSL NAT interface has only `fe80::` addresses,
-use [Microsoft's mirrored networking mode](https://learn.microsoft.com/en-us/windows/wsl/networking#mirrored-mode-networking)
-on supported Windows 11 versions. Back up `%USERPROFILE%\.wslconfig`, then add
-this key to its existing `[wsl2]` section:
-
-```ini
-[wsl2]
-networkingMode=mirrored
-```
-
-Save work in all WSL terminals and stop containers that must not be interrupted.
-Run `wsl --shutdown` from **Windows PowerShell**, then reopen WSL and check:
+## CLI quick start
 
 ```bash
-ip -6 address show scope global
-ip -6 route show default
+chmod +x hermod-linux-x64-musl
+./hermod-linux-x64-musl tx ./archive.zip --limit-mbps 8
+# On the receiver, replace CODE with the sender's complete code:
+./hermod-linux-x64-musl rx CODE --destination ./received
 ```
 
-The setting takes effect only after restarting WSL. A global address and default
-route are prerequisites, not proof that the peer's UDP path is reachable. Host
-and router firewalls must permit the transfer. Hermod does not disable firewalls
-or assign duplicate Windows addresses to the guest.
-
-## Usage
-
-### Global flags
-
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--verbose` | | `none` | Log verbosity: `none`, `error`, `warning`, `info`, `debug` |
-| `--quiet` | `-q` | off | Suppress status output. Errors are always shown. |
-| `--version` | `-V` | | Print the version and exit. |
-
-### tx — send
-
-```
-hermod tx [INPUT] [flags]
-```
-
-`INPUT` can be:
-- A file path — sends the file
-- A quoted string — sends it as text
-- `-` — reads from stdin
-
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--server` | `-s` | `wss://oracle.stariverfeel.eu.org:4376` | Signaling server URL (saved as default when specified) |
-| `--words` | `-w` | `3` | Number of words in the transfer code |
-| `--listen` | `-l` | `[::]:0` | Local UDP bind address (IPv6) |
-| `--limit-mbps` | | `0` | Payload cap in Mbps; 0 = unlimited. Leave upload headroom for browsing. |
-| `--transport` | | `quic` | Data plane: `quic` or `wireguard`; receiver auto-follows by default |
-| `--wg-mtu` | | `1400` | WireGuard inner IP MTU (outer packet = inner + 80; WireGuard only) |
-| `--quic-cc` | | `bbr` | QUIC congestion control: `bbr`, `cubic`, or `newreno` (QUIC only) |
-| `--quic-mtu` | | `1200` | Initial QUIC UDP payload, clamped to 1200–1452; PMTUD may raise it (QUIC only) |
-
-**Examples:**
-```bash
-# Send a file
-./hermod tx photo.jpg -s wss://relay.example.com:4376
-
-# Send text
-./hermod tx "Meeting at 3pm"
-
-# Send stdin (pipe)
-tar czf - ./project | ./hermod tx -
-
-# Default data plane is QUIC with BBR
-./hermod tx big.fa
-
-# Fall back to WireGuard (receiver auto-follows)
-./hermod tx big.fa --transport wireguard --wg-mtu 1200
-
-# QUIC congestion-control comparison; receiver auto-detects QUIC
-./hermod tx big.fa --quic-cc cubic
-```
-
-### rx — receive
-
-```
-hermod rx [CODE] [flags]
-```
-
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--server` | `-s` | `wss://oracle.stariverfeel.eu.org:4376` | Signaling server URL (saved as default when specified) |
-| `--destination` | `-d` | current directory | Output directory |
-| `--listen` | `-l` | `[::]:0` | Local UDP bind address (IPv6) |
-| `--limit-mbps` | | `0` | Receiver payload cap in Mbps; sent to upgraded senders. 0 = unlimited. |
-| `--transport` | | `auto` | `auto` follows the sender; `wireguard`/`quic` forces and verifies |
-| `--wg-mtu` | | `1400` | WireGuard inner IP MTU (must match the sender; WireGuard only) |
-| `--quic-cc` | | `bbr` | QUIC congestion control: `bbr`, `cubic`, or `newreno` (QUIC only) |
-| `--quic-mtu` | | `1200` | Initial QUIC UDP payload, 1200–1452 (must match the sender) |
-
-**Examples:**
-```bash
-# Receive to current directory
-./hermod rx 3-apple-banana-cherry -s wss://relay.example.com:4376
-
-# Save to a specific directory
-./hermod rx 3-apple-banana-cherry -d ~/downloads/
-
-# The receiver auto-detects QUIC by default; force/validate a transport if needed
-./hermod rx 3-apple-banana-cherry --transport quic
-./hermod rx 3-apple-banana-cherry --transport wireguard
-```
-
-### serve — run a signaling server
-
-Not implemented in the Rust version (D13). Use the Go server from the sibling
-`hermod-go` repository. `hermod serve` prints an error and exits non-zero.
-
-### trust — pin a server certificate
-
-```
-hermod trust [SERVER_URL] [--fingerprint FINGERPRINT]
-```
-
-Connects to the server, fetches its certificate SPKI fingerprint, saves it to the local
-config, and sets the server as the default for future `tx` and `rx` calls. If you omit
-the port, `trust` defaults to port 4376.
-
-| Flag | Short | Default | Description |
-|---|---|---|---|
-| `--fingerprint` | | `""` | Expected SHA-256 fingerprint (hex). When set, the server's TLS certificate is verified against this value during the handshake. |
-
-**Security note:** The initial connection uses no certificate verification
-(trust-on-first-use). Run `hermod trust` over a trusted network — for example, a VPN,
-physical LAN, or a network where the fingerprint can be confirmed out-of-band. If you
-already know the server's fingerprint, pass it with `--fingerprint` to verify before
-pinning.
-
-## Configuration
-
-Hermod stores its config in:
-- Linux/macOS: `~/.config/hermod/config.yaml`
-- Windows: `%APPDATA%\Hermod\config.yaml`
-
-The config holds the `server_url`, TLS settings, and the `trusted_servers` map
-(normalized server URL → SPKI fingerprint).
-
-## How it works
-
-1. The sender connects to the signaling server and allocates a channel, receiving a
-   numeric channel ID.
-2. The transfer code encodes the channel ID plus a random word passphrase.
-3. The receiver connects to the signaling server using the code and joins the channel.
-4. Both peers enumerate their local IPv6 addresses; the server-observed address is used
-   as a hint. No UDP reflector is needed — IPv6 has no NAT.
-5. Both peers run a **CPace PAKE** handshake over the signaling channel to establish a
-   shared key `K`, authenticated by the passphrase.
-6. The sender `prepare`s its chosen transport (QUIC by default) and wraps the
-   opaque endpoint bytes with a small header: `"HE" + version + transport`. The
-   bundle is AEAD-sealed with `K` and exchanged through the signaling relay — the
-   server never learns it. The bundle also carries `SHA-256(token)` so each side
-   can reject a peer from a different session. The receiver decrypts this first
-   blob, reads the header, and only then prepares the matching transport and replies.
-7. **QUIC** (default): the receiver generates an ephemeral self-signed certificate
-   and the sender pins its SHA-256 from the encrypted bundle. The sender is the
-   QUIC client (it initiates the connection outbound, like WireGuard's sender), the
-   receiver is the QUIC server. HTTP/1.1 runs on one bidirectional QUIC stream
-   opened by the receiver: tx `listen` = `accept_bi`, rx `dial` = `open_bi`.
-   The receiver first sends a 32-byte session fingerprint (SHA-256 of the token);
-   the sender rejects streams without it before handing the stream to HTTP. The
-   receiver also sends a few dummy UDP packets to the sender's candidates to open
-   stateful-firewall return paths. BBR is the default congestion control.
-   **WireGuard** (`--transport wireguard`): each side generates an ephemeral X25519
-   key pair and derives `PSK = HKDF-SHA256(K, channel_id, "hermod-wg-psk-v1")`. A
-   WireGuard handshake runs over IPv6 UDP; then an in-process TCP/IP stack (smoltcp)
-   carries HTTP/1.1.
-8. In both cases the sender serves `GET /f/<token>`; the receiver pulls the whole
-   payload while hashing SHA-256, then posts the digest to `POST /done`. The sender
-   compares the digest with its own and only then completes the transfer. QUIC
-   defaults to **BBR** and uses 64 MiB stream/connection windows, 8 MiB UDP socket
-   buffers, and PMTUD.
-
-## Tuning
-
-- **Sender progress**: the `tx` progress bar uses the QUIC wire rate
-  (`udp_tx.bytes`) for the speed/ETA display, while its position is still file
-  bytes written locally. This means the speed can keep moving while the local
-  64 MiB send window is blocked; it includes QUIC ACK/control/retransmit overhead.
-- **QUIC throughput**: BBR is the default and is the recommended choice on lossy
-  paths. Compare with `--quic-cc cubic` / `--quic-cc newreno` if needed. QUIC uses
-  64 MiB stream and connection receive windows, a 64 MiB send window, 8 MiB UDP
-  socket buffers, and PMTUD from 1200 to 1452. On PPPoE/lossy paths start with
-  `--quic-mtu 1200`; on clean LAN/WAN paths PMTUD will raise it automatically.
-- **WireGuard fallback throughput**: the inner TCP window defaults to 1 MiB. On a
-  fast LAN you can raise it with `HERMOD_TCP_SOCKET_BUF` (bytes, e.g. `4194304`
-  for 4 MiB) on both sides. Keep it small on lossy WAN paths — a large window
-  amplifies bufferbloat.
-- Check `--verbose info`'s `receive progress ... write_pct`: if it is high, the
-  receiving disk is the bottleneck, not the network.
-
-## Security properties
-
-| Property | Mechanism |
-|---|---|
-| Confidentiality (WireGuard) | WireGuard with per-session ephemeral X25519 keys + a PSK derived from the CPace key |
-| Confidentiality (QUIC) | TLS 1.3 with a per-session ephemeral self-signed certificate |
-| Authentication | CPace PAKE — only someone with the transfer code can connect; QUIC pins the server certificate fingerprint from the CPace-encrypted bundle |
-| Client authorization (QUIC) | A 32-byte session fingerprint preamble (SHA-256 of the one-time token) before HTTP; TLS client certificates are not required |
-| Integrity | SHA-256 verified on both sides; the sender renames/releases only after the digest matches |
-| Server cannot read data | Payload never touches the signaling server; the endpoint bundle is encrypted with the CPace key |
-| Session isolation | Fresh ephemeral keys/PSK (WireGuard) or certificate (QUIC) per session; the one-time token is never sent to the signaling server |
-
-> Note: unlike the Go version, the Rust implementation is **classical-only** (no
-> post-quantum ML-KEM) and **does not implement SAS out-of-band verification**
-> (`--verify` was removed by design).
-
-## Development
+Or install the binary as `hermod` and use:
 
 ```bash
-# Run all tests
-cargo test --workspace
-
-# Lint (warnings are errors)
-cargo clippy --workspace --all-targets -- -D warnings
+hermod tx 'Hello from Hermod'
+printf 'Read from stdin\n' | hermod tx -
+hermod tx ./archive.zip --transport quic --mtu 1280 --congestion bbr
+hermod rx CODE --transport wireguard --limit-mbps 8
+hermod --help
+hermod tx --help
 ```
 
-## Layout
+CLI has no default bandwidth cap (`0` means unlimited). Sending defaults to WireGuard;
+receiving defaults to `auto`. Keep both peers open until the digest verdict completes.
 
-```
-hermod-core/           all protocol, tunnel, and transfer logic
-  src/crypto/          CPace PAKE, HKDF, AES-256-GCM, EFF wordlist
-  src/signal/          WebSocket signaling protocol, SPKI pinning, client
-  src/session.rs       transfer code → established transport orchestration
-  src/transport/       Transport trait + runtime dispatcher
-    quic/              QUIC data plane (default): TLS pinning, BBR, streams
-    wireguard/         WireGuard data plane (optional fallback)
-      wg/              X25519 keys, boringtun wrapper, endpoint roaming
-      stack/           smoltcp device/driver + AsyncRead/AsyncWrite bridge
-    http/              shared transport-internal HTTP/1.1 (server + client)
-  src/orchestrate.rs   tx/rx transfer main flow
-hermod-cli/            thin CLI shell (clap) over hermod-core
-```
+| Option | Meaning |
+| --- | --- |
+| `--transport wireguard\|quic` | Sender protocol; receiver also accepts `auto` |
+| `--mtu auto\|NUMBER` | One MTU setting for the selected protocol |
+| `--congestion auto\|cubic\|reno\|bbr\|newreno` | Only algorithms supported by the selected protocol are accepted |
+| `--limit-mbps NUMBER` | Decimal megabits/s of payload, 0 unlimited; lower sender/receiver cap wins |
+| `--server URL` | Signaling server (must be trusted) |
+| `--words NUMBER` | Sender code length, 1–32 words, default 3 |
+| `--destination PATH` | Receiver output directory |
+| `--verbose LEVEL`, `--quiet` | Global logging level and reduced status output |
 
-## License
+**MTU semantics:** WireGuard uses the inner IP MTU (auto: 1400, accepted 576–65488).
+QUIC uses a UDP payload ceiling (1200–1452); auto begins at 1200 and probes up to 1452.
+An explicit QUIC cap is never exceeded by discovery. Larger values do not automatically
+make WireGuard faster: leave space for outer IPv6/UDP/WireGuard overhead.
 
-MIT — see [LICENSE](LICENSE).
+**Congestion control:** `auto` means CUBIC on WireGuard and BBR on QUIC. WireGuard
+supports CUBIC/Reno; QUIC supports BBR/CUBIC/NewReno. Unsupported combinations fail
+explicitly, including after an auto receiver learns the sender's protocol.
+
+**Custom server trust:** independently obtain the server's SHA-256 SPKI fingerprint,
+then use `hermod trust SERVER --fingerprint HEX` (see `hermod trust --help`). The GUI
+provides Fetch fingerprint and an explicit confirmation; fetching alone is not identity
+verification. Trust and server selection are separate settings. CLI config is
+`$XDG_CONFIG_HOME/hermod/config.yaml`, or `~/.config/hermod/config.yaml` by default;
+GUI config and verified inbox are in the platform's application data directory.
+
+## Migrating from 0.3.x
+
+| Removed | Replacement |
+| --- | --- |
+| `--wg-mtu N` | `--transport wireguard --mtu N` |
+| `--quic-mtu N` | `--transport quic --mtu N` (now a hard discovery ceiling) |
+| `--quic-cc ALGORITHM` | `--transport quic --congestion ALGORITHM` |
+| `--listen ADDRESS` / bind address | Automatic `[::]:0`; no public binding control |
+| `serve` placeholder | Removed; run a compatible signaling server separately |
+
+Desktop uses Fluent 2; Android uses Material Design 3 Web. Both use the same React
+pages, settings and transfer engine inside `hermod-app`. Only system file access,
+permissions and foreground notifications need Android native adapters. Old desktop bandwidth/theme preferences
+are migrated on first launch when possible; private verified inbox data is retained.
+
+## Troubleshooting and development
+
+- **Code cannot connect:** check both peers' IPv6 routing, signaling reachability,
+  UDP firewall rules, complete code and compatible forced protocols.
+- **Browsing slows while sending:** lower `--limit-mbps` / GUI bandwidth. A saturated
+  upload can queue browsing requests; see [performance and latency](NETWORK_PERFORMANCE.md).
+- **Export failed:** keep the verified inbox copy, choose a writable folder again,
+  then retry Save a copy. Regrant Android folder access if necessary.
+- **Windows signer mismatch:** download the MSIX, certificate and installer from the
+  same Release. Never fix this by importing an unrelated certificate into Root.
+
+[Build and release guide](APP_BUILD.md) · [Architecture and contributor guide](AGENTS.md) ·
+[Changelog](CHANGELOG.md) · [License](LICENSE)
+
+Inspired by [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole).
+The protocol uses CPace, authenticated endpoint exchange and transport encryption;
+the Go implementation shares the signaling and transfer-code formats.

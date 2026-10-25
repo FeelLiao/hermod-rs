@@ -39,7 +39,13 @@ pub fn open(key: &[u8; 32], aad: &[u8], blob: &[u8]) -> Result<Vec<u8>, AeadErro
     let nonce = Nonce::from(nonce_arr);
     let cipher = Aes256Gcm::new_from_slice(key).expect("key is always 32 bytes (type-enforced)");
     cipher
-        .decrypt(&nonce, Payload { msg: &blob[NONCE_SIZE..], aad })
+        .decrypt(
+            &nonce,
+            Payload {
+                msg: &blob[NONCE_SIZE..],
+                aad,
+            },
+        )
         .map_err(|_| AeadError::Auth)
 }
 
@@ -53,7 +59,13 @@ fn seal_with_nonce(
     let cipher = Aes256Gcm::new_from_slice(key).expect("key is always 32 bytes (type-enforced)");
     let gcm_nonce = Nonce::from(*nonce);
     let ct = cipher
-        .encrypt(&gcm_nonce, Payload { msg: plaintext, aad })
+        .encrypt(
+            &gcm_nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .expect("GCM encryption of arbitrary plaintext cannot fail");
     let mut out = Vec::with_capacity(NONCE_SIZE + ct.len());
     out.extend_from_slice(nonce);
@@ -135,7 +147,9 @@ mod tests {
     /// （nonce(12) ‖ 密文 ‖ tag(16)，与 Go SealAAD 逐字节一致）。
     #[test]
     fn deterministic_format() {
-        let fixed_nonce = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c];
+        let fixed_nonce = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+        ];
         let blob = seal_with_nonce(&KEY, &fixed_nonce, AAD, b"hello");
         assert_eq!(
             hex(&blob),

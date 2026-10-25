@@ -65,5 +65,8 @@ pub fn status(msg: impl AsRef<str>) {
 
 /// 错误（**永不被抑制**，红色）。
 pub fn error(msg: impl AsRef<str>) {
-    eprintln!("{}", paint(&format!("error: {}", msg.as_ref()), console::Color::Red));
+    eprintln!(
+        "{}",
+        paint(&format!("error: {}", msg.as_ref()), console::Color::Red)
+    );
 }

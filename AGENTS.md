@@ -4,44 +4,65 @@ Guidance for LLM agents working on this repository.
 
 ## Read first
 
-- `README.md` — what the project is and how it is used
-- `CHANGELOG.md` — recent changes
-- The source tree in `hermod-core/` — the module `//!` docs explain each layer
-  (crypto, signal, transport, session, orchestrate)
+- `README.md` / `README.zh-CN.md`: users, platforms, protocol defaults and migration.
+- `CHANGELOG.md`: recent and historical changes.
+- `APP_BUILD.md`: toolchains, fixed signing, CI gates and release allowlist.
+- Module `//!` docs in `hermod-core/` and `hermod-app/src-tauri/src/app/`.
 
 ## Conventions
 
-- **Language:** code identifiers, log messages, and user-facing output are in
-  English; code comments are in Chinese (zh-CN).
-- **Commits:** Conventional Commits (`<type>(<scope>): <summary>`).
-- **Quality gate (must pass before merging):**
-  ```bash
-  cargo test --workspace
-  cargo clippy --workspace --all-targets -- -D warnings
-  ```
-  `unsafe` code is forbidden (workspace `lints.rust.unsafe_code = "forbid"`).
+- Code identifiers, logs and application UI are English; code comments are Chinese (zh-CN).
+- Commits use Conventional Commits: `<type>(<scope>): <summary>`.
+- Handwritten unsafe Rust is forbidden by workspace lints. Mobile file descriptors use the official Tauri fs plugin.
+- Never regenerate release signing keys silently or publish private keys.
+- Preserve user inbox data. Cleanup removes incomplete files only after acquiring the storage lock.
+- Local verification is Linux-only for this release; other platform builds run in Actions.
 
-## Architecture (one paragraph)
+Required quality gates:
 
-`hermod-core` holds everything: crypto primitives (`crypto/`), the WebSocket
-signaling client with SPKI pinning (`signal/`), the `Transport` trait and its two
-sibling implementations (`transport/quic` — QUIC + TLS 1.3 + BBR, the default;
-`transport/wireguard` — boringtun + smoltcp in-process TCP, optional fallback), shared
-transport-internal HTTP/1.1 (`transport/http`), the session orchestration that
-turns a transfer code into an established transport (`session.rs`), and the tx/rx
-main flow (`orchestrate.rs`). `hermod-cli` is a thin clap shell over
-`hermod-core`. The two transports do not depend on each other; `AnyTransport` /
-`AnyConnection` only dispatch at runtime.
+```bash
+cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+npm ci --prefix hermod-app
+npm run build --prefix hermod-app
+npm test --prefix hermod-app
+```
 
-## Testing notes
+## Architecture
 
-- The crypto modules use official vectors (RFC 7748, RFC 9380, RFC 5869) as
-  independent baselines.
-- The transport has local end-to-end tests that exercise the full chain
-  (WireGuard handshake → smoltcp TCP → HTTP → SHA-256 verdict, and QUIC
-  handshake → bidirectional stream → HTTP → SHA-256 verdict) over the host's
-  own IPv6 addresses, so no external server is needed.
-- The QUIC throughput benchmark is ignored by default:
-  `cargo test -p hermod-core --release -- --ignored quic_throughput`.
-- Tests that need a real signaling server are not run by CI in this sandbox;
-  verify against a live server before relying on them.
+`hermod-core` contains crypto, the WebSocket signaling client with SPKI pinning,
+shared connection options, independent WireGuard and QUIC transports, transport-internal
+HTTP/1.1, session negotiation and tx/rx orchestration. WireGuard uses boringtun and
+smoltcp TCP (default sender, CUBIC); QUIC uses quinn/TLS 1.3 (optional sender, BBR).
+The receiver defaults to Auto. `AnyTransport` / `AnyConnection` dispatch at runtime;
+neither transport depends on the other. `--mtu` and `--congestion` are interpreted and
+validated for the selected protocol; no unsupported option is silently ignored.
+Automatic binding is `[::]:0`; internal overrides remain for tests. IPv6-only behavior,
+CPace and internal SHA-256 integrity verification are retained.
+
+`hermod_app_lib::app::Engine` owns persistent settings, private verified inbox, sources,
+job snapshots and cancellation. Every transfer copies settings before starting.
+`hermod-cli` is a clap shell. Tauri exposes narrowly scoped commands
+and native dialogs to shared React pages. The UI adapter selects official Fluent UI v9
+on desktop and official Material Web on Android. The Android plugin under hermod-app
+provides SAF, permissions, system color and a foreground service. Rust monitors jobs
+and exports independently of WebView timers.
+No frontend receives unrestricted private file paths. File streams are bounded;
+unknown-size sources are staged privately and verified receive data survives export failures.
+
+## Tests and releases
+
+Crypto tests use independent RFC vectors (7748, 9380, 5869). Local transport tests
+exercise handshake, streams, HTTP and digest verdict on both protocols. CLI integration
+tests spawn actual command-line binaries and use the same application engine as both
+GUIs. A non-loopback local IPv6 address is needed; APP_BUILD.md shows an isolated namespace.
+The ignored QUIC throughput benchmark is opt-in:
+`cargo test -p hermod-core --release -- --ignored quic_throughput`.
+No public signaling service is required for the quality gate.
+
+Browser tests validate Fluent desktop and Material phone/tablet UIs through mocked IPC. Native Linux AppImage smoke tests
+check real window creation. Windows CI validates signing identity and native MSIX
+installation/launch. Android CI tests API 34 and 37 with an unpublished x86_64 ABI;
+only signed ARM64 APKs ship. API/toolchain versions are pinned in APP_BUILD.md and Gradle.
+The workflow gates publishing on all jobs, then enforces an exact Release file allowlist.

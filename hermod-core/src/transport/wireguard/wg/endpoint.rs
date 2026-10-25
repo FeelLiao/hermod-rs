@@ -73,10 +73,7 @@ mod tests {
     /// 候选按「全局 → ULA → 链路本地」排序，并统一使用对端端口。
     #[test]
     fn candidates_are_ranked() {
-        let ep = PeerEndpoint::new(
-            vec![v6("fe80::1"), v6("2001:db8::1"), v6("fd00::1")],
-            51820,
-        );
+        let ep = PeerEndpoint::new(vec![v6("fe80::1"), v6("2001:db8::1"), v6("fd00::1")], 51820);
         let got: Vec<_> = ep
             .candidates()
             .iter()

@@ -413,7 +413,9 @@ mod tests {
             name: "cancel.bin".into(),
             size: data.len() as u64,
             body: Box::new(std::io::Cursor::new(data)),
-            progress: Some(Box::new(move |_| { progress_started.notify_one(); })),
+            progress: Some(Box::new(move |_| {
+                progress_started.notify_one();
+            })),
         };
         let mut dest = Vec::new();
         let abort = rx_conn.abort_handle();

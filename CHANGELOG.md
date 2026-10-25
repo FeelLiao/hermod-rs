@@ -6,6 +6,44 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-25
+
+### Added
+
+- Shared Rust application engine and validated settings, persistent GUI configuration,
+  bounded document streams, verified inbox exports and in-memory logs.
+- Tauri Android Material Design 3 Web GUI sharing React pages with desktop; SAF URI
+  access, dynamic colors, foreground progress and notification cancellation.
+  Minimum API 34; compile/target API 37, with pinned SDK/Gradle/AGP/NDK toolchains.
+- Official Fluent UI React v9 desktop interface with system themes, file/text sending,
+  receive, cancellation, advanced network options and fingerprint trust management.
+- Fixed signing-key initialization and documented GitHub Secrets, PowerShell-only
+  Windows installation, MSIX installation/launch checks and Android API 34/37 tests.
+- English and Chinese quick-start documentation, settings/export tests and actual
+  CLI-to-GUI engine interoperability checks on both protocols.
+
+### Changed
+
+- Sender default is WireGuard; receiver remains Auto. Unified `--mtu` and
+  `--congestion` apply to the selected protocol and reject incompatible settings.
+- WireGuard auto MTU is 1400 and congestion control is CUBIC; QUIC auto uses BBR,
+  begins MTU discovery at 1200 and obeys the configured UDP payload ceiling.
+- GUI starts at 8 Mbps, CLI remains unlimited; saved changes affect future jobs.
+- Release matrix: Windows GUI x64/ARM64 MSIX, Linux GUI x64/ARM64 AppImage,
+  Linux CLI x64/ARM64 musl, Android ARM64 APK. Exact attachment allowlist, gated
+  publication, fixed Windows PFX and Android keystore, no generated replacement keys.
+- CLI respects an absolute XDG_CONFIG_HOME, falling back to ~/.config/hermod.
+
+### Removed
+
+- Public bind/listen controls, protocol-specific MTU/CC flags and unimplemented serve.
+- macOS releases, Windows/Android CLI releases, portable Windows ZIP tooling,
+  obsolete native Android UI/bridge crates and the separate GUI engine crate.
+- Root packaging/windows nesting: GUI packaging, templates and native adapters now
+  live entirely under hermod-app.
+- Release checksums and auxiliary attachments; internal transfer SHA-256 remains.
+
+
 ## [0.3.1] - 2026-10-25
 
 ### Changed

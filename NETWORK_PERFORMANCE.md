@@ -1,9 +1,9 @@
 # Upload saturation and responsiveness
 
-The existing sender continuously supplies data to QUIC, whose default BBR
+In unlimited mode the sender continuously supplies data to QUIC, whose BBR
 controller probes for available capacity. It has a 64 MiB application window
-and requests 8 MiB UDP socket buffers. WireGuard likewise has no application
-bandwidth budget. These settings favor bulk throughput, but reserve no capacity
+and requests 8 MiB UDP socket buffers. WireGuard uses CUBIC by default, but an unlimited transfer also reserves no
+application bandwidth for other traffic. These settings favor bulk throughput, but reserve no capacity
 for browsers or other applications sharing the uplink.
 
 When the bottleneck queue fills, small HTTP requests and TCP acknowledgements
@@ -12,7 +12,7 @@ slowdown. A large application window is not itself proof of router queue buildup
 CPU load, Wi-Fi and router behavior can also contribute. See
 [RFC 7567 on queue management and latency](https://www.rfc-editor.org/rfc/rfc7567.html).
 
-## Change
+## Shared bandwidth and transport settings
 
 `--limit-mbps` paces file payload **before** writing to QUIC or WireGuard. Each
 chunk represents at most 20 ms of the configured budget (maximum 64 KiB).
@@ -29,7 +29,7 @@ available; switching to CUBIC alone does not reserve upload capacity.
 Mbps means decimal megabits per second: 8 Mbps is 1,000,000 payload bytes/s.
 Encryption, IP headers and retransmissions are additional traffic. Start at
 70–85% of **measured upload capacity**, then compare browsing latency. The GUI
-starts at an explicit, editable 10 Mbps cap; this is not an automatic bandwidth
+starts at an explicit, editable 8 Mbps cap; this is not an automatic bandwidth
 estimate. CLI default 0 retains unlimited operation. Limits apply per transfer.
 
 ## Reproduction
@@ -52,3 +52,38 @@ not measurements of the user's Internet connection. The shared simulated link
 carries data and acknowledgements in both directions. Actual gains depend on
 uplink capacity, competing traffic and queue management. Router SQM/AQM can
 additionally help all applications; Hermod does not change router settings.
+
+## v0.4.0 settings
+
+Sending now defaults to WireGuard; receiving defaults to Auto. `--congestion auto`
+selects CUBIC for WireGuard or BBR for QUIC. WireGuard supports CUBIC/Reno; QUIC
+supports BBR/CUBIC/NewReno. Selecting an unsupported algorithm fails explicitly.
+The single `--mtu` option controls the active protocol: WireGuard inner IP MTU
+(default 1400), or QUIC UDP payload ceiling (1200–1452). QUIC starts at 1200 and
+never probes above an explicit ceiling. Neither MTU nor congestion control replaces
+a bandwidth budget. Payload limits exclude outer headers and retransmissions.
+
+Desktop and Android share settings and take a snapshot for each transfer. The GUI
+starts at 8 Mbps; CLI starts unlimited. Changing settings while transferring affects
+the next job. In-memory queues for document callbacks are limited to two 64 KiB chunks;
+unknown-length SAF documents stage to private storage before advertising a code.
+
+## IPv6 and WSL
+
+No IPv4 mode or relay is included. Both devices need routed IPv6 and UDP firewall
+permission. Binding is automatic on `[::]:0`; the removed `--listen` flag is not a
+connectivity fix. Link-local-only and fabricated IPv6 addresses cannot reach remote peers.
+
+On supported Windows 11 and WSL, use the Windows profile `.wslconfig`:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+dnsTunneling=true
+```
+
+Run `wsl --shutdown` from Windows after saving. Verify Windows has IPv6 first, then
+check `ip -6 addr`, `ip -6 route` and the signaling host's DNS/port from WSL. Mirrored
+networking still obeys Windows/Hyper-V and router firewall rules. See Microsoft's
+[WSL networking guide](https://learn.microsoft.com/windows/wsl/networking).
+Do not disable all firewalls or assign arbitrary public addresses as a workaround.

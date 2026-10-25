@@ -3,7 +3,7 @@
 //! 上层只依赖本模块的 [Transport] / [TransportConnection]；
 //! 换传输协议 = 换实现，不动上层。当前有两个并列实现：
 //!
-//! - [crate::transport::quic]：QUIC + TLS 1.3 + BBR（默认）；
+//! - [crate::transport::quic]：QUIC + TLS 1.3 + BBR（可选）；
 //! - [crate::transport::wireguard]：用户态 WireGuard + smoltcp TCP（可选回退）。
 //!
 //! 两个实现互不依赖，只共享本模块的 trait 与 [TransportKind]。
@@ -73,13 +73,13 @@ impl NetworkStatsHandle {
 
 /// 数据面传输协议选择。
 ///
-/// QUIC 是默认实现；WireGuard 仍可用 `--transport wireguard` 显式选择。
+/// WireGuard 是发送端默认；QUIC 可用 `--transport quic` 显式选择。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransportKind {
-    /// 用户态 WireGuard + 进程内 TCP（可选回退）。
+    /// 用户态 WireGuard + 进程内 TCP（发送默认）。
+    #[default]
     WireGuard,
     /// QUIC（TLS 1.3 + 可插拔拥塞控制，默认 BBR）。
-    #[default]
     Quic,
 }
 
@@ -366,8 +366,8 @@ mod tests {
     }
 
     #[test]
-    fn default_transport_is_quic() {
-        assert_eq!(TransportKind::default(), TransportKind::Quic);
+    fn default_transport_is_wireguard() {
+        assert_eq!(TransportKind::default(), TransportKind::WireGuard);
         assert_eq!(TransportKind::parse("quic"), Some(TransportKind::Quic));
         assert_eq!(
             TransportKind::parse("wireguard"),

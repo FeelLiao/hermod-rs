@@ -110,7 +110,10 @@ impl WireGuardTunnel {
             return Some((None, Vec::new()));
         };
         let src_ip = IpAddr::V6(*src6.ip());
-        match self.session.handle_packet(Some(src_ip), &self.recv_buf[..n]) {
+        match self
+            .session
+            .handle_packet(Some(src_ip), &self.recv_buf[..n])
+        {
             Outcome::Network(pkt) => {
                 self.endpoint.roam(src6);
                 Some((None, vec![(pkt, src6)]))
@@ -161,10 +164,17 @@ impl WireGuardTunnel {
             return Ok(None);
         };
         let src_ip = IpAddr::V6(*src6.ip());
-        match self.session.handle_packet(Some(src_ip), &self.recv_buf[..n]) {
+        match self
+            .session
+            .handle_packet(Some(src_ip), &self.recv_buf[..n])
+        {
             Outcome::Network(pkt) => {
                 // 握手响应 / keepalive 等：记录来源端点并回发。
-                crate::log_debug!("WG control packet ({}B), replying {}B, endpoint -> {src6}", n, pkt.len());
+                crate::log_debug!(
+                    "WG control packet ({}B), replying {}B, endpoint -> {src6}",
+                    n,
+                    pkt.len()
+                );
                 self.endpoint.roam(src6);
                 self.udp.send_to(&pkt, src6).await?;
                 Ok(None)

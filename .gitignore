@@ -32,3 +32,9 @@ hermod-app/plugins/documents/android/build/
 /dist/
 hermod-app/plugins/documents/android/.tauri/
 /store-output/
+
+/signing-private/
+**/*.key
+**/*.pem
+
+**/__pycache__/

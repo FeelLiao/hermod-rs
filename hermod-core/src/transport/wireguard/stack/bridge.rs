@@ -318,7 +318,6 @@ pub fn pump_socket(socket: &mut smoltcp::socket::tcp::Socket<'_>, ends: &mut Bri
             None => break,
         }
     }
-
 }
 
 #[cfg(test)]
@@ -337,7 +336,12 @@ mod tests {
         let chunks = ends.send.drain();
         assert_eq!(chunks.concat(), b"hello");
 
-        ends.recv_tx.as_ref().unwrap().send(b"world".to_vec()).await.unwrap();
+        ends.recv_tx
+            .as_ref()
+            .unwrap()
+            .send(b"world".to_vec())
+            .await
+            .unwrap();
         let mut buf = [0u8; 5];
         stream.read_exact(&mut buf).await.unwrap();
         assert_eq!(&buf, b"world");
@@ -357,9 +361,7 @@ mod tests {
     #[tokio::test]
     async fn bridged_streams_transfer_between_stacks() {
         use crate::transport::wireguard::stack::device::IP_MTU;
-        use crate::transport::wireguard::stack::driver::{
-            TunnelStack, OVERLAY_RX, OVERLAY_TX,
-        };
+        use crate::transport::wireguard::stack::driver::{OVERLAY_RX, OVERLAY_TX, TunnelStack};
         use smoltcp::wire::{IpAddress, IpListenEndpoint, Ipv4Address};
 
         let ip = |a: std::net::Ipv4Addr| {

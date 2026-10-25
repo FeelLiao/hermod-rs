@@ -4,13 +4,11 @@ members = ["hermod-core", "hermod-cli", "hermod-app/src-tauri", "hermod-app/plug
 default-members = ["hermod-core", "hermod-cli"]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.99.0"
 
-# Uniform lint policy across all workspace crates (M1.1; quality gate in
-# DEVELOPMENT.md §9): clippy warnings are errors, and `unsafe` is forbidden
-# in our own code (S5).
+# 工作区统一禁止手写 unsafe；Clippy 警告作为错误处理。
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

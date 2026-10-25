@@ -2157,12 +2157,12 @@ checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "hermod-app"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "getrandom 0.4.3",
  "hermod-core",
- "if-addrs",
  "rand_core 0.10.1",
  "serde",
  "serde_json",
@@ -2175,26 +2175,33 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "hermod-cli"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "clap",
  "console",
+ "futures-util",
  "getrandom 0.4.3",
+ "hermod-app",
  "hermod-core",
  "indicatif",
  "rand_core 0.10.1",
+ "serde_json",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
 ]
 
 [[package]]
 name = "hermod-core"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "aes-gcm",
  "base64ct",
@@ -4995,7 +5002,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-documents"
-version = "0.1.0"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",

@@ -1,4 +1,4 @@
-//! QUIC 传输实现（默认数据面）。
+//! QUIC 传输实现（可选数据面）。
 //!
 //! 与 [crate::transport::wireguard] **完全独立**：自己的 endpoint bundle、自己的
 //! IPv6 候选逻辑、自己的证书/握手代码，不引用 WireGuard 的任何类型。

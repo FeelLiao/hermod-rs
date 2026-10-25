@@ -1,0 +1,221 @@
+/* Material Web 使用官方令牌；布局和页面与桌面共用。 */
+.material {
+  --md-ref-typeface-brand: Roboto, system-ui, sans-serif;
+  --md-ref-typeface-plain: Roboto, system-ui, sans-serif;
+  --colorNeutralBackground1: var(--md-sys-color-surface);
+  --colorNeutralBackground2: var(--md-sys-color-surface-variant);
+  --colorNeutralBackground2Hover: var(--md-sys-color-secondary-container);
+  --colorNeutralForeground1: var(--md-sys-color-on-surface);
+  --colorNeutralForeground3: var(--md-sys-color-on-surface-variant);
+  --colorNeutralStroke1: var(--md-sys-color-outline);
+  --colorNeutralStroke2: var(--md-sys-color-outline-variant);
+  --colorBrandBackground: var(--md-sys-color-primary);
+  --colorBrandBackground2: var(--md-sys-color-primary-container);
+  --colorBrandStroke1: var(--md-sys-color-primary);
+  --colorBrandStroke2: var(--md-sys-color-outline-variant);
+  --colorNeutralForegroundOnBrand: var(--md-sys-color-on-primary);
+  --colorStrokeFocus2: var(--md-sys-color-primary);
+  --colorStatusSuccessForeground1: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-surface);
+  font-family: Roboto, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  grid-template-columns: 100px minmax(0, 1fr);
+  min-height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+.material h1 {
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 1.25;
+  margin: 0;
+}
+.material h2 {
+  font-size: 22px;
+  font-weight: 400;
+  margin: 0;
+}
+.material .rail {
+  padding: 20px 8px;
+  align-items: center;
+}
+.material .brand {
+  padding: 0;
+}
+.material .brand > span:last-child,
+.material .rail-footer {
+  display: none;
+}
+.material .md-navigation {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 16px;
+}
+.md-navigation button {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  border: 0;
+  gap: 4px;
+  background: transparent;
+  color: var(--md-sys-color-on-surface);
+  cursor: pointer;
+  border-radius: 20px;
+  padding: 4px;
+  min-height: 56px;
+}
+.md-navigation button[aria-selected="true"] .md-nav-icon {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+.md-nav-icon {
+  width: 64px;
+  height: 32px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+}
+.md-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 24px;
+  background: var(--md-sys-color-surface);
+  border: 1px solid var(--md-sys-color-outline-variant);
+}
+.md-card.inbox-row {
+  flex-direction: row;
+}
+.md-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.md-field > md-outlined-text-field,
+.md-field > md-outlined-select {
+  width: 100%;
+}
+.md-hint {
+  padding-inline: 16px;
+  font-size: 12px;
+}
+.md-check {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+.material md-filled-button,
+.material md-outlined-button,
+.material md-text-button {
+  min-height: 48px;
+}
+.material md-linear-progress {
+  width: 100%;
+}
+.material .actions md-outlined-text-field {
+  width: 100%;
+}
+.material .file-picker {
+  border-radius: 20px;
+  min-height: 160px;
+}
+.material .code-box {
+  border-radius: 20px;
+  color: var(--md-sys-color-on-primary-container);
+}
+.md-badge {
+  border-radius: 20px;
+  padding: 4px 12px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  align-self: start;
+  font-size: 12px;
+}
+.md-message {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  overflow-wrap: anywhere;
+}
+.md-message.error {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+.md-details summary {
+  padding: 14px 0;
+  cursor: pointer;
+  min-height: 48px;
+}
+.material md-dialog {
+  max-width: min(560px, calc(100vw - 32px));
+  --md-dialog-container-shape: 28px;
+}
+.material md-dialog [slot="actions"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 1050px) {
+  .material .transfer-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (min-width: 600px) {
+  .material .rail {
+    position: sticky;
+    height: 100dvh;
+  }
+}
+@media (max-width: 599px) {
+  .material {
+    display: block;
+    padding-bottom: calc(90px + env(safe-area-inset-bottom));
+  }
+  .material .rail {
+    position: fixed;
+    z-index: 10;
+    bottom: 0;
+    top: auto;
+    left: 0;
+    right: 0;
+    height: auto;
+    padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface);
+  }
+  .material .brand {
+    display: none;
+  }
+  .material .md-navigation {
+    flex-direction: row;
+    gap: 0;
+  }
+  .md-navigation button {
+    flex: 1;
+  }
+  .material main {
+    padding: 24px 16px;
+  }
+  .material header {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .material .panel {
+    padding: 20px;
+  }
+}
+
+.material [slot="icon"],
+.material [slot="icon"] * {
+  pointer-events: none;
+}

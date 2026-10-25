@@ -1,2 +1,2 @@
-# 避免 Windows 检出后把 shell 脚本改成 CRLF，导致 Linux/Android CI 无法执行。
 *.sh text eol=lf
+gradlew text eol=lf

@@ -15,7 +15,7 @@ pub async fn bind(port: u16) -> std::io::Result<UdpSocket> {
     bind_at(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0)).await
 }
 
-/// 绑定到指定 IPv6 地址（`--listen` 用），仍强制 IPV6_V6ONLY。
+/// 绑定到指定 IPv6 地址（内部测试用），仍强制 IPV6_V6ONLY。
 pub async fn bind_at(addr: SocketAddrV6) -> std::io::Result<UdpSocket> {
     let sock = Socket::new(Domain::IPV6, Type::DGRAM, None)?;
     // 只收 IPv6，避免 v4-mapped 流量（§3.3）。
@@ -36,12 +36,11 @@ pub async fn bind_at(addr: SocketAddrV6) -> std::io::Result<UdpSocket> {
     UdpSocket::from_std(std_udp)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// `bind_at` 会绑定到指定地址（--listen）。
+    /// `bind_at` 会绑定到指定地址（内部测试用）。
     #[tokio::test]
     async fn bind_at_honors_address() {
         let addr = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0);

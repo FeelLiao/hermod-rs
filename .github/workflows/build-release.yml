@@ -1,23 +1,21 @@
-name: build-and-release
-
+name: Build and release
 on:
   push:
+    branches: ['**']
     tags: ['v*']
+  pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   verify:
-    name: Quality gates
+    name: Linux quality gates
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -28,98 +26,101 @@ jobs:
           cache-dependency-path: hermod-app/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          key: quality
-      - name: Install native dependencies
+          key: quality-v040
+      - name: Native dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config cmake perl clang libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: node scripts/check-release-version.mjs
-      - run: npm ci
+      - run: npm ci && npm run build
         working-directory: hermod-app
-      - run: npm run build
-        working-directory: hermod-app
-      - run: npx playwright install --with-deps chromium
-        working-directory: hermod-app
-      - run: npm test
+      - run: npx playwright install --with-deps chromium && npm test
         working-directory: hermod-app
       - name: Local IPv6 test interface
         run: |
           sudo ip link add hermodtest type dummy
           sudo ip link set hermodtest up
           sudo ip -6 address add fd00:1234::1/64 dev hermodtest nodad
+      - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-  cli:
-    name: CLI (${{ matrix.target }})
+  linux:
+    name: Linux ${{ matrix.arch }} GUI and CLI
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     needs: verify
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-22.04
-            target: x86_64-unknown-linux-musl
-            binary: hermod
-            artifact: hermod-linux-x86_64-musl
-            rustflags: ''
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            binary: hermod.exe
-            artifact: hermod-windows-x86_64.exe
-            rustflags: '-C target-feature=+crt-static'
+            arch: x64
+            triple: x86_64
+            appimage_arch: amd64
+          - os: ubuntu-22.04-arm
+            arch: arm64
+            triple: aarch64
+            appimage_arch: aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: hermod-app/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.triple }}-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
         with:
-          key: cli-${{ matrix.target }}
-      - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools cmake perl clang
-      - name: Build existing command-line artifact
+          key: linux-${{ matrix.arch }}-v040
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake perl clang musl-tools libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 xvfb xdotool
+      - run: npm ci
+        working-directory: hermod-app
+      - name: AppImage
+        working-directory: hermod-app
         env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
-          CC_x86_64_unknown_linux_musl: musl-gcc
-        run: cargo build --release --locked --target ${{ matrix.target }} -p hermod-cli
-      - name: Stage
-        shell: bash
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        run: npm run tauri -- build --ci --bundles appimage -- --locked
+      - name: Stage and launch AppImage
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/${{ matrix.artifact }}
+          version=$(node -p "require('./hermod-app/package.json').version")
+          cp "target/release/bundle/appimage/Hermod_${version}_${{ matrix.appimage_arch }}.AppImage" dist/hermod-linux-${{ matrix.arch }}.AppImage
+          hermod-app/scripts/smoke-appimage.sh dist/hermod-linux-${{ matrix.arch }}.AppImage
+      - name: Static musl CLI
+        run: |
+          export CC_${{ matrix.triple }}_unknown_linux_musl=musl-gcc
+          cargo build --locked --release --target ${{ matrix.triple }}-unknown-linux-musl -p hermod-cli
+          cp target/${{ matrix.triple }}-unknown-linux-musl/release/hermod dist/hermod-linux-${{ matrix.arch }}-musl
+          if readelf -l dist/hermod-linux-${{ matrix.arch }}-musl | grep -q INTERP; then echo 'CLI is not static'; exit 1; fi
+          dist/hermod-linux-${{ matrix.arch }}-musl --version
       - uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.artifact }}
+          name: release-linux-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
 
-  desktop:
-    name: GUI (${{ matrix.label }})
+  windows:
+    name: Windows ${{ matrix.arch }} MSIX
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     needs: verify
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            label: linux-x86_64
-            target: x86_64-unknown-linux-gnu
-            bundles: appimage
-          - os: windows-latest
-            label: windows-x86_64
+          - os: windows-2025
+            arch: x64
             target: x86_64-pc-windows-msvc
-            bundles: ''
-          - os: macos-15-intel
-            label: macos-x86_64
-            target: x86_64-apple-darwin
-            bundles: app,dmg
-          - os: macos-15
-            label: macos-arm64
-            target: aarch64-apple-darwin
-            bundles: app,dmg
+          - os: windows-11-arm
+            arch: arm64
+            target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -133,49 +134,105 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: gui-${{ matrix.target }}
-      - if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config cmake perl clang libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2
+          key: windows-${{ matrix.arch }}-v040
       - run: npm ci
         working-directory: hermod-app
-      - name: Build Linux / macOS installers
-        if: runner.os != 'Windows'
-        working-directory: hermod-app
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: npm run tauri -- build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
-      - name: Build Windows application
-        if: runner.os == 'Windows'
+      - name: Build native GUI
         working-directory: hermod-app
         env:
           RUSTFLAGS: '-C target-feature=+crt-static'
-        run: npm run tauri -- build --ci --target x86_64-pc-windows-msvc --no-bundle -- --locked
-      - name: Package portable Windows ZIP
-        if: runner.os == 'Windows'
+        run: npm run tauri -- build --ci --target ${{ matrix.target }} --no-bundle -- --locked
+      - name: Fixed test signing and package verification
         shell: pwsh
-        run: ./scripts/package-windows-zip.ps1 -BinaryDirectory target/x86_64-pc-windows-msvc/release
-      - name: Stage Linux packages
-        if: runner.os == 'Linux'
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
         run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/bundle/appimage/*.AppImage dist/hermod-linux-x86_64.AppImage
-      - name: Stage unnotarized macOS packages
-        if: runner.os == 'macOS'
+          if (-not $env:WINDOWS_PFX_BASE64 -or -not $env:WINDOWS_PFX_PASSWORD) { throw 'Missing fixed Windows signing secrets; see APP_BUILD.md' }
+          $env:WINDOWS_PFX_PATH = Join-Path $env:RUNNER_TEMP 'hermod-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($env:WINDOWS_PFX_PATH, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
+            ./hermod-app/scripts/package-msix.ps1 -BinaryDirectory target/${{ matrix.target }}/release -Architecture ${{ matrix.arch }}
+          } finally { Remove-Item -LiteralPath $env:WINDOWS_PFX_PATH -Force -ErrorAction SilentlyContinue }
+      - name: Ensure Microsoft WebView2 Runtime
+        shell: pwsh
         run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/bundle/dmg/*.dmg dist/hermod-${{ matrix.label }}-unnotarized.dmg
-          tar -czf dist/hermod-${{ matrix.label }}-unnotarized.app.tar.gz -C target/${{ matrix.target }}/release/bundle/macos Hermod.app
-          codesign --verify --deep --strict target/${{ matrix.target }}/release/bundle/macos/Hermod.app
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          if (-not (Get-ItemPropertyValue -Path $key -Name pv -ErrorAction SilentlyContinue)) {
+            $installer = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
+            $signature = Get-AuthenticodeSignature $installer
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'WebView2 bootstrapper signature verification failed' }
+            $process = Start-Process $installer -ArgumentList '/silent','/install' -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw 'WebView2 installation failed' }
+          }
+      - name: Install and launch signed MSIX
+        shell: powershell
+        run: ./hermod-app/scripts/smoke-windows.ps1
+      - name: Common attachments are published once
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: Remove-Item dist/Hermod-Test.cer, dist/Install-Hermod.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: release-gui-${{ matrix.label }}
+          name: release-windows-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
 
+  android-tests:
+    name: Android API ${{ matrix.api }} instrumentation
+    needs: verify
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [34, 37]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: hermod-app/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-web-test-v040
+      - uses: gradle/actions/setup-gradle@v4
+      - name: SDK and emulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake perl clang
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses < <(yes) >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'emulator' 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
+          sudo chmod 666 /dev/kvm
+      - name: Prepare Tauri Android shell
+        working-directory: hermod-app
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          echo "NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
+          npm ci
+          npm run tauri -- android init --ci --skip-targets-install
+          node scripts/configure-android.mjs
+      - name: Build test APK (never published)
+        working-directory: hermod-app
+        env:
+          CARGO_NET_OFFLINE: 'false'
+        run: npm run tauri -- android build --ci --debug --target x86_64 --apk --split-per-abi -- --locked
+      - name: Web UI, file grants, lifecycle and permissions
+        env:
+          HERMOD_TEST_API: ${{ matrix.api }}
+        run: hermod-app/scripts/test-android-emulator.sh
+
   android:
-    name: Android ARM64 APK + existing CLI
+    name: Android ARM64 APK
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     needs: verify
     runs-on: ubuntu-22.04
     steps:
@@ -194,72 +251,72 @@ jobs:
           targets: aarch64-linux-android
       - uses: Swatinem/rust-cache@v2
         with:
-          key: android-arm64
+          key: android-web-arm64-v040
       - uses: gradle/actions/setup-gradle@v4
-      - name: Install Android SDK and NDK
-        shell: bash
+      - name: SDK and native toolchain
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake perl clang
-          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          "$sdkmanager" --licenses < <(yes) >/dev/null
-          "$sdkmanager" 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0' 'ndk;29.0.14206865'
-          echo "NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
-          echo "CC_aarch64_linux_android=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
-          echo "AR_aarch64_linux_android=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar" >> "$GITHUB_ENV"
-          echo "CXX_aarch64_linux_android=$ANDROID_HOME/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++" >> "$GITHUB_ENV"
-      - run: npm ci
-        working-directory: hermod-app
-      - name: Generate Android project
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses < <(yes) >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
+      - name: Prepare Tauri Android shell
         working-directory: hermod-app
         run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          echo "NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
+          npm ci
           npm run tauri -- android init --ci --skip-targets-install
-          node ../scripts/configure-android.mjs
-      - name: Build release APK
-        working-directory: hermod-app
-        run: npm run tauri -- android build --ci --apk --target aarch64
-      - name: Sign and verify test APK
-        run: scripts/sign-android-test.sh
-      - name: Build existing Android CLI
+          node scripts/configure-android.mjs
+      - name: Fixed signed APK
         env:
-          CMAKE_TOOLCHAIN_FILE: ${{ env.ANDROID_NDK_HOME }}/build/cmake/android.toolchain.cmake
-          ANDROID_PLATFORM: android-24
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          cargo build --release --locked --target aarch64-linux-android -p hermod-cli
-          cp target/aarch64-linux-android/release/hermod dist/hermod-android-aarch64
+          : "${ANDROID_KEYSTORE_BASE64:?Missing fixed Android signing secrets; see APP_BUILD.md}"
+          : "${ANDROID_KEYSTORE_PASSWORD:?}" "${ANDROID_KEY_ALIAS:?}" "${ANDROID_KEY_PASSWORD:?}"
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/hermod-signing.jks"
+          trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ANDROID_KEYSTORE_PATH"
+          (cd hermod-app && npm run tauri -- android build --ci --target aarch64 --apk --split-per-abi -- --locked)
+          (cd hermod-app/src-tauri/gen/android && ./gradlew --no-daemon -PabiList=arm64-v8a -ParchList=arm64 -PtargetList=aarch64 :app:lintArm64Release -x :app:rustBuildArm64Release)
+          mkdir -p dist
+          cp hermod-app/src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk dist/hermod-android-arm64.apk
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs dist/hermod-android-arm64.apk
+          "$ANDROID_HOME/build-tools/37.0.0/zipalign" -c -P 16 -v 4 dist/hermod-android-arm64.apk
+          "$ANDROID_HOME/build-tools/37.0.0/aapt" dump badging dist/hermod-android-arm64.apk > "$RUNNER_TEMP/apk-manifest.txt"
+          grep -q "sdkVersion:'34'" "$RUNNER_TEMP/apk-manifest.txt"
+          grep -q "targetSdkVersion:'37'" "$RUNNER_TEMP/apk-manifest.txt"
+          python3 hermod-app/scripts/verify-apk.py dist/hermod-android-arm64.apk
       - uses: actions/upload-artifact@v4
         with:
           name: release-android-arm64
-          path: dist/*
+          path: dist/hermod-android-arm64.apk
           if-no-files-found: error
 
   release:
-    name: Publish all verified artifacts
-    needs: [cli, desktop, android]
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: Publish all verified programs
+    needs: [verify, linux, windows, android, android-tests]
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: release-*
           path: artifacts
           merge-multiple: true
-      - name: Checksums
-        working-directory: artifacts
-        run: sha256sum * > SHA256SUMS
+      - run: python3 scripts/check-release-files.py artifacts
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
           fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
-            Windows GUI: extract hermod-windows-x86_64.zip and run hermod-app.exe (unsigned; WebView2 required).
-            For Microsoft Store submission, use the included Store tools to create an unsigned MSIX with your Partner Center identity; ZIP itself is not a Store package.
-            Android APK uses a new test signing key on each build; export your inbox before uninstalling an older test APK.
-            macOS apps are ad-hoc signed and NOT notarized. Linux GUI is distributed only as AppImage and requires a compatible desktop.
-            All existing CLI artifacts are included. SHA256SUMS covers every package.
-            Both peers need reachable IPv6; this release does not add IPv4 traversal or a file relay.
+            Both peers need reachable IPv6. See README.md / README.zh-CN.md for setup and migration.
+            Windows: download the matching MSIX, Hermod-Test.cer and Install-Hermod.ps1 into one directory. Run the PowerShell installer as your normal user. A fixed test certificate is used; this is not a Microsoft Store package.
+            Linux: AppImage GUI or static musl CLI, x64 / ARM64.
+            Android: ARM64 APK, Android 14 or newer (API 34), target API 37. Export inbox files before uninstalling an older temporary-key build.

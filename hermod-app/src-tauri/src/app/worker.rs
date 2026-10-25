@@ -15,7 +15,8 @@ use std::{
 use tokio::sync::Notify;
 
 pub struct Source {
-    pub file: std::fs::File,
+    pub reader: Box<dyn std::io::Read + Send>,
+    pub kind: hermod_core::transfer::Kind,
     pub name: String,
     pub size: Option<u64>,
     pub cache: PathBuf,
@@ -39,6 +40,7 @@ pub struct Snapshot {
     pub error: Option<String>,
     pub cancelled: bool,
     pub network: Option<NetworkStatsHandle>,
+    pub transport: Option<String>,
 }
 
 impl Default for Snapshot {
@@ -55,6 +57,7 @@ impl Default for Snapshot {
             error: None,
             cancelled: false,
             network: None,
+            transport: None,
         }
     }
 }
@@ -70,6 +73,7 @@ impl Job {
         config: Config,
         options: SessionOptions,
         action: Action,
+        words: u8,
         on_finish: Box<dyn FnOnce() + Send>,
     ) -> Self {
         let state = Arc::new(Mutex::new(Snapshot::default()));
@@ -91,7 +95,7 @@ impl Job {
                     Ok(())
                 },
                 _ = idle_timeout(state.clone()) => Err("Transfer made no progress for 90 seconds".into()),
-                result = run(config, options, action, state.clone(), abort.clone()) => result,
+                result = run(config, options, action, words, state.clone(), abort.clone()) => result,
             };
             if let Err(error) = result {
                 if let Some(handle) = abort.lock().unwrap().take() {
@@ -169,13 +173,15 @@ async fn run(
     config: Config,
     options: SessionOptions,
     action: Action,
+    words: u8,
     state: Arc<Mutex<Snapshot>>,
     abort: Arc<Mutex<Option<AbortHandle>>>,
 ) -> Result<(), String> {
     let limit: BandwidthLimit = options.bandwidth_limit;
     match action {
         Action::Send(source) => {
-            let mut file = tokio::fs::File::from_std(source.file);
+            let mut file: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
+                Box::new(stream_reader(source.reader));
             let mut temporary = Temporary(None);
             let size = if let Some(size) = source.size {
                 size
@@ -195,13 +201,13 @@ async fn run(
                     .map_err(|e| e.to_string())?;
                 use tokio::io::AsyncSeekExt;
                 staged.rewind().await.map_err(|e| e.to_string())?;
-                file = staged;
+                file = Box::new(staged);
                 size
             };
             state.lock().unwrap().total = Some(size);
             let (_, code) = hermod_core::crypto::wordlist::generate_transfer_code(
                 &mut rand_core::UnwrapErr(getrandom::SysRng),
-                3,
+                usize::from(words),
             );
             let mut tx = tokio::time::timeout(
                 Duration::from_secs(660),
@@ -220,15 +226,22 @@ async fn run(
                 s.phase = "Sending file".into();
                 s.started = Instant::now();
                 s.network = tx.conn.network_stats();
+                s.transport = Some(
+                    match tx.conn {
+                        hermod_core::transport::AnyConnection::WireGuard(_) => "wireguard",
+                        hermod_core::transport::AnyConnection::Quic(_) => "quic",
+                    }
+                    .into(),
+                );
             }
             let outcome = orchestrate::serve_file_with_limit(
                 &mut tx.conn,
                 hermod_core::transport::http::server::ServeOptions {
                     token: tx.token,
-                    kind: hermod_core::transfer::Kind::File,
+                    kind: source.kind,
                     name: source.name,
                     size,
-                    body: Box::new(file),
+                    body: file,
                     progress: Some(Box::new(progress(state.clone()))),
                 },
                 limit,
@@ -259,6 +272,13 @@ async fn run(
                 s.phase = "Receiving file".into();
                 s.started = Instant::now();
                 s.network = rx.conn.network_stats();
+                s.transport = Some(
+                    match rx.conn {
+                        hermod_core::transport::AnyConnection::WireGuard(_) => "wireguard",
+                        hermod_core::transport::AnyConnection::Quic(_) => "quic",
+                    }
+                    .into(),
+                );
             }
             let mut on_progress = progress(state.clone());
             let receipt = orchestrate::receive_with_limit(
@@ -272,7 +292,7 @@ async fn run(
             .map_err(|e| e.to_string())?;
             rx.conn.shutdown().await.map_err(|e| e.to_string())?;
             abort.lock().unwrap().take();
-            crate::storage::record(&directory, &receipt).await?;
+            super::storage::record(&directory, &receipt).await?;
             let mut s = state.lock().unwrap();
             s.bytes = receipt.size;
             s.total = Some(receipt.size);
@@ -282,6 +302,38 @@ async fn run(
         }
     }
     Ok(())
+}
+
+/// 阻塞文档流在专用线程读取；最多缓存两个 64 KiB 块，取消后关闭接收端。
+fn stream_reader(
+    mut reader: Box<dyn std::io::Read + Send>,
+) -> impl tokio::io::AsyncRead + Unpin + Send {
+    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<bytes::Bytes>>(2);
+    tokio::task::spawn_blocking(move || {
+        loop {
+            if tx.is_closed() {
+                break;
+            }
+            let mut chunk = vec![0; 64 * 1024];
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => {
+                    chunk.truncate(count);
+                    if tx.blocking_send(Ok(bytes::Bytes::from(chunk))).is_err() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    let _ = tx.blocking_send(Err(error));
+                    break;
+                }
+            }
+        }
+    });
+    let stream = futures_util::stream::unfold(rx, |mut rx| async {
+        rx.recv().await.map(|item| (item, rx))
+    });
+    tokio_util::io::StreamReader::new(Box::pin(stream))
 }
 
 // 取消任务时也清理未知长度的文档缓存。
@@ -303,18 +355,20 @@ mod tests {
 
     fn source(path: &std::path::Path) -> Source {
         Source {
-            file: std::fs::File::open(path).unwrap(),
+            reader: Box::new(std::fs::File::open(path).unwrap()),
+            kind: hermod_core::transfer::Kind::File,
             name: "payload.bin".into(),
             size: None,
             cache: path.with_extension("staging"),
         }
     }
 
-    /// 两个真实桌面任务经本地信令中继完成 CPace、IPv6 QUIC、限速与摘要校验。
+    /// 两种协议经本地信令完成 CPace、文件校验、未知长度缓存和取消。
     #[test]
     fn desktop_jobs_transfer_a_file_and_cancel_while_waiting() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
+          for kind in [hermod_core::transport::TransportKind::WireGuard, hermod_core::transport::TransportKind::Quic] {
             tokio::time::timeout(Duration::from_secs(15), async {
                 let listener = tokio::net::TcpListener::bind("[::1]:0").await.unwrap();
                 let mut cfg = Config { server_url: format!("ws://{}", listener.local_addr().unwrap()), ..Config::default() };
@@ -344,16 +398,16 @@ mod tests {
                 let file = dir.join("payload.bin");
                 let data = vec![0x53; 32_000];
                 std::fs::write(&file, &data).unwrap();
-                let options = SessionOptions { udp_bind: Some("[::1]:0".parse().unwrap()),
+                let options = SessionOptions { transport:Some(kind), udp_bind: None,
                     bandwidth_limit: "0.8".parse().unwrap(), ..SessionOptions::default() };
-                let tx = Job::start(cfg.clone(), options.clone(), Action::Send(source(&file)), Box::new(|| {}));
+                let tx = Job::start(cfg.clone(), options.clone(), Action::Send(source(&file)), 3, Box::new(|| {}));
                 let code = loop {
                     let s = tx.snapshot();
                     assert!(s.error.is_none(), "{:?}", s.error);
                     if let Some(code) = s.code { break code; }
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 };
-                let rx = Job::start(cfg, options.clone(), Action::Receive { code, directory: dir.join("out") }, Box::new(|| {}));
+                let rx = Job::start(cfg, options.clone(), Action::Receive { code, directory: dir.join("out") }, 3, Box::new(|| {}));
                 loop {
                     if tx.snapshot().completed.is_some() && rx.snapshot().completed.is_some() { break; }
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -378,7 +432,7 @@ mod tests {
                     ws.send(Frame::text(serde_json::to_string(&Message::ok(request.channel_id, b"{}".to_vec())).unwrap())).await.unwrap();
                     let _ = ws.next().await;
                 });
-                let pending = Job::start(cfg, options, Action::Send(source(&file)), Box::new(|| {}));
+                let pending = Job::start(cfg, options, Action::Send(source(&file)), 3, Box::new(|| {}));
                 while pending.snapshot().code.is_none() {
                     assert!(pending.snapshot().error.is_none());
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -389,6 +443,7 @@ mod tests {
                 relay.await.unwrap();
                 std::fs::remove_dir_all(dir).unwrap();
             }).await.expect("desktop transfer/cancellation timed out");
+          }
         });
     }
 }

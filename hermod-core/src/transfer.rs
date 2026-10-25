@@ -109,21 +109,40 @@ pub fn classify_input(arg: &str, is_stdin_piped: bool) -> (Kind, String) {
 /// 对应 Go `SafeDestinationPath`。示例：`a.pdf` 已存在 → `a(1).pdf`。
 /// `name` 来自不可信的对端，所以必须先剥掉目录分量，绝不能让对端把文件写到
 /// 目标目录之外（如 `../../etc/passwd`）。
-pub fn safe_destination_path(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, TransferError> {
+pub fn safe_destination_path(
+    dir: &std::path::Path,
+    name: &str,
+) -> Result<std::path::PathBuf, TransferError> {
     // 1. 只取最后一段文件名，剥掉所有目录分量（兼容 / 和 \）。
-    let mut base: String = file_base(name).chars()
-        .map(|c| if c.is_control() || "<>:\"|?*".contains(c) { '_' } else { c })
+    let mut base: String = file_base(name)
+        .chars()
+        .map(|c| {
+            if c.is_control() || "<>:\"|?*".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     // 使用各平台都能接受的文件名，避免 Windows 保留设备名和末尾点/空格。
     base = base.trim_end_matches(['.', ' ']).to_string();
     let stem = base.split('.').next().unwrap_or("").to_ascii_uppercase();
     if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || ["COM", "LPT"].iter().any(|prefix| stem.strip_prefix(prefix)
-            .is_some_and(|suffix| matches!(suffix, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))) {
+        || ["COM", "LPT"].iter().any(|prefix| {
+            stem.strip_prefix(prefix).is_some_and(|suffix| {
+                matches!(
+                    suffix,
+                    "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+                )
+            })
+        })
+    {
         base.insert(0, '_');
     }
     // 给去重后缀和临时文件扩展名留空间，并且不截断 UTF-8 字符。
-    while base.len() > 200 { base.pop(); }
+    while base.len() > 200 {
+        base.pop();
+    }
     base = base.trim_end_matches(['.', ' ']).to_string();
     // 2. 空 / "." / ".." 都归为占位名 "received"（与 Go 一致）。
     if base.is_empty() || base == "." || base == ".." {
@@ -203,7 +222,8 @@ mod tests {
     /// 每个测试一个独立临时目录（放系统 temp 下，避免污染工作区）。
     fn temp_dir(tag: &str) -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let d = std::env::temp_dir().join(format!("hermod-transfer-{}-{tag}-{n}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("hermod-transfer-{}-{tag}-{n}", std::process::id()));
         fs::create_dir_all(&d).unwrap();
         d
     }
@@ -215,7 +235,10 @@ mod tests {
             hash_bytes(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        assert_eq!(hash_bytes(b""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            hash_bytes(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     /// Metadata JSON 编解码：字节格式与 Go `json.Marshal` 一致（无 HTML 转义时）+ 往返。
@@ -259,9 +282,15 @@ mod tests {
     fn classify_input_basic() {
         assert_eq!(classify_input("-", false), (Kind::Stream, String::new()));
         assert_eq!(classify_input("", true), (Kind::Stream, String::new()));
-        assert_eq!(classify_input("hello world", false), (Kind::Text, String::new()));
+        assert_eq!(
+            classify_input("hello world", false),
+            (Kind::Text, String::new())
+        );
         // 不存在的路径按文本处理
-        assert_eq!(classify_input("/nonexistent/xyz", false), (Kind::Text, String::new()));
+        assert_eq!(
+            classify_input("/nonexistent/xyz", false),
+            (Kind::Text, String::new())
+        );
 
         // 真实文件 → File + 基名
         let dir = temp_dir("classify");
@@ -279,18 +308,33 @@ mod tests {
         let dir = temp_dir("traversal");
         let p = safe_destination_path(&dir, "../../etc/passwd").unwrap();
         assert_eq!(p, dir.join("passwd"));
-        assert_eq!(safe_destination_path(&dir, "a/b/c.txt").unwrap(), dir.join("c.txt"));
+        assert_eq!(
+            safe_destination_path(&dir, "a/b/c.txt").unwrap(),
+            dir.join("c.txt")
+        );
         // Windows 反斜杠同样要剥
-        assert_eq!(safe_destination_path(&dir, r"a\b\evil.sh").unwrap(), dir.join("evil.sh"));
+        assert_eq!(
+            safe_destination_path(&dir, r"a\b\evil.sh").unwrap(),
+            dir.join("evil.sh")
+        );
     }
 
     /// "." / ".." / 空 → 占位名 "received"。
     #[test]
     fn dots_become_received() {
         let dir = temp_dir("dots");
-        assert_eq!(safe_destination_path(&dir, "..").unwrap(), dir.join("received"));
-        assert_eq!(safe_destination_path(&dir, ".").unwrap(), dir.join("received"));
-        assert_eq!(safe_destination_path(&dir, "").unwrap(), dir.join("received"));
+        assert_eq!(
+            safe_destination_path(&dir, "..").unwrap(),
+            dir.join("received")
+        );
+        assert_eq!(
+            safe_destination_path(&dir, ".").unwrap(),
+            dir.join("received")
+        );
+        assert_eq!(
+            safe_destination_path(&dir, "").unwrap(),
+            dir.join("received")
+        );
     }
 
     /// 已存在 → 自动去重后缀 a(1).txt, a(2).txt……
@@ -305,7 +349,10 @@ mod tests {
         assert_eq!(p2, dir.join("a(2).txt"));
         // 无扩展名的情况
         fs::write(dir.join("report"), "x").unwrap();
-        assert_eq!(safe_destination_path(&dir, "report").unwrap(), dir.join("report(1)"));
+        assert_eq!(
+            safe_destination_path(&dir, "report").unwrap(),
+            dir.join("report(1)")
+        );
     }
 
     /// 名字不存在 → 原样返回（含扩展名保留）。
@@ -322,11 +369,18 @@ mod tests {
     fn names_are_portable_across_desktop_and_mobile_filesystems() {
         let dir = temp_dir("portable");
         for (input, expected) in [
-            ("CON.txt", "_CON.txt"), ("aux", "_aux"), ("LPT1.zip", "_LPT1.zip"),
-            ("report:2026?.zip", "report_2026_.zip"), ("trailing. ", "trailing"),
-            ("地球 3.0.zip", "地球 3.0.zip"), ("bad\0name", "bad_name"),
+            ("CON.txt", "_CON.txt"),
+            ("aux", "_aux"),
+            ("LPT1.zip", "_LPT1.zip"),
+            ("report:2026?.zip", "report_2026_.zip"),
+            ("trailing. ", "trailing"),
+            ("地球 3.0.zip", "地球 3.0.zip"),
+            ("bad\0name", "bad_name"),
         ] {
-            assert_eq!(safe_destination_path(&dir, input).unwrap(), dir.join(expected));
+            assert_eq!(
+                safe_destination_path(&dir, input).unwrap(),
+                dir.join(expected)
+            );
         }
         let name = "地球".repeat(100);
         let path = safe_destination_path(&dir, &name).unwrap();

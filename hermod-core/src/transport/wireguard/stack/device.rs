@@ -13,7 +13,7 @@ use smoltcp::time::Instant;
 use std::collections::VecDeque;
 
 /// 内层 IP MTU（DEVELOPMENT.md §3.3：1500 − 40(IPv6) − 8(UDP) − 32(WG) = 1420）。
-pub const IP_MTU: usize = 1420;
+pub const IP_MTU: usize = 1400;
 
 /// 基于内存队列的 smoltcp 设备。
 pub struct QueueDevice {
@@ -54,7 +54,12 @@ impl Device for QueueDevice {
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let pkt = self.rx.pop_front()?;
-        Some((RxBuf(pkt), TxBuf { queue: &mut self.tx }))
+        Some((
+            RxBuf(pkt),
+            TxBuf {
+                queue: &mut self.tx,
+            },
+        ))
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {

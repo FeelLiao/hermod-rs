@@ -91,7 +91,10 @@ mod tests {
     #[test]
     fn classify_variants() {
         assert_eq!(classify(&v6("2001:db8::1")), Some(AddrClass::GlobalUnicast));
-        assert_eq!(classify(&v6("2606:4700::1111")), Some(AddrClass::GlobalUnicast));
+        assert_eq!(
+            classify(&v6("2606:4700::1111")),
+            Some(AddrClass::GlobalUnicast)
+        );
         assert_eq!(classify(&v6("fd00::1")), Some(AddrClass::Ula));
         assert_eq!(classify(&v6("fc00::1")), Some(AddrClass::Ula));
         assert_eq!(classify(&v6("fe80::1")), Some(AddrClass::LinkLocal));

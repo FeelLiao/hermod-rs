@@ -2,7 +2,7 @@
 //!
 //! 当前有两个**并列、互不依赖**的实现：
 //!
-//! - [quic]：QUIC + TLS 1.3 + BBR（默认）；
+//! - [quic]：QUIC + TLS 1.3 + BBR（可选）；
 //! - [wireguard]：用户态 WireGuard + smoltcp 进程内 TCP（可选回退）。
 //!
 //! 上层（[crate::session] / [crate::orchestrate]）只依赖 [iface::Transport] /
@@ -17,7 +17,7 @@
 //! ├── mod.rs        # AnyTransport / AnyConnection 运行时分发
 //! ├── wireguard/    # 可选回退：WireGuard + smoltcp TCP
 //! ├── http/         # 共享的传输内 HTTP/1.1
-//! └── quic/         # 默认实现：QUIC endpoint / TLS 钉扎 / BBR
+//! └── quic/         # 可选实现：QUIC endpoint / TLS 钉扎 / BBR
 //! ```
 
 pub mod http;
@@ -54,7 +54,7 @@ pub enum AnyTransport {
 }
 
 impl AnyTransport {
-    /// 按 CLI/配置选择构造；发送端默认 QUIC，接收端可自动跟随。
+    /// 按 CLI/配置选择构造；发送端默认 WireGuard，接收端可自动跟随。
     pub fn new(kind: TransportKind) -> Self {
         match kind {
             TransportKind::WireGuard => AnyTransport::WireGuard(WireGuardTransport::new()),
@@ -70,7 +70,7 @@ impl AnyTransport {
         }
     }
 
-    /// UDP 绑定地址（`--listen`）。
+    /// UDP 绑定地址（内部测试用）。
     pub fn set_udp_bind(&mut self, addr: Option<SocketAddrV6>) {
         match self {
             AnyTransport::WireGuard(t) => t.set_udp_bind(addr),
@@ -86,10 +86,26 @@ impl AnyTransport {
         }
     }
 
-    /// WireGuard 内层 IP MTU（QUIC 忽略）。
-    pub fn set_wg_mtu(&mut self, mtu: usize) {
-        if let AnyTransport::WireGuard(t) = self {
-            t.set_mtu(mtu);
+    /// 统一选项已由会话层校验，只配置当前协议。
+    pub fn configure(&mut self, mtu: Option<usize>, congestion: crate::options::Congestion) {
+        use crate::options::Congestion as C;
+        match self {
+            Self::WireGuard(t) => {
+                t.set_mtu(mtu.unwrap_or(1400));
+                t.set_congestion(if congestion == C::Reno {
+                    smoltcp::socket::tcp::CongestionControl::Reno
+                } else {
+                    smoltcp::socket::tcp::CongestionControl::Cubic
+                });
+            }
+            Self::Quic(t) => {
+                t.set_mtu_limit(mtu.unwrap_or(1452) as u16);
+                t.set_congestion(match congestion {
+                    C::Cubic => CongestionControl::Cubic,
+                    C::Newreno => CongestionControl::NewReno,
+                    _ => CongestionControl::Bbr,
+                });
+            }
         }
     }
 
@@ -97,22 +113,6 @@ impl AnyTransport {
     pub fn set_bandwidth_limit(&mut self, limit: crate::bandwidth::BandwidthLimit) {
         if let AnyTransport::Quic(t) = self {
             t.set_bandwidth_limit(limit);
-        }
-    }
-
-    /// QUIC 拥塞控制（WireGuard 忽略）。
-    pub fn set_quic_congestion(&mut self, congestion: CongestionControl) {
-        if let AnyTransport::Quic(t) = self {
-            t.set_congestion(congestion);
-        }
-    }
-
-    /// QUIC 初始 UDP payload（WireGuard 忽略）。
-    pub fn set_quic_mtu(&mut self, mtu: Option<u16>) {
-        if let AnyTransport::Quic(t) = self
-            && let Some(mtu) = mtu
-        {
-            t.set_initial_mtu(mtu);
         }
     }
 }

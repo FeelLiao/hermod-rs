@@ -174,16 +174,22 @@ mod tests {
     #[test]
     fn token_path_roundtrip() {
         let token = [
-            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
-            0x0c, 0x0d, 0x0e, 0x0f,
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
         ];
         let path = token_path(&token);
         assert_eq!(path, "/f/000102030405060708090a0b0c0d0e0f");
         assert_eq!(parse_token_path(&path), Some(token));
         // 非法输入
         assert_eq!(parse_token_path("/f/00"), None); // 太短
-        assert_eq!(parse_token_path("/x/000102030405060708090a0b0c0d0e0f"), None); // 前缀错
-        assert_eq!(parse_token_path("/f/zz0102030405060708090a0b0c0d0e0f"), None); // 非十六进制
+        assert_eq!(
+            parse_token_path("/x/000102030405060708090a0b0c0d0e0f"),
+            None
+        ); // 前缀错
+        assert_eq!(
+            parse_token_path("/f/zz0102030405060708090a0b0c0d0e0f"),
+            None
+        ); // 非十六进制
     }
 
     /// 抗畸形输入：对解析函数喂大量随机字符串，必须返回 Option/Result 而不是 panic（S4）。

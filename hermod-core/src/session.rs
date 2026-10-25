@@ -5,7 +5,7 @@
 //! ```text
 //! 传输码 → 连 server（SPKI pinning）→ allocate/join → wait_ready
 //!   → CPace 得 K → derive_wg_psk(K, channel_id)
-//!   → tx 选传输（默认 QUIC）→ prepare → 加端点头 → AEAD 交换 blob3
+//!   → tx 选传输（默认 WireGuard）→ prepare → 加端点头 → AEAD 交换 blob3
 //!   → rx 解密 blob3 → 从端点头识别传输 → prepare → AEAD 回 blob4
 //!   → 双方 establish 得到 AnyConnection
 //! ```
@@ -33,7 +33,6 @@ use crate::crypto::kdf::{derive_http_token, derive_wg_psk};
 use crate::crypto::wordlist;
 use crate::signal::client::{self, ObservedAddrs, WsStream};
 use crate::transport::iface::{Transport, TransportKind};
-use crate::transport::quic::transport::CongestionControl;
 use crate::transport::{AnyConnection, AnyTransport, TransportError};
 use sha2::{Digest, Sha256};
 
@@ -47,6 +46,8 @@ const ENDPOINT_HEADER_LEN: usize = 4;
 /// 会话建立错误。
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
+    #[error("options: {0}")]
+    Options(String),
     #[error("config: {0}")]
     Config(#[from] config::ConfigError),
     #[error("transfer code: {0}")]
@@ -74,12 +75,12 @@ fn sha256_32(data: &[u8]) -> [u8; 32] {
     Sha256::digest(data).into()
 }
 
-/// 会话建立的可选参数（对应 CLI 的 `--transport` / `--wg-mtu` / `--listen` 等）。
+/// 会话建立的可选参数（对应 CLI 的 `--transport` / `--mtu` / `--congestion` 等）。
 #[derive(Debug, Clone)]
 pub struct SessionOptions {
     /// 载荷限速，同时用于控制 QUIC 排队窗口。
     pub bandwidth_limit: crate::bandwidth::BandwidthLimit,
-    /// WireGuard 内层 IP MTU（默认 1420；QUIC 忽略）。
+    /// 当前协议的 MTU：WireGuard 内层 IP（自动 1400），QUIC UDP 载荷上限（自动 1452）。
     pub mtu: Option<usize>,
     /// UDP 绑定地址（默认 `[::]:0`）。
     pub udp_bind: Option<std::net::SocketAddrV6>,
@@ -87,10 +88,8 @@ pub struct SessionOptions {
     /// - tx：`Some(kind)` 指定；`None` 等同于 QUIC。
     /// - rx：`None` = 自动跟随对端；`Some(kind)` = 强制并校验。
     pub transport: Option<TransportKind>,
-    /// QUIC 拥塞控制；默认 BBR。
-    pub quic_congestion: CongestionControl,
-    /// QUIC 初始 UDP payload；默认 1200（PMTUD 可上调）。
-    pub quic_mtu: Option<u16>,
+    /// 统一拥塞控制；auto 在 WireGuard 下为 CUBIC，在 QUIC 下为 BBR。
+    pub congestion: crate::options::Congestion,
 }
 
 impl Default for SessionOptions {
@@ -101,17 +100,16 @@ impl Default for SessionOptions {
             udp_bind: None,
             // 默认 auto：接收端跟随发送端；发送端用 sender_default()。
             transport: None,
-            quic_congestion: CongestionControl::Bbr,
-            quic_mtu: None,
+            congestion: crate::options::Congestion::Auto,
         }
     }
 }
 
 impl SessionOptions {
-    /// 发送端默认：QUIC。
+    /// 发送端默认：WireGuard。
     pub fn sender_default() -> Self {
         Self {
-            transport: Some(TransportKind::Quic),
+            transport: Some(TransportKind::WireGuard),
             ..Self::default()
         }
     }
@@ -153,7 +151,7 @@ pub fn expected_spki(config: &Config) -> Result<(String, [u8; 32]), SessionError
 
 fn parse_hex32(s: &str) -> Option<[u8; 32]> {
     let s = s.trim();
-    if s.len() != 64 {
+    if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let mut out = [0u8; 32];
@@ -183,7 +181,7 @@ async fn open(config: &Config) -> Result<WsStream, SessionError> {
     Ok(ws)
 }
 
-/// tx：从传输码开始，建立到 rx 的传输连接（默认 QUIC）。
+/// tx：从传输码开始，建立到 rx 的传输连接（默认 WireGuard）。
 pub async fn sender_session(config: &Config, code: &str) -> Result<TxSession, SessionError> {
     sender_session_with(config, code, &SessionOptions::sender_default()).await
 }
@@ -204,6 +202,8 @@ pub async fn sender_session_with_ready(
     opts: &SessionOptions,
     on_ready: impl FnOnce() + Send,
 ) -> Result<TxSession, SessionError> {
+    opts.validate_for(opts.transport.unwrap_or(TransportKind::WireGuard))
+        .map_err(SessionError::Options)?;
     let (channel_id, words) = wordlist::parse_transfer_code(code)?;
     let password = words.join("-");
     let mut ws = open(config).await?;
@@ -241,6 +241,9 @@ pub async fn receiver_session_with(
     code: &str,
     opts: &SessionOptions,
 ) -> Result<RxSession, SessionError> {
+    if let Some(kind) = opts.transport {
+        opts.validate_for(kind).map_err(SessionError::Options)?;
+    }
     let (channel_id, words) = wordlist::parse_transfer_code(code)?;
     let password = words.join("-");
     let mut ws = open(config).await?;
@@ -270,19 +273,16 @@ fn build_transport(
     kind: TransportKind,
     observed: &ObservedAddrs,
     fingerprint: [u8; 32],
-) -> AnyTransport {
+) -> Result<AnyTransport, SessionError> {
+    opts.validate_for(kind).map_err(SessionError::Options)?;
     let mut transport = AnyTransport::new(kind);
     transport.set_udp_bind(opts.udp_bind);
-    if let Some(mtu) = opts.mtu {
-        transport.set_wg_mtu(mtu);
-    }
+    transport.configure(opts.mtu, opts.congestion);
     transport.set_bandwidth_limit(opts.bandwidth_limit);
-    transport.set_quic_congestion(opts.quic_congestion);
-    transport.set_quic_mtu(opts.quic_mtu);
     // server 观测地址作为 server-reflexive 提示（仅 IPv6 生效）
     transport.set_server_hint(observed.public_ipv6.parse().ok());
     transport.set_credential_fingerprint(fingerprint);
-    transport
+    Ok(transport)
 }
 
 /// 在 opaque endpoint 前加一个小头，让接收端能识别发送端使用的传输。
@@ -336,8 +336,8 @@ async fn exchange_and_establish(
 
     match role {
         Role::Sender => {
-            let kind = opts.transport.unwrap_or(TransportKind::Quic);
-            let mut transport = build_transport(opts, kind, &observed, fingerprint);
+            let kind = opts.transport.unwrap_or(TransportKind::WireGuard);
+            let mut transport = build_transport(opts, kind, &observed, fingerprint)?;
             let my_endpoint = transport.prepare().await?;
             let my_blob = aead::seal(k, &aad, &wrap_endpoint(kind, &my_endpoint))?;
             client::send_blob(ws, channel_id, &my_blob).await?;
@@ -368,7 +368,7 @@ async fn exchange_and_establish(
                 });
             }
 
-            let mut transport = build_transport(opts, peer_kind, &observed, fingerprint);
+            let mut transport = build_transport(opts, peer_kind, &observed, fingerprint)?;
             let my_endpoint = transport.prepare().await?;
             let my_blob = aead::seal(k, &aad, &wrap_endpoint(peer_kind, &my_endpoint))?;
             client::send_blob(ws, channel_id, &my_blob).await?;
@@ -399,18 +399,18 @@ mod tests {
         }
     }
 
-    /// 发送端默认 QUIC；接收端/裸 default 都是 auto。
+    /// 发送端默认 WireGuard；接收端/裸 default 都是 auto。
     #[test]
-    fn default_transport_is_quic_and_receiver_is_auto() {
+    fn default_transport_is_wireguard_and_receiver_is_auto() {
         assert_eq!(
             SessionOptions::sender_default().transport,
-            Some(TransportKind::Quic)
+            Some(TransportKind::WireGuard)
         );
         assert_eq!(SessionOptions::default().transport, None);
         assert_eq!(SessionOptions::receiver_default().transport, None);
         assert_eq!(
-            SessionOptions::sender_default().quic_congestion,
-            CongestionControl::Bbr
+            SessionOptions::sender_default().congestion,
+            crate::options::Congestion::Auto
         );
     }
 
@@ -469,6 +469,7 @@ mod tests {
     /// 指纹长度/内容非法 → BadFingerprint。
     #[test]
     fn bad_fingerprint_errors() {
+        assert!(parse_hex32(&format!("中{}", "0".repeat(61))).is_none());
         let cfg = cfg_with("wss://relay.example.com:4376", Some("zz"));
         assert!(matches!(
             expected_spki(&cfg),

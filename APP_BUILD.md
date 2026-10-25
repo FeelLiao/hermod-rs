@@ -1,244 +1,203 @@
-# Tauri app and release builds
+# Building and releasing Hermod 0.4.0
 
-Hermod's app is in `hermod-app/`. It uses Tauri 2, TypeScript/Vite and Google's
-Material Web components. The Rust backend calls `hermod-core` directly. The GUI
-continues to use IPv6 peer-to-peer transport; it does not introduce IPv4, NAT
-traversal, cloud file storage or a relay fallback.
+[User guide](README.md) · [中文使用说明](README.zh-CN.md)
 
-## Local development
+Release builds run in `.github/workflows/build-release.yml`. Local validation is
+Linux-only; Windows and Android installation/runtime validation belongs to their
+Actions jobs. A successful Linux build is not evidence that those jobs have passed.
 
-Install the Rust toolchain from `rust-toolchain.toml` and Node.js 22, then:
+## Repository layout
+
+- `hermod-core`: cryptography, IPv6 signaling, WireGuard/QUIC, HTTP transfer, settings validation.
+- `hermod-cli`: clap shell and terminal I/O.
+- `hermod-app/src`: shared React pages and a small official Fluent UI / Material Web component adapter.
+- `hermod-app/src-tauri/src/app`: persistent settings, jobs, cancellation, bounded streams, logs and verified inbox.
+- `hermod-app/src-tauri/src`: desktop and Android Tauri commands; background job monitoring.
+- `hermod-app/plugins/documents`: Android SAF, permissions, system color and foreground notification adapters. No native UI screens.
+- `hermod-app/android`: pinned Android Gradle template; generated Tauri shell stays ignored under `src-tauri/gen/android`.
+- `hermod-app/android-tests`: emulator tests and a debug-only document provider.
+- `hermod-app/packaging`: flat MSIX manifest and public `.ps1` installer template; no `windows` subdirectory.
+- `hermod-app/scripts`: GUI packaging, signing initialization and platform smoke checks.
+- `scripts`: repository-wide version and Release allowlist checks. CI helpers are not Release attachments.
+
+## Linux prerequisites and development
+
+Use the Rust version required by the workspace (currently 1.99+), Node.js 22,
+C/C++ build tools and GTK/WebKit dependencies:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config cmake perl clang musl-tools \
+  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 xvfb xdotool
+rustup target add x86_64-unknown-linux-musl
+npm ci --prefix hermod-app
+npm run build --prefix hermod-app
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
 cd hermod-app
-npm ci
-npm run tauri dev
+npm run tauri -- dev
 ```
 
-`npm run build` validates TypeScript and bundles the frontend. `npm run tauri build`
-builds AppImage on Linux and app/DMG on macOS. Windows builds the executable
-without an installer; from the repository root, run
-`./scripts/package-windows-zip.ps1` in PowerShell to create the portable ZIP.
-`cargo build -p hermod-cli --release` continues to build just the CLI.
-A plain `cargo build` defaults to core + CLI; workspace
-checks include the GUI and therefore require the native GUI build dependencies.
-
-Linux (Ubuntu 22.04+):
+End-to-end tests need a non-loopback local IPv6 address. On an isolated WSL host,
+run the tests in a temporary network namespace (no host network changes):
 
 ```bash
-sudo apt install build-essential pkg-config cmake perl clang \
-  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+sudo unshare --net bash -c '
+  ip link set lo up
+  ip link add hermodtest type dummy
+  ip link set hermodtest up
+  ip -6 addr add fd00:1234::1/64 dev hermodtest nodad
+  cargo test --workspace --locked
+'
 ```
 
-On WSLg, the Linux launcher defaults to X11 and disables WebKit GPU compositing in a child process
-because some WSL graphics drivers hang during initialization. Set
-`WEBKIT_DISABLE_COMPOSITING_MODE=0` explicitly to opt back into GPU compositing.
-This does not change the host environment or the ordinary Linux renderer.
-
-Windows needs MSVC C++ Build Tools, Windows SDK and the WebView2 runtime. macOS
-needs Xcode command-line tools. Build native packages on their matching OS.
-See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
-
-## Android
-
-Install JDK 17, Android SDK command-line tools and these SDK components:
+The shell must have access to the installed Rust toolchain. Tests use a local signaling
+fixture and do not need the public server. CLI/GUI interop tests run real CLI processes
+against the shared GUI engine in both directions for file and text, on both protocols.
+Browser tests mock IPC and validate UI behavior; they do not replace native dialog tests.
 
 ```bash
-sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0' 'ndk;29.0.14206865'
-rustup target add aarch64-linux-android
-export JAVA_HOME=/path/to/jdk17
-export ANDROID_HOME=/path/to/android-sdk
-export NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+npm exec --prefix hermod-app -- playwright install chromium
+npm test --prefix hermod-app
 cd hermod-app
-npm ci
-npm run android:init
-npm run tauri -- android build --ci --apk --target aarch64
+APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri -- build --ci --bundles appimage -- --locked
 cd ..
-scripts/sign-android-test.sh
+hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.0_amd64.AppImage
+CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release --target x86_64-unknown-linux-musl -p hermod-cli
+readelf -l target/x86_64-unknown-linux-musl/release/hermod
 ```
 
-The Android Gradle project is generated by the **locked npm Tauri CLI** and is
-ignored by Git. `scripts/configure-android.mjs` pins compile/target API 36 and
-copies app icons. Native document/service code lives in the tracked
-`hermod-app/plugins/documents/android/` library and is linked by Tauri automatically.
-Do not edit generated files as the source of truth. The current APK targets
-ARM64 Android 7.0+ (API 24); its runtime also needs an up-to-date Android System
-WebView. Other ABIs and iOS packages are not part of this workflow.
+The musl binary must have no `INTERP` program header. On ARM64 Actions runners the
+same procedure uses `aarch64-unknown-linux-musl`, native `musl-gcc`, and an ARM64 AppImage.
 
-The app starts an Android `dataSync` foreground service and a bounded CPU wake
-lock during a transfer. It stops on success, error or cancellation. Android still
-controls battery management, foreground-service time budgets and process death;
-there is no promise of unlimited background execution or resumable transfers.
-Keep the app open for important transfers. Android 13+ may show service activity
-in the task manager instead of the notification drawer when notifications are
-not permitted. The service does not request access to all device files.
+## Fixed test signing: one-time setup
 
-## Files and permissions
+Create keys once on a trusted machine with OpenSSL and JDK `keytool`:
 
-- **Selection:** a native dialog returns an authorized file/document. Rust holds
-  the descriptor and returns only an opaque ID, display name and optional size
-  to the UI. Android document URIs are opened by the official Tauri fs plugin;
-  they are never converted into invented `/storage/...` paths.
-- **Sending:** stream directly from the descriptor when length is known. If a
-  provider omits length, stage it in the app cache with bounded memory before
-  advertising a code. This needs free space equal to the source size. Cancelling
-  removes staging; restarting clears stale outgoing cache. Selection is not
-  persisted across restarts: choose the document again to obtain a new grant.
-- **Receiving:** each job has a unique directory in Tauri's `app_data_dir()` under
-  `received/<id>/payload/`. The core writes a temporary file and validates the
-  peer verdict/SHA-256 before renaming. A separate receipt enables inbox listing;
-  partial files never appear as verified downloads. Interrupted receive directories
-  without receipts are reclaimed at the next app start. Filenames are made portable
-  and duplicate names in different transfers stay separate.
-- **Export:** select a verified entry and use **Save a copy**. Rust streams it to
-  the desktop save path or Android `ACTION_CREATE_DOCUMENT` URI. A cancelled
-  picker or failed export retains the verified original for retry. Some providers
-  cannot publish atomically; an interrupted export can leave a partial external
-  document, which must be removed or replaced by the user. No whole-file byte
-  arrays, base64 or JavaScript memory copies are used.
-- **Removal:** the UI asks before removing an inbox copy. Exported copies remain.
-  Uninstalling the app can delete all private data. Export important files first.
-- **Scope:** the WebView receives no general filesystem or shell permissions;
-  app commands resolve opaque IDs against native state. Desktop launches use a
-  single instance so two processes cannot compete over cache/transfer state.
+```bash
+./hermod-app/scripts/init-signing-keys.sh
+```
 
-The app supports one transfer or file operation at a time. It is not a folder
-sync tool; archive directories before sending. A lost connection requires a new
-transfer code. Native dialogs and removable/cloud providers require device tests;
-frontend tests cannot validate those OS services.
+The script refuses to overwrite `signing-private/`. Back up that ignored directory
+securely. It contains the PFX, Android JKS, public certificate and passwords. Do not
+commit it, upload it as an artifact, or rerun it for every version. A new signing key
+can prevent upgrades and require users to export their inbox and reinstall.
 
-See [Tauri dialogs](https://v2.tauri.app/plugin/dialog/) and
-[Tauri filesystem support](https://v2.tauri.app/plugin/file-system/).
+Set repository **Actions secrets** using the files, without pasting secrets into logs:
 
-## Network budget and trust
+```bash
+gh secret set WINDOWS_PFX_BASE64 < signing-private/windows-pfx-base64
+gh secret set WINDOWS_PFX_PASSWORD < signing-private/windows-password
+gh secret set ANDROID_KEYSTORE_BASE64 < signing-private/android-keystore-base64
+gh secret set ANDROID_KEYSTORE_PASSWORD < signing-private/android-password
+printf hermod | gh secret set ANDROID_KEY_ALIAS
+gh secret set ANDROID_KEY_PASSWORD < signing-private/android-password
+```
 
-The app's initial budget is 8 Mbps of file payload, adjustable in Settings. It is
-not a measurement of the network. Start at 70–85% of measured upload speed and
-reduce further if web browsing still stalls. Set 0 for unlimited throughput.
-The CLI stays unlimited unless `--limit-mbps` is supplied. Updated senders honor
-the lower peer budget; protocol overhead/retransmission is additional.
-See [NETWORK_PERFORMANCE.md](NETWORK_PERFORMANCE.md) for the measured queueing
-reproduction and limitations.
+These commands are for the maintainer to run. Missing signing secrets make the package
+jobs fail explicitly. PR checks use Android debug signing only for disposable emulator
+builds; those APKs are not published.
 
-Desktop uses the existing CLI configuration unless `config.yaml` exists in
-Tauri's `app_config_dir()`. Android starts with the pinned default server. No
-certificate verification or SPKI pinning is bypassed by the GUI. The local IPv6
-indicator shows available addresses, not proof of Internet reachability: firewall,
-routing and the signaling server still matter.
+Windows uses `Name=Hermod.Transfer.Test`, `Publisher=CN=HermodTest` and version
+`major.minor.patch.0` for both x64 and ARM64. The same PFX signs both packages. Only its
+public CER is exported. The installer embeds its expected thumbprint, checks the CMS
+signature and package identity, checks WebView2, imports the public certificate into
+`LocalMachine\TrustedPeople` through a separate elevated helper, then deploys the
+MSIX in the original user context. Deployment verifies the complete signed package.
+CI performs the same installation and launches the installed application. The generic
+Authenticode root-chain check is not a reason to place a test leaf certificate in Root.
+See Microsoft's [certificate guidance](https://learn.microsoft.com/windows/msix/package/create-certificate-package-signing)
+and [WebView2 distribution guidance](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution).
 
-## GitHub Actions and installation
+Android retains `org.hermod.transfer`; `versionCode=40000` for 0.4.0. Increase the code
+on every release and keep the signing key and alias. Neither the public certificate
+nor an MSIX signed as HermodTest grants a Microsoft Store publisher identity. Store
+submission is a separate process using the identity assigned by Partner Center.
 
-`.github/workflows/build-release.yml` runs on `v*` tags or manual dispatch. First
-it checks versions, frontend tests, `cargo test --workspace` and Clippy. It then
-builds these artifacts on native runners:
+## Android toolchain and platform boundary
 
-| Platform | Assets |
+Both GUIs use one React application in `hermod-app/src`. `ui.tsx` selects Microsoft's
+[Fluent UI React v9](https://fluent2.microsoft.design/get-started/develop) on desktop
+and Google's [Material Web](https://material-web.dev/about/intro/) components on Android.
+Business state and validation stay in Rust. There is no Compose UI, UniFFI bridge,
+standalone Android application, or separate GUI-core crate to maintain.
+
+The pinned Tauri CLI generates the native Android shell in CI. The script
+`hermod-app/scripts/configure-android.mjs` applies the tracked Gradle template,
+pins Gradle **9.6.0** with distribution SHA-256 verification, and pins AGP **9.4.0**.
+JDK **17**, Build Tools **37.0.0**, NDK **29.0.14206865**, `compileSdk=37`,
+`targetSdk=37`, `minSdk=34` are explicit. The application and library modules compile
+against the same SDK. Install `platforms;android-37.0`.
+See the [AGP compatibility table](https://developer.android.com/build/releases/agp-9-4-0-release-notes).
+The Tauri/official plugin templates still use Kotlin **2.2.10** and the legacy Android
+DSL, so the generator explicitly disables AGP built-in Kotlin/new DSL for compatibility.
+This does not change API targets. Tauri's `bundle.android.minSdkVersion=34` also sets
+the Rust native minimum API; target API 37 does not raise it.
+
+CI runs `tauri android init`, applies the template, then runs `tauri android build`
+for one ABI. Release uses ARM64 and the fixed keystore; x86_64 is only for debug emulator
+tests. Gradle's release tasks reject missing signing secrets. All GUI-related Android
+source and tooling live under `hermod-app`.
+
+The native plugin uses `ACTION_OPEN_DOCUMENT`, `ACTION_OPEN_DOCUMENT_TREE` and
+`ACTION_CREATE_DOCUMENT`. Persisted grants belong to the selected export directory;
+there is no all-files permission and no URI-to-filesystem-path guess. The official
+[Tauri file plugin](https://v2.tauri.app/plugin/file-system/) opens authorized descriptors
+inside Rust. File bytes never cross JavaScript IPC. A blocking reader feeds two bounded
+64 KiB chunks; unknown lengths are staged in private storage. Cancel stops the transfer
+and closes its streams as pending provider reads return. Verified receive data is kept
+when export or directory authorization fails; the UI explains how to retry.
+
+Rust owns and monitors each transfer independently of WebView timers. The Android
+foreground service keeps the process active, reports progress and offers cancellation;
+activity recreation does not create a new transfer. Android 15+ service timeouts cancel
+the current task. Process termination does not resume transfers: the next startup
+cleans only unverified partial data after obtaining the storage lock.
+
+Native libraries are uncompressed, APK-aligned and loaded from read-only installation
+storage. Every ELF load segment is checked for 16 KB alignment. Android 17's
+[local network permission](https://developer.android.com/about/versions/17/behavior-changes-17)
+is requested explicitly; denial is reported as a permission problem. Notifications
+have their own permission. There is no fixed orientation or aspect ratio. Material Web
+uses the Android system accent seed, system dark/light mode, bottom navigation on phones
+and a navigation rail on tablets. No native Material screens are maintained.
+
+Android CI runs API 34 and API 37 instrumentation on unpublished x86_64 builds; API 37
+uses the 16 KB system image. Checks exercise WebView/Rust loading, settings across
+activity recreation, a real SAF picker with unknown-length and revoked documents,
+API 37 permission denial, foreground-service survival and notification cancellation.
+Linux tests cover actual transfers, bounded streaming and failed exports. Browser tests
+exercise the same React flows on desktop, phone and tablet. These are complementary
+checks; physical SAF providers and OEM background policies still need device acceptance.
+The fixture document provider is only included in debug APKs.
+
+## Pipeline and publishing
+
+Pushes and PRs run Linux quality checks and Android API 34/37 tests. Tags and manual
+workflow dispatch also build:
+
+| Runner | Output |
 | --- | --- |
-| Windows x64 GUI | `hermod-windows-x86_64.zip` only (executable, README and optional Store packaging tools) |
-| Android ARM64 GUI | `hermod-android-arm64-test-signed.apk` |
-| Linux x64 GUI | `hermod-linux-x86_64.AppImage` only |
-| macOS Intel / ARM GUI | `hermod-macos-{x86_64,arm64}-unnotarized.dmg` and `.app.tar.gz` |
-| Existing CLI | `hermod-windows-x86_64.exe`, `hermod-linux-x86_64-musl`, `hermod-android-aarch64` |
+| `windows-2025` | x64 GUI MSIX |
+| `windows-11-arm` | ARM64 GUI MSIX |
+| `ubuntu-22.04` | x64 AppImage and musl CLI |
+| `ubuntu-22.04-arm` | ARM64 AppImage and musl CLI |
+| `ubuntu-22.04` + Android SDK | ARM64 Tauri APK |
 
-Successful **tag** runs aggregate all assets, generate `SHA256SUMS` and upload
-all files to that tag's GitHub Release. Failed builds prevent a partial release.
-Manual dispatch builds downloadable Actions artifacts without publishing.
-Only the release job has `contents: write`; default `GITHUB_TOKEN` is sufficient.
-No personal token or signing secrets are needed for the current test workflow.
+Only tags publish. Every required job must succeed first. `check-release-files.py`
+requires an exact nine-file allowlist: seven programs, `Hermod-Test.cer`, and
+`Install-Hermod.ps1`. No checksums, ZIPs, debs, debug symbols, build logs, private keys
+or canceled-platform programs are uploaded to Release. Internal Actions artifact
+containers are a GitHub transport mechanism, not ZIP release assets.
 
-This change prepares version **0.3.1**. After synchronizing the commit, either run
-**build-and-release** manually to download test builds, or push the matching
-`v0.3.1` tag to build and publish all assets together. No tag is created by the
-local build.
-
-For subsequent releases, update the workspace version in `Cargo.toml`,
-`hermod-app/package.json` (+ lockfile) and `hermod-app/src-tauri/tauri.conf.json`
-together, and refresh `Cargo.lock`. Run `node scripts/check-release-version.mjs`.
-The tag must exactly match `v<major.minor.patch>`. For example, after choosing an
-unused version, committing and pushing the changes, push its matching tag.
-This repository change alone does not publish a release or run hosted CI.
-
-- **Windows:** extract the entire ZIP and launch `hermod-app.exe`. Install the
-  Microsoft Edge WebView2 Evergreen Runtime if absent. The unsigned executable
-  can trigger SmartScreen; obtain it from a trusted release. No certificate import
-  or MSIX installation is needed. Settings and received files still live in the
-  user's app-data directory; they are not stored next to the executable. See the
-  included `README.txt`. CI produces no Windows GUI MSIX, MSI, NSIS installer,
-  public certificate or separate installation-text asset.
-- **Android:** APK is zipaligned (including 16 KB native-library alignment),
-  signed and verified with a temporary test key. Allow installation from the
-  source you use to open it. Different builds have different signing keys:
-  export your inbox, then uninstall the previous test APK before installing a
-  new one. No in-place update guarantee is provided by this test workflow.
-- **Linux:** make `hermod-linux-x86_64.AppImage` executable with `chmod +x`, then
-  launch it. GUI builds produce only AppImage, with no deb/rpm. The Ubuntu 22.04
-  baseline needs a compatible WebKitGTK desktop; an AppImage is not the static musl CLI.
-  Some systems need FUSE or `--appimage-extract-and-run`.
-- **macOS:** packages are ad-hoc signed, **not notarized**. Gatekeeper may block
-  them; only authorize a downloaded test build you trust via system security
-  settings. Both Intel and Apple Silicon are built separately. No Apple ID,
-  production Developer ID certificate or notarization credentials are included.
-
-### Microsoft Store submission from the Windows ZIP
-
-**Do not upload the ordinary ZIP to Partner Center.** The Store accepts MSIX/AppX
-packages and their bundle/upload variants. For MSIX distribution it signs the
-package after certification, so a purchased signing certificate is not needed.
-See Microsoft's [package requirements](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements)
-and [signing guide](https://learn.microsoft.com/en-us/windows/msix/package/sign-msix-package-guide).
-
-The ZIP includes `Store/package-msix.ps1`, the manifest template and icons. On
-Windows, install the Windows SDK with x64 MakeAppx. Reserve your app name in
-Partner Center, then copy the exact **Package/Identity/Name**,
-**Package/Identity/Publisher** and **Package/Properties/PublisherDisplayName**
-values from **Product management > Product identity**. Use the reserved app name
-for `DisplayName`. See [app identity details](https://learn.microsoft.com/en-us/windows/apps/publish/view-app-identity-details).
-
-In PowerShell, from the extracted ZIP folder, replace all example values:
-
-```powershell
-.\Store\package-msix.ps1 -BinaryDirectory . `
-  -IdentityName 'YOUR_PACKAGE_IDENTITY_NAME' `
-  -Publisher 'CN=YOUR_PUBLISHER_ID' `
-  -PublisherDisplayName 'YOUR_PUBLISHER_NAME' `
-  -DisplayName 'YOUR_RESERVED_APP_NAME' `
-  -PackageVersion '1.0.0.0'
-```
-
-Upload `store-output/hermod-windows-x86_64-store-unsigned.msix`, not the ZIP.
-Use an unused four-part Store package version: each component is at most 65535,
-first component nonzero and last component zero. This is independent of the
-app's `0.x.y` release version. The same script works from the repository under
-`scripts/` with `-BinaryDirectory` pointing to an extracted ZIP or a Windows
-release build. It does not compile, sign, or modify certificate stores, and it
-is not invoked by GitHub Actions. The unsigned MSIX is a submission package,
-not a signed sideload installer.
-
-The native Rust app requires `runFullTrust`; explain its file-transfer purpose
-in the submission and validate with the Windows App Certification Kit. The
-package does not include WebView2: verify runtime availability on clean Windows
-machines before publishing. This helper does not guarantee Store certification.
-
-Android production updates need a persistent protected signing key; macOS
-production distribution needs Developer ID signing and notarization. See
-[Android signing](https://v2.tauri.app/distribute/sign/android/) and
-[macOS signing](https://v2.tauri.app/distribute/sign/macos/).
-
-## Verification
+`check-release-version.mjs` checks workspace, npm, Tauri, Android and tag versions.
+After reviewing the commit and configuring signing secrets, the maintainer pushes:
 
 ```bash
-cd hermod-app
-npm run build
-npx playwright install chromium
-npm test
-cd ..
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+git push origin master
+git push origin v0.4.0
 ```
 
-Transport integration tests need usable local IPv6. On a Linux test host without
-it, use an isolated network namespace (requires root/CAP_SYS_ADMIN), with loopback
-up and a dummy interface carrying `fd00:1234::1/64`, then run the same Cargo test
-command inside it. This exercises real local signaling/CPace/QUIC, not the public
-relay. Playwright uses a mocked native IPC boundary to verify desktop/phone UI
-flows; it is not a native-file-provider or Android-device integration test.
+Do not move an already published tag to hide a failed build. Fix it in a new commit
+and publish a new version as appropriate. Workflow dispatch can validate packaging
+without creating a GitHub Release.

@@ -6,10 +6,10 @@ use hermod_core::TransportConnection;
 use hermod_core::config;
 use hermod_core::crypto::wordlist;
 use hermod_core::orchestrate;
-use hermod_core::session::{self, SessionOptions};
+use hermod_core::session;
 use hermod_core::transfer::{self, Kind};
+use hermod_core::transport::NetworkStatsHandle;
 use hermod_core::transport::http::server::ServeOptions;
-use hermod_core::transport::{CongestionControl, NetworkStatsHandle, TransportKind};
 use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
@@ -35,19 +35,11 @@ pub async fn run(
 
     // 1) 生成传输码，频道创建成功后才在回调中打印到 stderr。
     let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
-    let (_channel_id, code) = wordlist::generate_transfer_code(&mut rng, args.words);
+    let (_channel_id, code) = wordlist::generate_transfer_code(&mut rng, usize::from(args.words));
 
     // 2) 建会话
     verbosity::debug(format!("server_url={}", cfg.server_url));
-    let transport = TransportKind::parse(&args.transport_opts.transport).unwrap_or_default();
-    let opts = SessionOptions {
-        bandwidth_limit: args.limit_mbps,
-        mtu: Some(args.wg_mtu),
-        udp_bind: Some(util::parse_listen(&args.listen)?),
-        transport: Some(transport),
-        quic_congestion: CongestionControl::parse(&args.transport_opts.quic_cc).unwrap_or_default(),
-        quic_mtu: Some(args.transport_opts.quic_mtu),
-    };
+    let opts = args.network.options(&args.transport, false)?;
     let mut tx = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         session::sender_session_with_ready(&cfg, &code, &opts, || {
@@ -92,7 +84,7 @@ pub async fn run(
                 tx.token,
                 path,
                 progress,
-                args.limit_mbps,
+                args.network.limit_mbps,
             );
             let out = run_with_idle(fut, tick_rx, sent).await?;
             pb.finish_and_clear();
@@ -121,7 +113,7 @@ pub async fn run(
                 tx.token,
                 &args.input,
                 progress,
-                args.limit_mbps,
+                args.network.limit_mbps,
             );
             let out = run_with_idle(fut, tick_rx, sent).await?;
             pb.finish_and_clear();
@@ -152,12 +144,16 @@ pub async fn run(
             let serve_opts = ServeOptions {
                 token: tx.token,
                 kind: Kind::Stream,
-                name: String::new(),
+                name: "stdin.bin".into(),
                 size,
                 body: Box::new(std::io::Cursor::new(data)),
                 progress,
             };
-            let fut = orchestrate::serve_file_with_limit(&mut tx.conn, serve_opts, args.limit_mbps);
+            let fut = orchestrate::serve_file_with_limit(
+                &mut tx.conn,
+                serve_opts,
+                args.network.limit_mbps,
+            );
             let out = run_with_idle(fut, tick_rx, sent).await?;
             pb.finish_and_clear();
             finish_and_shutdown(&mut tx, out.verified, size, &out.sha256).await?;
@@ -255,7 +251,7 @@ where
         Ok(Err(e)) => Err(Box::new(e)),
         Err(msg) => Err(format!(
             "{msg} ({} bytes written; for large files, check the peer; \
-             try --transport wireguard --wg-mtu 1200 or --transport quic --quic-mtu 1200 to rule out path MTU)",
+             try --transport wireguard --mtu 1200 or --transport quic --mtu 1200 to rule out path MTU)",
             sent.load(Ordering::Relaxed)
         )
         .into()),

@@ -5,13 +5,13 @@
 
 use crypto_bigint::{NonZero, U256};
 use p256::{
+    AffinePoint, NistP256, ProjectivePoint, Scalar,
     elliptic_curve::{
         ff::{Field, PrimeField},
         point::AffineCoordinates,
         sec1::FromSec1Point,
     },
-    hash2curve::{hash_from_bytes, ExpandMsgXmd},
-    AffinePoint, NistP256, ProjectivePoint, Scalar,
+    hash2curve::{ExpandMsgXmd, hash_from_bytes},
 };
 use rand_core::Rng;
 use sha2::{Digest, Sha256};
@@ -56,7 +56,8 @@ fn p256_dst(password: &str, channel_id: u16) -> Vec<u8> {
 fn cpace_generator(password: &str, channel_id: u16) -> Result<ProjectivePoint, CpaceError> {
     let dst = p256_dst(password, channel_id);
     let msg: &[u8] = b"sender:receiver"; // 发送方和接收方的标识符
-    hash_from_bytes::<NistP256, ExpandMsgXmd<Sha256>>(&[msg], &[dst.as_slice()]).map_err(|_| CpaceError::HashToCurve)
+    hash_from_bytes::<NistP256, ExpandMsgXmd<Sha256>>(&[msg], &[dst.as_slice()])
+        .map_err(|_| CpaceError::HashToCurve)
 }
 
 fn scalar_from_bytes(bytes: [u8; 32]) -> Option<Scalar> {
@@ -77,13 +78,9 @@ fn rand_scalar(rng: &mut impl Rng) -> Scalar {
 /// 复刻 Go recoverYOnP256：y = (x³ - 3x + b)^((p+1)/4) mod p
 /// （P-256 的 p ≡ 3 mod 4，开平方根有封闭公式）。
 fn recover_y_on_p256(x: &[u8; 32]) -> [u8; 32] {
-    let p = U256::from_be_hex(
-        "ffffffff00000001000000000000000000000000ffffffffffffffffffffffff",
-    );
+    let p = U256::from_be_hex("ffffffff00000001000000000000000000000000ffffffffffffffffffffffff");
     let a = p.wrapping_sub(&U256::from_u8(3)); // a = -3 mod p
-    let b = U256::from_be_hex(
-        "5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b",
-    );
+    let b = U256::from_be_hex("5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b");
     let p_nz = NonZero::new(p).expect("P-256 prime is odd");
 
     let x = U256::from_be_slice_truncated(x, 256);
@@ -124,7 +121,14 @@ pub fn init(
     let g = cpace_generator(password, channel_id)?;
     let scalar = rand_scalar(&mut rand_core::UnwrapErr(getrandom::SysRng));
     let pub_msg = compute_pub_msg(&g, scalar);
-    Ok((CpaceSession { scalar, pub_msg, role }, pub_msg))
+    Ok((
+        CpaceSession {
+            scalar,
+            pub_msg,
+            role,
+        },
+        pub_msg,
+    ))
 }
 
 /// Y = scalar·G，只取 x 坐标，y 用 recover_y_on_p256 恢复（照抄 Go 的流程）。
@@ -153,8 +157,8 @@ impl CpaceSession {
             return Err(CpaceError::InvalidPeerPoint);
         }
         // 校验 2：SEC1 解码 + 曲线方程校验（Go 用 ecdh.NewPublicKey）
-        let peer = AffinePoint::from_sec1_bytes(peer_pub)
-            .map_err(|_| CpaceError::InvalidPeerPoint)?;
+        let peer =
+            AffinePoint::from_sec1_bytes(peer_pub).map_err(|_| CpaceError::InvalidPeerPoint)?;
 
         // ISK_x = scalar·peerPub 的 x 坐标；两边算的是同一个点
         let isk_x_bytes = (peer * self.scalar).to_affine().x();
@@ -198,8 +202,8 @@ mod tests {
         const DST: &[u8] = b"QUUX-V01-CS02-with-P256_XMD:SHA-256_SSWU_RO_";
 
         // msg = ""
-        let pt = hash_from_bytes::<NistP256, ExpandMsgXmd<Sha256>>(&[b"".as_slice()], &[DST])
-            .unwrap();
+        let pt =
+            hash_from_bytes::<NistP256, ExpandMsgXmd<Sha256>>(&[b"".as_slice()], &[DST]).unwrap();
         assert_eq!(
             hex(pt.to_affine().x().as_slice()),
             "2c15230b26dbc6fc9a37051158c95b79656e17a1a920b11394ca91c44247d3e4"

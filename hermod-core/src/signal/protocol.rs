@@ -164,15 +164,16 @@ mod tests {
     /// 解析 Go 写出的 JSON（含 base64 payload）→ Message。
     #[test]
     fn deserialize_go_message() {
-        let m: Message = serde_json::from_str(r#"{"type":"blob","channel_id":42,"payload":"aGVsbG8="}"#)
-            .unwrap();
+        let m: Message =
+            serde_json::from_str(r#"{"type":"blob","channel_id":42,"payload":"aGVsbG8="}"#)
+                .unwrap();
         assert_eq!(m.msg_type, MsgType::Blob);
         assert_eq!(m.channel_id, 42);
         assert_eq!(m.payload, b"hello");
 
         // 没有 channel_id / payload 的 error 消息
-        let m: Message = serde_json::from_str(r#"{"type":"error","error":"channel terminated"}"#)
-            .unwrap();
+        let m: Message =
+            serde_json::from_str(r#"{"type":"error","error":"channel terminated"}"#).unwrap();
         assert_eq!(m.msg_type, MsgType::Error);
         assert_eq!(m.channel_id, 0);
         assert!(m.payload.is_empty());
@@ -208,7 +209,10 @@ mod tests {
             ((0u8..16).collect(), "AAECAwQFBgcICQoLDA0ODw=="),
         ] {
             let json = serde_json::to_string(&Message::blob(1, bytes)).unwrap();
-            assert!(json.contains(&format!("\"payload\":\"{expected}\"")), "{json}");
+            assert!(
+                json.contains(&format!("\"payload\":\"{expected}\"")),
+                "{json}"
+            );
         }
     }
 

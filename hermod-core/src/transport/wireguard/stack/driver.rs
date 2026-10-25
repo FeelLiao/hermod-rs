@@ -32,6 +32,7 @@ pub struct TunnelStack {
     sockets: SocketSet<'static>,
     start: std::time::Instant,
     mtu: usize,
+    congestion: tcp::CongestionControl,
 }
 
 impl TunnelStack {
@@ -56,10 +57,15 @@ impl TunnelStack {
             sockets: SocketSet::new(Vec::new()),
             start: std::time::Instant::now(),
             mtu,
+            congestion: tcp::CongestionControl::Cubic,
         }
     }
 
     /// 当前内层 IP MTU。
+    pub fn set_congestion(&mut self, value: tcp::CongestionControl) {
+        self.congestion = value;
+    }
+
     pub fn mtu(&self) -> usize {
         self.mtu
     }
@@ -81,13 +87,16 @@ impl TunnelStack {
     /// poll 一次：处理 ingress / egress / socket 状态。
     pub fn poll(&mut self) {
         let now = self.now();
-        self.iface
-            .poll(now, &mut self.device, &mut self.sockets);
+        self.iface.poll(now, &mut self.device, &mut self.sockets);
     }
 
     /// 把一个 TCP socket 加入栈，返回句柄。
     pub fn add_tcp(&mut self, socket: tcp::Socket<'static>) -> SocketHandle {
-        self.sockets.add(socket)
+        {
+            let mut socket = socket;
+            socket.set_congestion_control(self.congestion);
+            self.sockets.add(socket)
+        }
     }
 
     /// 取 socket 的可变引用。
@@ -115,9 +124,7 @@ impl TunnelStack {
         handle: SocketHandle,
         endpoint: smoltcp::wire::IpListenEndpoint,
     ) -> Result<(), tcp::ListenError> {
-        self.sockets
-            .get_mut::<tcp::Socket>(handle)
-            .listen(endpoint)
+        self.sockets.get_mut::<tcp::Socket>(handle).listen(endpoint)
     }
 
     /// 新建 8 MiB 缓冲的 TCP socket（尚未加入栈）。
@@ -166,7 +173,7 @@ mod tests {
         }
     }
 
-    /// MTU 可配置（--wg-mtu）。
+    /// MTU 可配置（--mtu）。
     #[test]
     fn mtu_reflects_constructor() {
         let s = TunnelStack::new(OVERLAY_TX, 1, 9000);

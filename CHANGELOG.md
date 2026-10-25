@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Declare the Android document plugin's Activity dependency directly so its
+  `ActivityResult` callbacks compile; app-module dependencies do not supply the
+  plugin's compile classpath.
+- Check fixed Windows and Android release signing secrets before installing build
+  tools or compiling clients, and report the missing secret names without values.
+- Document the signing-secret file mapping and how to retry a corrected workflow.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

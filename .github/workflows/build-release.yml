@@ -124,6 +124,14 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Check fixed Windows signing secrets before building
+        shell: pwsh
+        env:
+          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+        run: |
+          $missing = @('WINDOWS_PFX_BASE64', 'WINDOWS_PFX_PASSWORD') | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
+          if ($missing) { throw "Missing repository Actions secrets: $($missing -join ', '). Run hermod-app/scripts/init-signing-keys.sh once and configure Settings > Secrets and variables > Actions; see APP_BUILD.md." }
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -237,6 +245,21 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - name: Check fixed Android signing secrets before building
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=()
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!name//[[:space:]]/}" ]]; then missing+=("$name"); fi
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing repository Actions secrets: ${missing[*]}. Run hermod-app/scripts/init-signing-keys.sh once and configure Settings > Secrets and variables > Actions; see APP_BUILD.md."
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

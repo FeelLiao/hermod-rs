@@ -14,6 +14,8 @@ android {
 }
 kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 } }
 dependencies {
+    // ActivityResult 属于当前模块的编译依赖，不能依赖 app 或 Tauri 的 implementation 传递导出。
+    implementation("androidx.activity:activity:1.10.1")
     implementation("androidx.documentfile:documentfile:1.1.0")
     implementation(project(":tauri-android"))
     implementation("androidx.core:core-ktx:1.19.1")

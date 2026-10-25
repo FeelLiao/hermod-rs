@@ -83,7 +83,30 @@ securely. It contains the PFX, Android JKS, public certificate and passwords. Do
 commit it, upload it as an artifact, or rerun it for every version. A new signing key
 can prevent upgrades and require users to export their inbox and reinstall.
 
-Set repository **Actions secrets** using the files, without pasting secrets into logs:
+This creates a Windows code-signing certificate and its private key in a PFX, plus
+a separate Android signing key in a JKS. These are not SSH keys. Windows x64 and
+ARM64 reuse the same PFX. Do not regenerate the keys for each workflow run.
+
+In the GitHub repository, open **Settings → Secrets and variables → Actions →
+Secrets → New repository secret**. Use repository secrets, not Actions variables.
+Enter the file **contents**, not the filename or path:
+
+| Secret name | Value from the one-time initializer |
+| --- | --- |
+| `WINDOWS_PFX_BASE64` | Contents of `signing-private/windows-pfx-base64` |
+| `WINDOWS_PFX_PASSWORD` | Contents of `signing-private/windows-password` |
+| `ANDROID_KEYSTORE_BASE64` | Contents of `signing-private/android-keystore-base64` |
+| `ANDROID_KEYSTORE_PASSWORD` | Contents of `signing-private/android-password` |
+| `ANDROID_KEY_ALIAS` | Literal `hermod` |
+| `ANDROID_KEY_PASSWORD` | Contents of `signing-private/android-password` |
+
+The `.cer` contains only the Windows public certificate; it cannot replace the
+PFX signing secret. The initializer also works in WSL with OpenSSL and JDK `keytool`.
+If either command is missing, install `openssl` and `openjdk-17-jdk-headless` first.
+The directory stays local and ignored by Git; only the public certificate is released.
+
+Alternatively, with GitHub CLI installed and authenticated, set the same repository
+secrets from the repository root without printing their values:
 
 ```bash
 gh secret set WINDOWS_PFX_BASE64 < signing-private/windows-pfx-base64
@@ -95,8 +118,15 @@ gh secret set ANDROID_KEY_PASSWORD < signing-private/android-password
 ```
 
 These commands are for the maintainer to run. Missing signing secrets make the package
-jobs fail explicitly. PR checks use Android debug signing only for disposable emulator
-builds; those APKs are not published.
+jobs fail before toolchain setup and compilation. PR checks use Android debug signing
+only for disposable emulator builds; those APKs are not published. See
+[GitHub's repository secret instructions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
+
+If only secrets were missing, configure them and re-run the failed jobs. If source or
+workflow changes are also needed, push the fix and use **Actions → Build and release →
+Run workflow → master** to test the new commit. Re-running the old tag's jobs still uses
+that tag's old source and workflow. Publish a new version after the fixed pipeline
+passes; do not move an already pushed release tag.
 
 Windows uses `Name=Hermod.Transfer.Test`, `Publisher=CN=HermodTest` and version
 `major.minor.patch.0` for both x64 and ARM64. The same PFX signs both packages. Only its
@@ -133,6 +163,14 @@ The Tauri/official plugin templates still use Kotlin **2.2.10** and the legacy A
 DSL, so the generator explicitly disables AGP built-in Kotlin/new DSL for compatibility.
 This does not change API targets. Tauri's `bundle.android.minSdkVersion=34` also sets
 the Rust native minimum API; target API 37 does not raise it.
+
+Each native plugin declares its own AndroidX compile dependencies. In particular,
+`plugins/documents/android` directly depends on `androidx.activity:activity:1.10.1`
+for `ActivityResult`, aligned with the application's Activity version. An
+`implementation` dependency in the app or Tauri module is not exported onto the
+document plugin's compile classpath. AGP legacy-DSL deprecation warnings are separate
+from Kotlin `e:` compilation errors; inspect the first error and `What went wrong`
+section, not only Tauri's final Gradle exit-code wrapper.
 
 CI runs `tauri android init`, applies the template, then runs `tauri android build`
 for one ABI. Release uses ARM64 and the fixed keystore; x86_64 is only for debug emulator

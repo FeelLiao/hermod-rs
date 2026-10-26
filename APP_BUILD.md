@@ -84,6 +84,16 @@ Chromium, Python 3 and Chinese fonts installed. The script validates image sizes
 text limits and creates a ZIP under `store-output/` for manual listing uploads.
 This kit is not a program package or a GitHub Release attachment.
 
+The bilingual [privacy policy](PRIVACY.md) identifies the app as HermodTransfer / Hermod
+and provides the publisher's privacy contact. Push it to the public `master` branch
+before entering `https://github.com/FeelLiao/hermod-rs/blob/master/PRIVACY.md` in
+Partner Center's privacy-policy field. Confirm the page is readable while signed out.
+If the portal accepts policy text, the kit also includes `privacy/privacy-policy.txt`.
+File and text transfers can process personal information even though the app has no
+developer analytics service; do not describe it as never accessing or transmitting
+personal information. A policy/documentation update does not require moving a release
+tag or changing the MSIX identity. See the [Microsoft privacy submission guidance](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/support-info).
+
 The Windows release file is **one unsigned MSIXBundle for Partner Center**, containing
 the native x64 and ARM64 packages. Download `hermod-windows.msixbundle` from Release,
 then upload it to the app submission's **Packages** page. No ZIP conversion, certificate,

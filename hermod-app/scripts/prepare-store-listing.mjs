@@ -156,6 +156,14 @@ try {
   await put('sources/app-icon.svg', icon);
   await put('sources/hero.svg', hero);
   await put('UPLOAD.zh-CN.md', await readFile(path.join(source, 'UPLOAD.zh-CN.md')));
+  const privacy = await readFile(path.join(repository, 'PRIVACY.md'), 'utf8');
+  await put('privacy/PRIVACY.md', privacy);
+  await put('privacy/privacy-policy.txt', privacy
+    .replace('[简体中文](#简体中文) · [English](#english)\n', '')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, target) => target.startsWith('mailto:') ? label : `${label} (${target})`)
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1'));
   await put('listing.json', `${JSON.stringify(listing, null, 2)}\n`);
   await put('PREVIEW.html', `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hermod Store Listing Preview</title><style>body{margin:0;padding:40px;font:16px/1.6 system-ui,sans-serif;background:#f1f6f4;color:#12352f}main{max-width:1360px;margin:auto}h1{font-size:36px}section{display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:24px}figure{margin:0;background:white;padding:16px;border-radius:12px;overflow:hidden}img{display:block;width:100%;height:auto;border:1px solid #e1ebe7}figcaption{padding-top:12px}code{font-size:12px;overflow-wrap:anywhere}</style><main><h1>Hermod · 商店素材预览</h1><p>版本 ${escape(version)} · 实际桌面界面与演示数据 · 上传位置见 UPLOAD.zh-CN.md</p><section>${images.map(item => `<figure><a href="${item.name}"><img src="${item.name}" alt="${escape(item.caption)}"></a><figcaption>${escape(item.caption)}<br><code>${item.name} · ${item.width}×${item.height}</code></figcaption></figure>`).join('')}</section></main></html>`);
   for (const item of images) {

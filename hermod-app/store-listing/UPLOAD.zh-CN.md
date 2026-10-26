@@ -34,6 +34,28 @@ npm run store:prepare --prefix hermod-app
 清单中的包显示名称和应用显示名称也必须使用 `HermodTransfer`；
 使用未保留的 `Hermod` 会被商店拒绝，重命名下载文件不能修正清单。
 
+## 隐私政策怎么填
+
+应用会读取和传输用户选择的内容及连接信息，因此在“是否访问、收集或传输个人信息”中选择 **是**。
+不要把没有广告或统计 SDK 等同于完全不处理个人信息。
+在提交的隐私政策/支持信息栏目填写政策，而不是把它附在应用描述后面。
+
+根目录 `PRIVACY.md` 是中英合并政策，发布者为 FeelLiao，联系邮箱为 `feel2027@outlook.com`。
+先推送包含该文件的 `master`，然后用退出登录或无痕窗口确认下列链接能够公开打开，再填入隐私政策 URL：
+
+```text
+https://github.com/FeelLiao/hermod-rs/blob/master/PRIVACY.md
+```
+
+此链接在文件推送前不会生效。如果 Partner Center 当前页面提供“直接输入隐私政策文本”，
+也可以粘贴素材包中的 `privacy/privacy-policy.txt`，其中包含中文和英文全文。
+`privacy/PRIVACY.md` 为原始文档副本。应用支持联系邮箱可填写 `feel2027@outlook.com`。
+后续更换域名时，应先发布同样内容并确认可访问，再更新商店字段。
+
+政策明确说明默认信令服务器为第三方服务、其日志和保存期限未经确认；文件直传不代表连接信息不可见。
+以后新增遥测、云服务或改变数据保留方式时，需要同步修改政策。
+仅更新这份文档无需重新构建 MSIX 或移动现有版本标签；推送 `master` 仍只触发 CI。
+
 ## 图片怎么上传
 
 | 字段 | 文件 | 规格 |
@@ -72,5 +94,6 @@ npm run store:prepare --prefix hermod-app
 
 - [截图、图标与宣传图](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/screenshots-and-images)：桌面截图至少 1366×768，PNG 小于 50 MB；建议提供多张，截图不加额外营销文字；图标槽位为 300×300，宣传图不含文字。
 - [商店列表文字字段](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/add-and-edit-store-listing-info)：描述、功能、简短描述和更新说明分别填写。
+- [隐私政策提交字段](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/support-info)及[商店隐私要求](https://learn.microsoft.com/en-us/windows/apps/publish/store-policies#105-personal-information)：根据实际访问和传输行为填写，提供公开政策或门户支持的政策文本。
 
 商店是否展示宣传图及最终审核结果由 Microsoft 决定；准备素材不等于提交或发布。

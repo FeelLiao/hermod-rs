@@ -176,7 +176,7 @@ reuses those checks before packaging; only a `v*` tag push publishes a Release.
 Manual builds produce Actions artifacts without publishing.
 
 [Build and release guide](APP_BUILD.md) · [Architecture and contributor guide](AGENTS.md) ·
-[Changelog](CHANGELOG.md) · [License](LICENSE)
+[Changelog](CHANGELOG.md) · [Privacy policy / 隐私政策](PRIVACY.md) · [License](LICENSE)
 
 Inspired by [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole).
 The protocol uses CPace, authenticated endpoint exchange and transport encryption;

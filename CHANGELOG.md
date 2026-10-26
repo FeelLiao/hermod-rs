@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Bilingual privacy policy covering file and connection data, third-party signaling,
+  local storage, permissions, retention and privacy contact. Store preparation now
+  includes the policy and instructions for its public URL or text submission.
+
 ## [0.4.4] - 2026-10-26
 
 ### Added

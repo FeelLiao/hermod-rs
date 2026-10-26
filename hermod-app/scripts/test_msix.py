@@ -4,12 +4,22 @@ import io
 from pathlib import Path
 import struct
 import unittest
+import xml.etree.ElementTree as ET
 import zipfile
 
 spec = importlib.util.spec_from_file_location("verify_msix", Path(__file__).with_name("verify-msix.py"))
 verifier = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verifier)
 PACKAGING = Path(__file__).resolve().parents[1] / "packaging"
+
+
+def archive(entries):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as package:
+        for name, content in entries.items():
+            package.writestr(name, content)
+    buffer.seek(0)
+    return buffer
 
 
 class StorePackageTests(unittest.TestCase):
@@ -30,12 +40,7 @@ class StorePackageTests(unittest.TestCase):
         }
 
     def verify(self, entries, architecture="x64"):
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w") as package:
-            for name, content in entries.items():
-                package.writestr(name, content)
-        buffer.seek(0)
-        verifier.verify(buffer, architecture, "0.4.3")
+        verifier.verify(archive(entries), architecture, "0.4.3")
 
     def test_both_architectures_and_real_manifest_resources(self):
         for architecture in ("x64", "arm64"):
@@ -68,6 +73,18 @@ class StorePackageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.verify(entries)
 
+    def test_rejects_unreserved_package_and_application_display_names(self):
+        for original, changed in [
+            (b"<DisplayName>HermodTransfer</DisplayName>", b"<DisplayName>Hermod</DisplayName>"),
+            (b'DisplayName="HermodTransfer"', b'DisplayName="Hermod"'),
+        ]:
+            with self.subTest(original=original):
+                entries = self.fixture()
+                self.assertIn(original, entries["AppxManifest.xml"])
+                entries["AppxManifest.xml"] = entries["AppxManifest.xml"].replace(original, changed)
+                with self.assertRaisesRegex(ValueError, "reserved Store name"):
+                    self.verify(entries)
+
     def test_rejects_missing_localized_resources(self):
         for name in ("resources.pri", "Strings/zh-CN/Resources.resw"):
             with self.subTest(name=name):
@@ -75,6 +92,77 @@ class StorePackageTests(unittest.TestCase):
                 del entries[name]
                 with self.assertRaises(KeyError):
                     self.verify(entries)
+
+
+class StoreBundleTests(unittest.TestCase):
+    def fixture(self, changed_package=None):
+        entries = {}
+        manifest = ET.Element("Bundle", xmlns=verifier.BUNDLE_NS["b"], SchemaVersion="5.0")
+        ET.SubElement(manifest, "Identity", Name=verifier.IDENTITY,
+                      Publisher=verifier.PUBLISHER, Version="1.4.3.0")
+        packages = ET.SubElement(manifest, "Packages")
+        for architecture in ("x64", "arm64"):
+            content = StorePackageTests().fixture(architecture)
+            if changed_package:
+                changed_package(content, architecture)
+            name = f"hermod-windows-{architecture}.msix"
+            entries[name] = archive(content).getvalue()
+            ET.SubElement(packages, "Package", Type="application", Version="1.4.3.0",
+                          Architecture=architecture, FileName=name, Size=str(len(entries[name])))
+        entries["AppxMetadata/AppxBundleManifest.xml"] = ET.tostring(manifest)
+        entries["AppxBlockMap.xml"] = b"test block map"
+        entries["[Content_Types].xml"] = b"test content types"
+        return entries
+
+    def verify(self, entries):
+        verifier.verify_bundle(archive(entries), "0.4.3")
+
+    def test_valid_bundle_contains_both_verified_architectures(self):
+        self.verify(self.fixture())
+
+    def test_rejects_wrong_bundle_identity_version_architecture_or_size(self):
+        for original, changed in [
+            (verifier.IDENTITY.encode(), b"Different.Application"),
+            (verifier.PUBLISHER.encode(), b"CN=AnotherPublisher"),
+            (b"1.4.3.0", b"1.4.2.0"),
+            (b'Architecture="arm64"', b'Architecture="x64"'),
+            (b'Type="application"', b'Type="resource"'),
+            (b'Size="', b'Size="1'),
+        ]:
+            with self.subTest(original=original):
+                entries = self.fixture()
+                manifest = "AppxMetadata/AppxBundleManifest.xml"
+                entries[manifest] = entries[manifest].replace(original, changed)
+                with self.assertRaises(ValueError):
+                    self.verify(entries)
+
+    def test_rejects_missing_extra_or_signed_bundle_payload(self):
+        entries = self.fixture()
+        del entries["hermod-windows-arm64.msix"]
+        with self.assertRaises(ValueError):
+            self.verify(entries)
+        for name in ("AppxSignature.p7x", "signing.pfx", "hermod-windows-x86.msix"):
+            with self.subTest(name=name):
+                entries = self.fixture()
+                entries[name] = b"unexpected"
+                with self.assertRaises(ValueError):
+                    self.verify(entries)
+
+    def test_rejects_invalid_embedded_packages(self):
+        def unsigned_name_regression(content, _architecture):
+            content["AppxManifest.xml"] = content["AppxManifest.xml"].replace(
+                b"<DisplayName>HermodTransfer</DisplayName>", b"<DisplayName>Hermod</DisplayName>")
+
+        def signed_child(content, _architecture):
+            content["AppxSignature.p7x"] = b"test signature"
+
+        def wrong_binary(content, _architecture):
+            content["hermod-app.exe"] = b"invalid executable"
+
+        for mutate in (unsigned_name_regression, signed_child, wrong_binary):
+            with self.subTest(mutate=mutate.__name__):
+                with self.assertRaises(ValueError):
+                    self.verify(self.fixture(mutate))
 
 
 if __name__ == "__main__":

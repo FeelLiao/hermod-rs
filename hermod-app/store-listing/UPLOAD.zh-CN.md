@@ -1,6 +1,6 @@
 # Hermod 微软商店素材上传说明
 
-适用应用：Hermod · FeelLiao · Store ID `9PMPWN3HMR3M`。
+适用应用：HermodTransfer（Hermod 的 Windows 商店版）· FeelLiao · Store ID `9PMPWN3HMR3M`。
 
 在仓库根目录运行 `npm run store:prepare --prefix hermod-app`，生成目录为
 `store-output/hermod-<版本>/`，同目录旁还会生成可下载的 ZIP 素材包。
@@ -29,8 +29,10 @@ npm run store:prepare --prefix hermod-app
 
 文本均为可复制的纯文本；功能和系统要求按一行一项分别填写。
 首次提交时“此版本中的新增功能”留空，更新提交时才使用更新说明。
-展示名称使用 **Hermod**，并核对它与 Partner Center 中保留的产品名称一致；
-包标识 `FeelLiao.HermodTransfer` 用于程序包身份。
+两个语言列表的产品名称都选择已保留的 **HermodTransfer**。
+包标识 `FeelLiao.HermodTransfer` 用于程序包身份，不等于显示名称。
+清单中的包显示名称和应用显示名称也必须使用 `HermodTransfer`；
+使用未保留的 `Hermod` 会被商店拒绝，重命名下载文件不能修正清单。
 
 ## 图片怎么上传
 
@@ -63,7 +65,7 @@ npm run store:prepare --prefix hermod-app
 ## 素材和程序包是两回事
 
 此 ZIP 是供你整理上传内容的素材包，不是 MSIX，不应上传到“程序包 / Packages”栏。
-程序包栏上传 GitHub Actions 产出的 `hermod-windows-x64.msix` 和 `hermod-windows-arm64.msix`。
+程序包栏只需上传 GitHub Actions 产出的 `hermod-windows.msixbundle`，其中包含 x64 和 ARM64，商店自动选择设备适用的架构。
 商店文案和截图应分别添加到对应语言的商店列表中。
 
 ## 官方参考（2026-10-26 核对）

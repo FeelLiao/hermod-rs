@@ -128,8 +128,31 @@ jobs:
         run: ./hermod-app/scripts/smoke-windows.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: release-windows-${{ matrix.arch }}
-          path: dist/*
+          name: windows-msix-${{ matrix.arch }}
+          path: dist/hermod-windows-${{ matrix.arch }}.msix
+          if-no-files-found: error
+
+  windows_bundle:
+    name: Windows x64 and ARM64 Store bundle
+    needs: windows
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: windows-msix-*
+          path: packages
+          merge-multiple: true
+      - name: Bundle validated architectures for Microsoft Store
+        shell: pwsh
+        run: ./hermod-app/scripts/bundle-msix.ps1 -PackageDirectory packages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/hermod-windows.msixbundle
           if-no-files-found: error
 
   android:
@@ -212,7 +235,7 @@ jobs:
 
   release:
     name: Publish all verified programs
-    needs: [verify, linux, windows, android]
+    needs: [verify, linux, windows_bundle, android]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-22.04
     permissions:
@@ -224,7 +247,9 @@ jobs:
           pattern: release-*
           path: artifacts
           merge-multiple: true
-      - run: python3 scripts/check-release-files.py artifacts
+      - run: |
+          python3 scripts/check-release-files.py artifacts
+          python3 hermod-app/scripts/verify-msix.py artifacts/hermod-windows.msixbundle --bundle
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
@@ -232,6 +257,6 @@ jobs:
           generate_release_notes: true
           body: |
             Both peers need reachable IPv6. See README.md / README.zh-CN.md for setup and migration.
-            Windows: unsigned x64/ARM64 MSIX packages for Microsoft Store submission (FeelLiao.HermodTransfer, Store ID 9PMPWN3HMR3M). Upload both files to Partner Center. These are not direct-install packages; install the Store-signed app after publication. No certificate or install script is required.
+            Windows: one unsigned MSIXBundle containing x64 and ARM64 for Microsoft Store submission (HermodTransfer, identity FeelLiao.HermodTransfer, Store ID 9PMPWN3HMR3M). Upload hermod-windows.msixbundle to Partner Center. This is not a direct-install package; install the Store-signed app after publication. No certificate or install script is required.
             Linux: AppImage GUI or static musl CLI, x64 / ARM64.
             Android: ARM64 APK, Android 14 or newer (API 34), target API 37. Export inbox files before uninstalling an older temporary-key build.

@@ -2157,7 +2157,7 @@ checksum = "e17592d60ebacc7d5e169f4663c5f84f9161cc90328abcfe8456f41e4dfcb284"
 
 [[package]]
 name = "hermod-app"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "bytes",
  "futures-util",
@@ -2182,7 +2182,7 @@ dependencies = [
 
 [[package]]
 name = "hermod-cli"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "clap",
  "console",
@@ -2201,7 +2201,7 @@ dependencies = [
 
 [[package]]
 name = "hermod-core"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "aes-gcm",
  "base64ct",
@@ -5002,7 +5002,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-documents"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "serde",
  "serde_json",

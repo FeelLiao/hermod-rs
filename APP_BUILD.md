@@ -1,11 +1,11 @@
-# Building and releasing Hermod 0.4.3
+# Building and releasing Hermod 0.4.4
 
 [User guide](README.md) · [中文使用说明](README.zh-CN.md)
 
 Branch and PR checks run in `.github/workflows/ci.yml`. Release builds run in
 `.github/workflows/build-release.yml` and reuse those checks. Local validation is
-Linux-only. Windows checks use a temporary signed copy in Actions; released MSIX files
-remain unsigned for Microsoft Store submission. Android builds and
+Linux-only. Windows checks use a temporary signed copy in Actions; the released MSIXBundle
+and its embedded packages remain unsigned for Microsoft Store submission. Android builds and
 signs the ARM64 APK in Actions and checks the resulting package; no Android emulator
 or runtime tests run. A successful Linux build does not verify other platforms.
 
@@ -65,7 +65,7 @@ npm test --prefix hermod-app
 cd hermod-app
 APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri -- build --ci --bundles appimage -- --locked
 cd ..
-hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.3_amd64.AppImage
+hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.4_amd64.AppImage
 CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release --target x86_64-unknown-linux-musl -p hermod-cli
 readelf -l target/x86_64-unknown-linux-musl/release/hermod
 ```
@@ -84,9 +84,9 @@ Chromium, Python 3 and Chinese fonts installed. The script validates image sizes
 text limits and creates a ZIP under `store-output/` for manual listing uploads.
 This kit is not a program package or a GitHub Release attachment.
 
-Windows x64 and ARM64 release files are **unsigned MSIX packages for Partner Center**.
-Download `hermod-windows-x64.msix` and `hermod-windows-arm64.msix` from the same Release,
-then upload both to the app submission's **Packages** page. No ZIP conversion, certificate,
+The Windows release file is **one unsigned MSIXBundle for Partner Center**, containing
+the native x64 and ARM64 packages. Download `hermod-windows.msixbundle` from Release,
+then upload it to the app submission's **Packages** page. No ZIP conversion, certificate,
 PowerShell installer or additional signing is needed. Microsoft signs the packages after
 certification; these GitHub files are not direct-install downloads. See Microsoft's
 [package upload guide](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/upload-app-packages)
@@ -96,6 +96,7 @@ The checked-in manifest uses the exact Partner Center values:
 
 | Property | Value |
 | --- | --- |
+| Reserved product / package / application display name | `HermodTransfer` |
 | Identity name | `FeelLiao.HermodTransfer` |
 | Identity publisher | `CN=37A01BFF-1DAB-45E5-9B67-AA76C0655A7C` |
 | Publisher display name | `FeelLiao` |
@@ -104,7 +105,14 @@ The checked-in manifest uses the exact Partner Center values:
 | Languages | `en-US`, `zh-CN` |
 
 The supplied Package SID is account metadata, not an AppxManifest identity attribute.
-Display name remains **Hermod**. `Strings/en-US/Resources.resw` and
+Both `Package/Properties/DisplayName` and `uap:VisualElements/@DisplayName` use the
+reserved name **HermodTransfer**. This differs from the package identity
+`FeelLiao.HermodTransfer`; a correct identity alone does not reserve the display name.
+Choose **HermodTransfer** in the product-name field for both language listings.
+If Store validation reports an unreserved name, check **Product management → Manage
+app names**, then rebuild with the exact reserved name. Renaming the file cannot fix
+its embedded manifest. See [Microsoft's app-name guidance](https://learn.microsoft.com/en-us/windows/apps/publish/partner-center/msix/manage-app-name-reservations).
+`Strings/en-US/Resources.resw` and
 `Strings/zh-CN/Resources.resw` provide localized descriptions referenced by `ms-resource:`;
 MakePRI compiles both into one `resources.pri`. The GUI has matching English/Chinese support.
 In Partner Center, add and complete both language listings; declaring languages in the
@@ -115,20 +123,30 @@ Submission remains subject to Microsoft's review and account requirements.
 
 The Store [version rules](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements#package-version-numbering)
 require a nonzero first component and a final `0`. `msix-version.mjs` maps application
-`major.minor.patch` to **`(major + 1).minor.patch.0`**: release **0.4.3 → 1.4.3.0**,
+`major.minor.patch` to **`(major + 1).minor.patch.0`**: release **0.4.4 → 1.4.4.0**,
 and future app 1.0.0 → MSIX 2.0.0.0. All components are range-checked. Keep this mapping
-stable so upgrades remain ordered; the app's About/version field still shows 0.4.3.
+stable so upgrades remain ordered; the app's About/version field still shows 0.4.4.
 
 Windows CI requires no `WINDOWS_PFX_BASE64` or `WINDOWS_PFX_PASSWORD` secrets. Any old
 Windows secrets may be removed from GitHub, but local signing backups are not touched.
-MakeAppx validates the package, then `verify-msix.py` checks identity, version, executable
+MakeAppx validates the package, then `verify-msix.py` checks identity, both reserved display names, version, executable
 architecture, both languages, resource files and the absence of a package signature.
 For installation/startup checks only, CI copies the MSIX into runner temporary storage,
 creates a one-day non-exportable certificate with the same publisher, signs the copy,
 and installs it. It verifies the PFN and window creation, then removes the installed
 copy, certificate and key. A hash comparison and another package check ensure the
-Release MSIX is unchanged. No temporary signing material enters artifacts or Release.
+unsigned MSIX is unchanged. No temporary signing material enters artifacts or Release.
 The runner installs Microsoft's WebView2 Runtime if needed.
+
+After both native jobs succeed, `windows_bundle` downloads their intermediate
+`windows-msix-x64` / `windows-msix-arm64` artifacts. `bundle-msix.ps1` runs MakeAppx
+`bundle` with an explicit version and validates both embedded packages, their Store
+identity, display names, versions and architecture coverage. Only the combined bundle
+matches the Release artifact allowlist; the individual MSIX files remain CI intermediates.
+The publish job validates the downloaded bundle again. Windows chooses the appropriate
+architecture; the executables themselves are still compiled separately.
+Continue publishing bundles for subsequent releases once a bundle is distributed,
+as explained in [Microsoft's bundling guide](https://learn.microsoft.com/en-us/windows/msix/package/bundling-overview).
 
 After publication, users install the Store-signed app (Store ID above); links become
 usable only after Microsoft makes the listing available. Old `Hermod.Transfer.Test`
@@ -173,7 +191,7 @@ missing, configure them and re-run the failed jobs. Source/workflow changes requ
 new commit; retrying an old tag still uses its old source. Use **Actions → Build and
 release → Run workflow → master** to check new packaging, then publish a new version.
 Do not move an already pushed tag. Android retains `org.hermod.transfer` and uses
-`versionCode=40300` for 0.4.3; keep its signing key and alias for future upgrades.
+`versionCode=40400` for 0.4.4; keep its signing key and alias for future upgrades.
 
 ## GUI localization
 
@@ -268,14 +286,15 @@ Tags and manual runs build the following packages after the checks pass:
 
 | Runner | Output |
 | --- | --- |
-| `windows-2025` | x64 GUI MSIX (Store upload) |
-| `windows-11-arm` | ARM64 GUI MSIX (Store upload) |
+| `windows-2025` | x64 GUI MSIX (tested intermediate) |
+| `windows-11-arm` | ARM64 GUI MSIX (tested intermediate) |
+| `windows-2025` (`windows_bundle`) | One x64 + ARM64 MSIXBundle (Store upload) |
 | `ubuntu-22.04` | x64 AppImage and musl CLI |
 | `ubuntu-22.04-arm` | ARM64 AppImage and musl CLI |
 | `ubuntu-22.04` + Android SDK | ARM64 Tauri APK |
 
 Only version-tag pushes publish. Every required job must succeed first. `check-release-files.py`
-requires an exact seven-file allowlist: two Store MSIX packages, four Linux programs
+requires an exact six-file allowlist: one Store MSIXBundle, four Linux programs
 and one Android APK. No certificates, installation scripts, checksums, ZIPs, debs, debug symbols, build logs, private keys
 or canceled-platform programs are uploaded to Release. Internal Actions artifact
 containers are a GitHub transport mechanism, not ZIP release assets.
@@ -285,7 +304,7 @@ After reviewing the commit and configuring signing secrets, the maintainer pushe
 
 ```bash
 git push origin master
-git push origin v0.4.3
+git push origin v0.4.4
 ```
 
 Do not move an already published tag to hide a failed build. Fix it in a new commit

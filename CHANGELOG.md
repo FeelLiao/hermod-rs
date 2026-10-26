@@ -6,11 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-10-26
+
 ### Added
 
 - Bilingual Microsoft Store listing copy, six desktop screenshots per language,
   app icons, promotional art and a field-by-field upload guide. A Linux capture
   script regenerates and validates the assets using the shared UI and demo data.
+
+### Fixed
+
+- Use the reserved Microsoft Store name `HermodTransfer` for package and application
+  display names. Check both names before packaging and publishing to catch the previous
+  unreserved `Hermod` value. Package identity and publisher stay unchanged.
+
+### Changed
+
+- Publish one unsigned `hermod-windows.msixbundle` containing x64 and ARM64. Actions
+  validates and smoke-tests each native package, bundles both, and verifies the embedded
+  packages before publishing. Individual MSIX files are CI intermediates only.
+- Release allowlist now contains six files. Bump application versions to 0.4.4,
+  Store bundle/package version to 1.4.4.0 and Android versionCode to 40400.
 
 ## [0.4.3] - 2026-10-26
 

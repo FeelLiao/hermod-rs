@@ -4,7 +4,7 @@ members = ["hermod-core", "hermod-cli", "hermod-app/src-tauri", "hermod-app/plug
 default-members = ["hermod-core", "hermod-cli"]
 
 [workspace.package]
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 rust-version = "1.99.0"
 

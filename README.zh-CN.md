@@ -19,14 +19,13 @@ Hermod 是使用 Rust 编写的加密 P2P **IPv6** 文件传输工具。文件�
 
 | 设备 | 下载文件 |
 | --- | --- |
-| Windows 10 2004+ / Windows 11，x64 | `hermod-windows-x64.msix`（仅供商店提交） |
-| Windows ARM64 | `hermod-windows-arm64.msix`（仅供商店提交） |
+| Windows 10 2004+ / Windows 11，x64 / ARM64 | `hermod-windows.msixbundle`（包含两种架构，仅供商店提交） |
 | Linux 桌面 x64 / ARM64 | `hermod-linux-x64.AppImage` / `hermod-linux-arm64.AppImage` |
 | Linux 命令行 x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
 | Android 14 及以上、ARM64 | `hermod-android-arm64.apk` |
 
-不再构建 macOS、Windows CLI 和 Android CLI。Release 只上传 7 个程序或包，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
-Windows MSIX 是未签名的商店提交包，不是直接下载安装的版本；普通用户请在产品上线后通过微软商店安装。
+不再构建 macOS、Windows CLI 和 Android CLI。Release 只上传 6 个程序或包，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
+Windows MSIXBundle 是包含 x64 和 ARM64 的未签名商店提交包；普通用户请在产品上线后通过微软商店安装 **HermodTransfer**，商店会选择对应架构。
 GitHub 自动提供的源码下载链接属于平台功能。
 
 ## 连接前先确认 IPv6
@@ -63,9 +62,9 @@ GUI 默认限制为 **8 Mbps**，建议按实测上行带宽的 70–85% 起步�
 
 ## 安装和升级
 
-**Windows**：商店审核上线后，从 Microsoft Store 安装 Hermod，发布者为 **FeelLiao**，
-Store ID 为 **9PMPWN3HMR3M**。GitHub 的 x64 与 ARM64 MSIX 由维护者一起上传到 Partner Center
-的 **程序包 / Packages** 页面，审核通过后由微软签名。GitHub 上的未签名包无法直接双击安装，
+**Windows**：商店审核上线后，从 Microsoft Store 安装 **HermodTransfer**，发布者为 **FeelLiao**，
+Store ID 为 **9PMPWN3HMR3M**。维护者只需把 GitHub 的 `hermod-windows.msixbundle` 上传到 Partner Center
+的 **程序包 / Packages** 页面，其中已包含 x64 和 ARM64；审核通过后由微软签名并选择对应架构。GitHub 上的未签名包无法直接双击安装，
 不再附带测试证书或安装脚本。旧 `Hermod.Transfer.Test` 版本迁移前，请先导出收件箱文件；
 商店版使用不同包身份。详见[商店提交说明](APP_BUILD.md#microsoft-store-packages)。
 
@@ -145,7 +144,7 @@ QUIC 支持 BBR/CUBIC/NewReno。不兼容组合会报错，不会静默忽略。
 - **传输码连不上**：检查双方 IPv6 路由、信令服务器、UDP 防火墙、完整传输码及强制协议是否一致。
 - **发送时网页很卡**：降低 GUI 限速或 `--limit-mbps`；上行跑满会挤占其他请求，见[性能分析](NETWORK_PERFORMANCE.md)。
 - **导出失败**：收件箱副本仍在，重新选择可写目录后导出；Android 重新授权目录。
-- **Windows MSIX 无法安装**：GitHub 文件仅供商店提交，尚未签名；请在审核上线后安装商店签名的版本。
+- **Windows MSIXBundle 无法安装**：GitHub 文件仅供商店提交，尚未签名；请在审核上线后安装商店签名的版本。
 
 Android 在 Actions 中只编译、签名并检查 ARM64 APK，不运行安卓模拟器或界面测试。
 

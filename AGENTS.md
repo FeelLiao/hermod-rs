@@ -64,8 +64,11 @@ No public signaling service is required for the quality gate.
 
 Browser tests validate Fluent desktop UI, language selection and persistence through mocked IPC.
 Native Linux AppImage smoke tests check real window creation. Windows CI validates Store identity,
+the reserved display name HermodTransfer in both package and application fields,
 version and en-US/zh-CN resources, then signs a temporary copy for native installation/launch.
-The released MSIX stays unsigned for Partner Center; no Windows signing secrets, certificates
+Both tested architectures are combined into one unsigned MSIXBundle; only the bundle is
+released for Partner Center. Bundle validation checks both embedded packages and their architecture coverage.
+No Windows signing secrets, certificates
 or user installation scripts are used. Android CI only builds and signs the ARM64 APK, then checks its
 signature, SDK versions, ABI and alignment. Android emulator, instrumentation and
 Android UI tests are not run. API/toolchain versions are pinned in APP_BUILD.md and Gradle.

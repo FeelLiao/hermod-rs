@@ -20,14 +20,13 @@ Choose your device's CPU architecture, not the architecture of the sender.
 
 | Device | Files to download |
 | --- | --- |
-| Windows 10 2004+ / Windows 11, x64 | `hermod-windows-x64.msix` (Store submission only) |
-| Windows on ARM64 | `hermod-windows-arm64.msix` (Store submission only) |
+| Windows 10 2004+ / Windows 11, x64 / ARM64 | `hermod-windows.msixbundle` (Store submission only; both architectures) |
 | Linux desktop x64 / ARM64 | `hermod-linux-x64.AppImage` / `hermod-linux-arm64.AppImage` |
 | Linux terminal x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
 | Android 14+ ARM64 | `hermod-android-arm64.apk` |
 
 There are no macOS, Windows CLI or Android CLI release builds. Release attachments
-contain only seven packages/programs; Windows MSIX files are unsigned Store uploads,
+contain only six packages/programs; the Windows MSIXBundle is an unsigned Store upload,
 not direct-install downloads. No certificates or installation scripts are published.
 GitHub also provides automatic source archives. Android CI builds and signs the APK
 and checks the package; it does not run Android emulator or UI tests.
@@ -71,11 +70,11 @@ your uplink, typically starting at 70–85% of measured upload capacity.
 
 ## Installation and upgrades
 
-**Windows:** install Hermod from Microsoft Store after the listing is approved and
-published (publisher **FeelLiao**, Store ID **9PMPWN3HMR3M**). The x64 and ARM64 MSIX
-files on GitHub are for the maintainer to upload together to Partner Center's
-**Packages** page. Microsoft signs the certified packages for installation.
-The unsigned GitHub files cannot be installed by double-clicking; no test certificate
+**Windows:** install **HermodTransfer** from Microsoft Store after the listing is approved and
+published (publisher **FeelLiao**, Store ID **9PMPWN3HMR3M**). The single MSIXBundle
+on GitHub contains x64 and ARM64 packages. The maintainer uploads it to Partner Center's
+**Packages** page; Microsoft signs the certified packages and delivers the matching architecture.
+The unsigned GitHub bundle cannot be installed by double-clicking; no test certificate
 or installation script is provided. Before migrating from `Hermod.Transfer.Test`,
 export important inbox files: the Store package uses a different identity.
 See [Store submission details](APP_BUILD.md#microsoft-store-packages).
@@ -92,7 +91,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./hermod-linux-x64.AppImage
 **Android:** allow APK installation from your download application, then open the APK.
 Only ARM64 is published. Minimum SDK is 34; compile/target SDK is 37. Keep the same
 signing keys when upgrading. For old releases signed with a temporary key, **export
-all inbox files before uninstalling** and installing v0.4.3. The same precaution
+all inbox files before uninstalling** and installing v0.4.4. The same precaution
 applies to Windows packages with a different prior signing identity. Uninstalling can
 remove private application data.
 
@@ -169,7 +168,7 @@ are migrated on first launch when possible; private verified inbox data is retai
   upload can queue browsing requests; see [performance and latency](NETWORK_PERFORMANCE.md).
 - **Export failed:** keep the verified inbox copy, choose a writable folder again,
   then retry Save a copy. Regrant Android folder access if necessary.
-- **Windows MSIX will not install:** GitHub MSIX files are unsigned Store submission
+- **Windows MSIXBundle will not install:** the GitHub bundle is an unsigned Store submission
   packages. Install the Store-signed version after it has been approved and published.
 
 Actions are split: `CI` checks branch pushes and pull requests. `Build and release`

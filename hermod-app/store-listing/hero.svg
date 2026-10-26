@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#eef8f2"/>
+      <stop offset="1" stop-color="#c5e8de"/>
+    </linearGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#127e72"/>
+      <stop offset="1" stop-color="#00483f"/>
+    </linearGradient>
+    <linearGradient id="route" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#67b8a5"/>
+      <stop offset=".5" stop-color="#005f56"/>
+      <stop offset="1" stop-color="#67b8a5"/>
+    </linearGradient>
+    <filter id="shadow" x="-.5" y="-.5" width="2" height="2">
+      <feDropShadow dx="0" dy="26" stdDeviation="28" flood-color="#134c42" flood-opacity=".18"/>
+    </filter>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#background)"/>
+  <circle cx="960" cy="420" r="590" fill="none" stroke="#fff" stroke-opacity=".25" stroke-width="2"/>
+  <circle cx="960" cy="420" r="440" fill="none" stroke="#fff" stroke-opacity=".4" stroke-width="2"/>
+  <path d="M0 820C370 600 520 1100 980 930S1500 650 1920 920V1080H0Z" fill="#f4fbf6" fill-opacity=".38"/>
+  <g fill="none" stroke-linecap="round">
+    <path d="M600 390C780 210 1140 210 1320 390" stroke="#fff" stroke-opacity=".55" stroke-width="46"/>
+    <path d="M600 390C780 210 1140 210 1320 390" stroke="url(#route)" stroke-width="8"/>
+    <path d="M600 540C780 720 1140 720 1320 540" stroke="#fff" stroke-opacity=".55" stroke-width="46"/>
+    <path d="M600 540C780 720 1140 720 1320 540" stroke="url(#route)" stroke-width="8"/>
+  </g>
+  <path d="m1035 258 34 28-38 21" fill="none" stroke="#005f56" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m880 638-34 28 38 21" fill="none" stroke="#005f56" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+  <g filter="url(#shadow)">
+    <rect x="385" y="308" width="326" height="326" rx="82" fill="url(#tile)" transform="rotate(-8 548 471)"/>
+    <rect x="1209" y="308" width="326" height="326" rx="82" fill="url(#tile)" transform="rotate(8 1372 471)"/>
+  </g>
+  <g fill="#b4f4df" stroke-linejoin="round">
+    <path d="M475 385h96l62 63v126H475z"/>
+    <path d="M1299 385h96l62 63v126h-158z"/>
+  </g>
+  <g fill="#fff">
+    <path d="M571 385v63h62z"/>
+    <path d="M1395 385v63h62z"/>
+  </g>
+  <g stroke="#176e60" stroke-width="10" stroke-linecap="round">
+    <path d="M508 489h83M508 522h63M1332 489h83M1332 522h63"/>
+  </g>
+  <g filter="url(#shadow)">
+    <circle cx="960" cy="466" r="106" fill="#f8fffb"/>
+    <path d="M960 396l52 22v46c0 37-23 61-52 75-29-14-52-38-52-75v-46z" fill="#005f56"/>
+    <path d="m934 463 18 18 35-38" fill="none" stroke="#b4f4df" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g fill="#fff" stroke="#70b8a7" stroke-width="2">
+    <circle cx="779" cy="292" r="15"/>
+    <circle cx="1141" cy="640" r="15"/>
+    <circle cx="325" cy="680" r="10"/>
+    <circle cx="1595" cy="260" r="10"/>
+  </g>
+</svg>

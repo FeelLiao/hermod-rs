@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Bilingual Microsoft Store listing copy, six desktop screenshots per language,
+  app icons, promotional art and a field-by-field upload guide. A Linux capture
+  script regenerates and validates the assets using the shared UI and demo data.
+
 ## [0.4.3] - 2026-10-26
 
 ### Added

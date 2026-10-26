@@ -19,6 +19,7 @@ or runtime tests run. A successful Linux build does not verify other platforms.
 - `hermod-app/plugins/documents`: Android SAF, permissions, system color and foreground notification adapters. No native UI screens.
 - `hermod-app/android`: pinned Android Gradle template; generated Tauri shell stays ignored under `src-tauri/gen/android`.
 - `hermod-app/packaging`: MSIX manifest and English/Chinese Windows string resources; no `windows` subdirectory or public installer script.
+- `hermod-app/store-listing`: bilingual Store copy, upload guide and promotional SVG; generated assets stay under ignored `store-output/`.
 - `hermod-app/scripts`: GUI packaging, signing initialization and platform smoke checks.
 - `scripts`: repository-wide version and Release allowlist checks. CI helpers are not Release attachments.
 
@@ -73,6 +74,15 @@ The musl binary must have no `INTERP` program header. On ARM64 Actions runners t
 same procedure uses `aarch64-unknown-linux-musl`, native `musl-gcc`, and an ARM64 AppImage.
 
 ## Microsoft Store packages
+
+For listing text, screenshots and icons, see the
+[Store upload guide](hermod-app/store-listing/UPLOAD.zh-CN.md).
+`npm run store:prepare --prefix hermod-app` renders the shared desktop UI with isolated
+demonstration data and prepares English/Chinese copy, six screenshots per language,
+the existing app icon and text-free promotional art. Run this on Linux with Playwright
+Chromium, Python 3 and Chinese fonts installed. The script validates image sizes and
+text limits and creates a ZIP under `store-output/` for manual listing uploads.
+This kit is not a program package or a GitHub Release attachment.
 
 Windows x64 and ARM64 release files are **unsigned MSIX packages for Partner Center**.
 Download `hermod-windows-x64.msix` and `hermod-windows-arm64.msix` from the same Release,

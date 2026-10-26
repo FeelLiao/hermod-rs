@@ -20,14 +20,15 @@ Choose your device's CPU architecture, not the architecture of the sender.
 
 | Device | Files to download |
 | --- | --- |
-| Windows 10 2004+ / Windows 11, x64 | `hermod-windows-x64.msix`, `Hermod-Test.cer`, `Install-Hermod.ps1` |
-| Windows on ARM64 | `hermod-windows-arm64.msix`, the same certificate and PowerShell script |
+| Windows 10 2004+ / Windows 11, x64 | `hermod-windows-x64.msix` (Store submission only) |
+| Windows on ARM64 | `hermod-windows-arm64.msix` (Store submission only) |
 | Linux desktop x64 / ARM64 | `hermod-linux-x64.AppImage` / `hermod-linux-arm64.AppImage` |
 | Linux terminal x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
 | Android 14+ ARM64 | `hermod-android-arm64.apk` |
 
 There are no macOS, Windows CLI or Android CLI release builds. Release attachments
-contain only the seven programs, public Windows certificate and `.ps1` installer.
+contain only seven packages/programs; Windows MSIX files are unsigned Store uploads,
+not direct-install downloads. No certificates or installation scripts are published.
 GitHub also provides automatic source archives. Android CI builds and signs the APK
 and checks the package; it does not run Android emulator or UI tests.
 
@@ -57,28 +58,27 @@ Android uses system document permissions, never unrestricted storage access. Rus
 On Android 17, grant Nearby devices/local network access for peer transfers. Notification
 permission enables the visible progress notification; denying it does not grant storage access.
 
+**Language:** the desktop and Android GUI support English and Simplified Chinese.
+The default follows your system language. Choose **Settings → Language → English /
+简体中文 / System**, then **Save settings** to remember it. Language changes apply
+immediately; original technical logs and unknown diagnostic details remain available.
+
 Settings cover send/receive protocol, MTU, congestion control, bandwidth, code length,
-server, fingerprint trust, receive folder, log level, reduced notifications and theme.
+server, fingerprint trust, receive folder, log level, reduced notifications, theme and language.
 They persist locally. Each new transfer takes a settings snapshot; saving changes does
 not reconfigure a running connection. The default GUI cap is **8 Mbps**: adjust it to
 your uplink, typically starting at 70–85% of measured upload capacity.
 
 ## Installation and upgrades
 
-**Windows:** put the three matching downloads in one directory. From a normal-user
-PowerShell window in that directory, run:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-Hermod.ps1
-```
-
-This execution policy applies to that process only. The installer checks the certificate,
-signature identity and architecture, directs you to Microsoft's WebView2 runtime if
-needed, requests administrator permission **only for public certificate import into
-LocalMachine\TrustedPeople**, then installs MSIX as the original user. Windows verifies
-the complete signed package during deployment. No root certificate or global policy is
-modified. These are fixed test-signed sideload packages, not Store submission packages.
-Do not upload them to Partner Center under an unrelated publisher identity.
+**Windows:** install Hermod from Microsoft Store after the listing is approved and
+published (publisher **FeelLiao**, Store ID **9PMPWN3HMR3M**). The x64 and ARM64 MSIX
+files on GitHub are for the maintainer to upload together to Partner Center's
+**Packages** page. Microsoft signs the certified packages for installation.
+The unsigned GitHub files cannot be installed by double-clicking; no test certificate
+or installation script is provided. Before migrating from `Hermod.Transfer.Test`,
+export important inbox files: the Store package uses a different identity.
+See [Store submission details](APP_BUILD.md#microsoft-store-packages).
 
 **Linux:** Ubuntu 22.04 or newer compatible desktops are the build baseline:
 
@@ -92,7 +92,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./hermod-linux-x64.AppImage
 **Android:** allow APK installation from your download application, then open the APK.
 Only ARM64 is published. Minimum SDK is 34; compile/target SDK is 37. Keep the same
 signing keys when upgrading. For old releases signed with a temporary key, **export
-all inbox files before uninstalling** and installing v0.4.2. The same precaution
+all inbox files before uninstalling** and installing v0.4.3. The same precaution
 applies to Windows packages with a different prior signing identity. Uninstalling can
 remove private application data.
 
@@ -169,8 +169,8 @@ are migrated on first launch when possible; private verified inbox data is retai
   upload can queue browsing requests; see [performance and latency](NETWORK_PERFORMANCE.md).
 - **Export failed:** keep the verified inbox copy, choose a writable folder again,
   then retry Save a copy. Regrant Android folder access if necessary.
-- **Windows signer mismatch:** download the MSIX, certificate and installer from the
-  same Release. Never fix this by importing an unrelated certificate into Root.
+- **Windows MSIX will not install:** GitHub MSIX files are unsigned Store submission
+  packages. Install the Store-signed version after it has been approved and published.
 
 Actions are split: `CI` checks branch pushes and pull requests. `Build and release`
 reuses those checks before packaging; only a `v*` tag push publishes a Release.

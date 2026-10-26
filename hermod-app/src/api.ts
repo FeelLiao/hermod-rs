@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { Language, Locale } from "./i18n";
 export interface Settings {
   connection: {
     transport: string;
@@ -12,6 +13,7 @@ export interface Settings {
   verbose: string;
   quiet: boolean;
   theme: string;
+  language: Language;
   destination: string | null;
 }
 export interface Selection {
@@ -50,6 +52,7 @@ export interface Bootstrap {
   settings_saved: boolean;
 }
 export const api = {
+  locale: (locale: Locale) => invoke<void>("set_locale", { locale }),
   bootstrap: () => invoke<Bootstrap>("bootstrap"),
   save: (settings: Settings) => invoke<void>("save_settings", { settings }),
   choose: () => invoke<Selection | null>("choose_source"),

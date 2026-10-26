@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { msixVersion } from '../hermod-app/scripts/msix-version.mjs';
 const workspace = readFileSync('Cargo.toml', 'utf8').match(/^version = "([^"]+)"/m)?.[1];
 const frontend = JSON.parse(readFileSync('hermod-app/package.json')).version;
 const native = JSON.parse(readFileSync('hermod-app/src-tauri/tauri.conf.json')).version;
@@ -7,6 +8,7 @@ if (!/^\d+\.\d+\.\d+$/.test(workspace)) throw new Error('Installer versions curr
 const tag = process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : undefined;
 if (tag && tag !== `v${workspace}`) throw new Error(`Tag ${tag} does not match version ${workspace}.`);
 console.log(`Release version: ${workspace}`);
+console.log(`Microsoft Store package version: ${msixVersion(workspace)}`);
 
 const android = JSON.parse(readFileSync('hermod-app/src-tauri/tauri.conf.json')).bundle.android;
 const [major, minor, patch] = workspace.split('.').map(Number);

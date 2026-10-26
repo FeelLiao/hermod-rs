@@ -1,10 +1,11 @@
-# Building and releasing Hermod 0.4.2
+# Building and releasing Hermod 0.4.3
 
 [User guide](README.md) · [中文使用说明](README.zh-CN.md)
 
 Branch and PR checks run in `.github/workflows/ci.yml`. Release builds run in
 `.github/workflows/build-release.yml` and reuse those checks. Local validation is
-Linux-only. Windows installation/runtime checks run in Actions. Android builds and
+Linux-only. Windows checks use a temporary signed copy in Actions; released MSIX files
+remain unsigned for Microsoft Store submission. Android builds and
 signs the ARM64 APK in Actions and checks the resulting package; no Android emulator
 or runtime tests run. A successful Linux build does not verify other platforms.
 
@@ -17,7 +18,7 @@ or runtime tests run. A successful Linux build does not verify other platforms.
 - `hermod-app/src-tauri/src`: desktop and Android Tauri commands; background job monitoring.
 - `hermod-app/plugins/documents`: Android SAF, permissions, system color and foreground notification adapters. No native UI screens.
 - `hermod-app/android`: pinned Android Gradle template; generated Tauri shell stays ignored under `src-tauri/gen/android`.
-- `hermod-app/packaging`: flat MSIX manifest and public `.ps1` installer template; no `windows` subdirectory.
+- `hermod-app/packaging`: MSIX manifest and English/Chinese Windows string resources; no `windows` subdirectory or public installer script.
 - `hermod-app/scripts`: GUI packaging, signing initialization and platform smoke checks.
 - `scripts`: repository-wide version and Release allowlist checks. CI helpers are not Release attachments.
 
@@ -63,7 +64,7 @@ npm test --prefix hermod-app
 cd hermod-app
 APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri -- build --ci --bundles appimage -- --locked
 cd ..
-hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.2_amd64.AppImage
+hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.3_amd64.AppImage
 CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release --target x86_64-unknown-linux-musl -p hermod-cli
 readelf -l target/x86_64-unknown-linux-musl/release/hermod
 ```
@@ -71,79 +72,109 @@ readelf -l target/x86_64-unknown-linux-musl/release/hermod
 The musl binary must have no `INTERP` program header. On ARM64 Actions runners the
 same procedure uses `aarch64-unknown-linux-musl`, native `musl-gcc`, and an ARM64 AppImage.
 
-## Fixed test signing: one-time setup
+## Microsoft Store packages
 
-Create keys once on a trusted machine with OpenSSL and JDK `keytool`:
+Windows x64 and ARM64 release files are **unsigned MSIX packages for Partner Center**.
+Download `hermod-windows-x64.msix` and `hermod-windows-arm64.msix` from the same Release,
+then upload both to the app submission's **Packages** page. No ZIP conversion, certificate,
+PowerShell installer or additional signing is needed. Microsoft signs the packages after
+certification; these GitHub files are not direct-install downloads. See Microsoft's
+[package upload guide](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/upload-app-packages)
+and [Store signing guidance](https://learn.microsoft.com/en-us/windows/msix/package/sign-msix-package-guide).
+
+The checked-in manifest uses the exact Partner Center values:
+
+| Property | Value |
+| --- | --- |
+| Identity name | `FeelLiao.HermodTransfer` |
+| Identity publisher | `CN=37A01BFF-1DAB-45E5-9B67-AA76C0655A7C` |
+| Publisher display name | `FeelLiao` |
+| Package family name (derived, checked in CI) | `FeelLiao.HermodTransfer_8qnpvd7fj1r9a` |
+| Store ID (listing metadata, not a manifest identity field) | `9PMPWN3HMR3M` |
+| Languages | `en-US`, `zh-CN` |
+
+The supplied Package SID is account metadata, not an AppxManifest identity attribute.
+Display name remains **Hermod**. `Strings/en-US/Resources.resw` and
+`Strings/zh-CN/Resources.resw` provide localized descriptions referenced by `ms-resource:`;
+MakePRI compiles both into one `resources.pri`. The GUI has matching English/Chinese support.
+In Partner Center, add and complete both language listings; declaring languages in the
+package does not create translated screenshots, descriptions or other Store listing text.
+The app's `runFullTrust` capability is needed to run the Rust/Tauri desktop process;
+explain its userspace networking and user-selected file access during certification.
+Submission remains subject to Microsoft's review and account requirements.
+
+The Store [version rules](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements#package-version-numbering)
+require a nonzero first component and a final `0`. `msix-version.mjs` maps application
+`major.minor.patch` to **`(major + 1).minor.patch.0`**: release **0.4.3 → 1.4.3.0**,
+and future app 1.0.0 → MSIX 2.0.0.0. All components are range-checked. Keep this mapping
+stable so upgrades remain ordered; the app's About/version field still shows 0.4.3.
+
+Windows CI requires no `WINDOWS_PFX_BASE64` or `WINDOWS_PFX_PASSWORD` secrets. Any old
+Windows secrets may be removed from GitHub, but local signing backups are not touched.
+MakeAppx validates the package, then `verify-msix.py` checks identity, version, executable
+architecture, both languages, resource files and the absence of a package signature.
+For installation/startup checks only, CI copies the MSIX into runner temporary storage,
+creates a one-day non-exportable certificate with the same publisher, signs the copy,
+and installs it. It verifies the PFN and window creation, then removes the installed
+copy, certificate and key. A hash comparison and another package check ensure the
+Release MSIX is unchanged. No temporary signing material enters artifacts or Release.
+The runner installs Microsoft's WebView2 Runtime if needed.
+
+After publication, users install the Store-signed app (Store ID above); links become
+usable only after Microsoft makes the listing available. Old `Hermod.Transfer.Test`
+installations have a different identity: export important inbox files before migration
+or uninstalling. No automatic migration between these Windows package identities is claimed.
+
+## Fixed Android signing: one-time setup
+
+Keep the existing Android key when upgrading. New maintainers can create a key once,
+using OpenSSL and JDK `keytool`:
 
 ```bash
 ./hermod-app/scripts/init-signing-keys.sh
 ```
 
-The script refuses to overwrite `signing-private/`. Back up that ignored directory
-securely. It contains the PFX, Android JKS, public certificate and passwords. Do not
-commit it, upload it as an artifact, or rerun it for every version. A new signing key
-can prevent upgrades and require users to export their inbox and reinstall.
+The script creates **only Android signing material** and refuses to overwrite an existing
+`signing-private/` directory. Back it up securely; never commit or upload its contents.
+Existing directories containing older Windows signing files are left untouched and must
+not be regenerated simply because Windows now uses Store signing.
 
-This creates a Windows code-signing certificate and its private key in a PFX, plus
-a separate Android signing key in a JKS. These are not SSH keys. Windows x64 and
-ARM64 reuse the same PFX. Do not regenerate the keys for each workflow run.
+In **Settings → Secrets and variables → Actions → Secrets**, create repository secrets
+from the file contents, not filenames or Actions variables:
 
-In the GitHub repository, open **Settings → Secrets and variables → Actions →
-Secrets → New repository secret**. Use repository secrets, not Actions variables.
-Enter the file **contents**, not the filename or path:
-
-| Secret name | Value from the one-time initializer |
+| Secret name | Value |
 | --- | --- |
-| `WINDOWS_PFX_BASE64` | Contents of `signing-private/windows-pfx-base64` |
-| `WINDOWS_PFX_PASSWORD` | Contents of `signing-private/windows-password` |
 | `ANDROID_KEYSTORE_BASE64` | Contents of `signing-private/android-keystore-base64` |
 | `ANDROID_KEYSTORE_PASSWORD` | Contents of `signing-private/android-password` |
 | `ANDROID_KEY_ALIAS` | Literal `hermod` |
 | `ANDROID_KEY_PASSWORD` | Contents of `signing-private/android-password` |
 
-The `.cer` contains only the Windows public certificate; it cannot replace the
-PFX signing secret. The initializer also works in WSL with OpenSSL and JDK `keytool`.
-If either command is missing, install `openssl` and `openjdk-17-jdk-headless` first.
-The directory stays local and ignored by Git; only the public certificate is released.
-
-Alternatively, with GitHub CLI installed and authenticated, set the same repository
-secrets from the repository root without printing their values:
+With GitHub CLI authenticated, the maintainer can set them without printing values:
 
 ```bash
-gh secret set WINDOWS_PFX_BASE64 < signing-private/windows-pfx-base64
-gh secret set WINDOWS_PFX_PASSWORD < signing-private/windows-password
 gh secret set ANDROID_KEYSTORE_BASE64 < signing-private/android-keystore-base64
 gh secret set ANDROID_KEYSTORE_PASSWORD < signing-private/android-password
 printf hermod | gh secret set ANDROID_KEY_ALIAS
 gh secret set ANDROID_KEY_PASSWORD < signing-private/android-password
 ```
 
-These commands are for the maintainer to run. Missing signing secrets make the package
-jobs fail before toolchain setup and compilation. Pushes and PRs run Linux quality
-checks; Android release builds run for tags and manual workflow dispatch. See
-[GitHub's repository secret instructions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
+Android packaging checks missing secrets before toolchain setup. If only secrets were
+missing, configure them and re-run the failed jobs. Source/workflow changes require a
+new commit; retrying an old tag still uses its old source. Use **Actions → Build and
+release → Run workflow → master** to check new packaging, then publish a new version.
+Do not move an already pushed tag. Android retains `org.hermod.transfer` and uses
+`versionCode=40300` for 0.4.3; keep its signing key and alias for future upgrades.
 
-If only secrets were missing, configure them and re-run the failed jobs. If source or
-workflow changes are also needed, push the fix and use **Actions → Build and release →
-Run workflow → master** to test the new commit. Re-running the old tag's jobs still uses
-that tag's old source and workflow. Publish a new version after the fixed pipeline
-passes; do not move an already pushed release tag.
+## GUI localization
 
-Windows uses `Name=Hermod.Transfer.Test`, `Publisher=CN=HermodTest` and version
-`major.minor.patch.0` for both x64 and ARM64. The same PFX signs both packages. Only its
-public CER is exported. The installer embeds its expected thumbprint, checks the CMS
-signature and package identity, checks WebView2, imports the public certificate into
-`LocalMachine\TrustedPeople` through a separate elevated helper, then deploys the
-MSIX in the original user context. Deployment verifies the complete signed package.
-CI performs the same installation and launches the installed application. The generic
-Authenticode root-chain check is not a reason to place a test leaf certificate in Root.
-See Microsoft's [certificate guidance](https://learn.microsoft.com/windows/msix/package/create-certificate-package-signing)
-and [WebView2 distribution guidance](https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution).
-
-Android retains `org.hermod.transfer`; `versionCode=40200` for 0.4.2. Increase the code
-on every release and keep the signing key and alias. Neither the public certificate
-nor an MSIX signed as HermodTest grants a Microsoft Store publisher identity. Store
-submission is a separate process using the identity assigned by Partner Center.
+`hermod-app/src/i18n.ts` selects `en-US` or `zh-CN` from the language setting or browser
+system preferences. English strings are catalog keys; `src/locales/zh-CN.json` contains
+translations and is also embedded by Rust for native file dialogs and Android notification
+text. The shared `Settings.language` accepts only `system`, `en-US`, or `zh-CN`; older
+settings files default to `system`. The UI updates `html.lang`, previews changes immediately,
+and saves the preference with the other settings. Raw log content and unknown diagnostics
+remain intact. Desktop browser checks exercise both languages, persistence, errors and
+transfer states; no Android test project is introduced.
 
 ## Android toolchain and platform boundary
 
@@ -227,15 +258,15 @@ Tags and manual runs build the following packages after the checks pass:
 
 | Runner | Output |
 | --- | --- |
-| `windows-2025` | x64 GUI MSIX |
-| `windows-11-arm` | ARM64 GUI MSIX |
+| `windows-2025` | x64 GUI MSIX (Store upload) |
+| `windows-11-arm` | ARM64 GUI MSIX (Store upload) |
 | `ubuntu-22.04` | x64 AppImage and musl CLI |
 | `ubuntu-22.04-arm` | ARM64 AppImage and musl CLI |
 | `ubuntu-22.04` + Android SDK | ARM64 Tauri APK |
 
 Only version-tag pushes publish. Every required job must succeed first. `check-release-files.py`
-requires an exact nine-file allowlist: seven programs, `Hermod-Test.cer`, and
-`Install-Hermod.ps1`. No checksums, ZIPs, debs, debug symbols, build logs, private keys
+requires an exact seven-file allowlist: two Store MSIX packages, four Linux programs
+and one Android APK. No certificates, installation scripts, checksums, ZIPs, debs, debug symbols, build logs, private keys
 or canceled-platform programs are uploaded to Release. Internal Actions artifact
 containers are a GitHub transport mechanism, not ZIP release assets.
 
@@ -244,7 +275,7 @@ After reviewing the commit and configuring signing secrets, the maintainer pushe
 
 ```bash
 git push origin master
-git push origin v0.4.2
+git push origin v0.4.3
 ```
 
 Do not move an already published tag to hide a failed build. Fix it in a new commit

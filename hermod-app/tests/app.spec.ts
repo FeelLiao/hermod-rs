@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+import { msixVersion } from "../scripts/msix-version.mjs";
+import { resolveLocale, runtimeText } from "../src/i18n";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     const defaults = {
@@ -14,6 +16,7 @@ test.beforeEach(async ({ page }) => {
       verbose: "none",
       quiet: false,
       theme: "system",
+      language: "system",
       destination: null,
     };
     let settings = JSON.parse(
@@ -34,9 +37,11 @@ test.beforeEach(async ({ page }) => {
       invoke: async (command: string, args: any) => {
         calls.push({ command, args });
         switch (command) {
+          case "set_locale":
+            return;
           case "bootstrap":
             return {
-              version: "0.4.2",
+              version: "0.4.3",
               ipv6: ["2001:db8::1"],
               platform: "linux",
               settings: structuredClone(settings),
@@ -148,7 +153,9 @@ test("shared network settings persist and text input replaces stdin", async ({
   ).toBeVisible();
   await page.reload();
   await page.getByRole("tab", { name: "Settings", exact: true }).click();
-  await expect(page.getByLabel("Send protocol", { exact: true })).toHaveValue("quic");
+  await expect(page.getByLabel("Send protocol", { exact: true })).toHaveValue(
+    "quic",
+  );
   await expect(page.getByLabel("Payload limit (Mbps)")).toHaveValue("6.5");
   await page.getByRole("tab", { name: "Transfer", exact: true }).click();
   await page.getByRole("tab", { name: "Text", exact: true }).click();
@@ -214,4 +221,97 @@ test("server trust requires explicit fingerprint confirmation", async ({
           .args.fingerprint,
     ),
   ).toBe("b".repeat(64));
+});
+
+test("language choice updates the UI and native dialogs and persists", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  await page.getByLabel("Language", { exact: true }).selectOption("zh-CN");
+  await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+  await expect(page.getByLabel("发送协议", { exact: true })).toHaveValue(
+    "wireguard",
+  );
+  await page.getByRole("button", { name: "保存设置" }).click();
+  await expect(
+    page.getByText("设置已保存，传输设置将在下次传输时生效。"),
+  ).toBeVisible();
+  await page.reload();
+  await page.getByRole("tab", { name: "设置", exact: true }).click();
+  await expect(page.getByLabel("语言", { exact: true })).toHaveValue("zh-CN");
+  expect(
+    await page.evaluate(
+      () =>
+        (window as any).calls
+          .filter((c: any) => c.command === "set_locale")
+          .at(-1).args.locale,
+    ),
+  ).toBe("zh-CN");
+  await page.getByRole("tab", { name: "收件箱", exact: true }).click();
+  await page.getByRole("button", { name: "另存副本" }).click();
+  await expect(page.getByText("已保存经过验证的副本。")).toBeVisible();
+  await page.getByRole("button", { name: "删除 地球 3.0.zip" }).click();
+  await expect(page.getByRole("dialog")).toContainText("删除此收件箱副本？");
+  await page.getByRole("button", { name: "保留文件" }).click();
+  await page.getByRole("tab", { name: "设置", exact: true }).click();
+  await page.getByLabel("语言", { exact: true }).selectOption("en-US");
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await page.reload();
+  await expect(
+    page.getByRole("tab", { name: "Transfer", exact: true }),
+  ).toBeVisible();
+});
+
+test.describe("Chinese system language", () => {
+  test.use({ locale: "zh-CN" });
+  test("new installations follow system language for validation and progress", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+    await page.getByRole("tab", { name: "接收", exact: true }).click();
+    await page.getByLabel("传输码", { exact: true }).fill("bad");
+    await page.getByRole("button", { name: "连接并接收" }).click();
+    await expect(page.getByText("请输入有效的传输码。")).toBeVisible();
+    await page.getByRole("tab", { name: "文本", exact: true }).click();
+    await page.getByLabel("文本内容", { exact: true }).fill("你好，Hermod！");
+    await page.getByRole("button", { name: "生成传输码" }).click();
+    await expect(
+      page.getByText("等待接收方连接", { exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "复制传输码" }).click();
+    await expect(page.getByText("传输码已复制。")).toBeVisible();
+    await page.getByRole("button", { name: "取消传输" }).click();
+    await expect(page.getByText("传输已取消", { exact: true })).toBeVisible();
+    await page.screenshot({
+      path: "test-results/desktop-zh-CN.png",
+      fullPage: true,
+    });
+  });
+});
+
+test("locale fallback and Store version mapping handle boundaries", () => {
+  expect(resolveLocale("system", ["fr-FR", "zh-Hans-CN"])).toBe("zh-CN");
+  expect(resolveLocale("system", ["en-GB", "zh-CN"])).toBe("en-US");
+  expect(resolveLocale("en-US", ["zh-CN"])).toBe("en-US");
+  expect(resolveLocale("system", ["fr-FR"])).toBe("en-US");
+  expect(
+    runtimeText("Error: Enter a valid transfer code.", "zh-CN", true),
+  ).toBe("请输入有效的传输码。");
+  expect(runtimeText("provider-specific diagnostic", "zh-CN", true)).toContain(
+    "provider-specific diagnostic",
+  );
+  expect(msixVersion("0.4.3")).toBe("1.4.3.0");
+  expect(msixVersion("1.0.0")).toBe("2.0.0.0");
+  expect(msixVersion("65534.65535.65535")).toBe("65535.65535.65535.0");
+  for (const invalid of [
+    "65535.0.0",
+    "0.65536.0",
+    "0.4.3-beta",
+    "0.4",
+    "01.2.3",
+  ]) {
+    expect(() => msixVersion(invalid)).toThrow();
+  }
 });

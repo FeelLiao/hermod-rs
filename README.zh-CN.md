@@ -19,14 +19,14 @@ Hermod 是使用 Rust 编写的加密 P2P **IPv6** 文件传输工具。文件�
 
 | 设备 | 下载文件 |
 | --- | --- |
-| Windows 10 2004+ / Windows 11，x64 | `hermod-windows-x64.msix`、`Hermod-Test.cer`、`Install-Hermod.ps1` |
-| Windows ARM64 | `hermod-windows-arm64.msix`，以及同一份证书和 PowerShell 脚本 |
+| Windows 10 2004+ / Windows 11，x64 | `hermod-windows-x64.msix`（仅供商店提交） |
+| Windows ARM64 | `hermod-windows-arm64.msix`（仅供商店提交） |
 | Linux 桌面 x64 / ARM64 | `hermod-linux-x64.AppImage` / `hermod-linux-arm64.AppImage` |
 | Linux 命令行 x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
 | Android 14 及以上、ARM64 | `hermod-android-arm64.apk` |
 
-不再构建 macOS、Windows CLI 和 Android CLI。Release 只上传 7 个程序、Windows 公钥证书和
-唯一的 `.ps1` 安装脚本，不上传 ZIP、deb、checksum、私钥、日志或调试符号。
+不再构建 macOS、Windows CLI 和 Android CLI。Release 只上传 7 个程序或包，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
+Windows MSIX 是未签名的商店提交包，不是直接下载安装的版本；普通用户请在产品上线后通过微软商店安装。
 GitHub 自动提供的源码下载链接属于平台功能。
 
 ## 连接前先确认 IPv6
@@ -42,9 +42,9 @@ WSL NAT 通常没有可用 IPv6。支持镜像网络的 Windows 11 / WSL 可在 
 
 ## 图形界面：三步传输
 
-1. 发送端在 **File** 选择文件，或在 **Text** 输入文本，开始发送。
-2. 私下分享完整传输码；接收端在 **Receive** 输入它并连接。
-3. 等待 **SHA-256 verified**，在 **Inbox → Save a copy** 导出，也可提前选择默认导出目录。
+1. 发送端在 **文件** 选择文件，或在 **文本** 输入内容，开始发送。
+2. 私下分享完整传输码；接收端在 **接收** 输入它并连接。
+3. 等待 **SHA-256 校验通过**，在 **收件箱 → 另存副本** 导出，也可提前选择默认导出目录。
 
 收件箱只展示校验完成的文件。导出失败、目录不可写或 Android 授权过期时，已验证副本仍保留。
 文本会保存为文本文件。取消和进程结束不会保留可续传任务；本版不提供断点续传。
@@ -53,22 +53,21 @@ Android 使用系统文件选择器和目录授权，不申请全盘访问。传
 重新发起传输；通知显示进度并提供取消。Android 17 需要局域网 / 附近设备权限，拒绝时会明确提示。
 通知权限用于显示传输通知，和文件权限无关。
 
+**语言**：电脑与安卓界面均支持简体中文和英文，默认跟随系统。可在 **设置 → 语言** 选择
+**简体中文 / English / 跟随系统**，点击 **保存设置** 后下次打开仍使用此选择。界面语言立即切换，
+技术日志和未识别的底层错误详情保留原文以便排查。
+
 设置包括：发送与接收协议、统一 MTU、拥塞控制、限速、传输码长度、服务器、指纹信任、接收目录、
-日志级别、减少提示和主题。设置会持久化；每次开始传输时取得快照，修改只影响后续传输。
+日志级别、减少提示、主题和语言。设置会持久化；每次开始传输时取得快照，修改只影响后续传输。
 GUI 默认限制为 **8 Mbps**，建议按实测上行带宽的 70–85% 起步调整。
 
 ## 安装和升级
 
-**Windows**：把对应架构 MSIX、证书、安装脚本放在同一个目录，在普通用户 PowerShell 中运行：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-Hermod.ps1
-```
-
-这只影响本次 PowerShell 进程的执行策略。脚本核对架构、证书和签名身份；缺少 WebView2 时引导
-安装微软官方运行时。**只有将公钥导入 LocalMachine\TrustedPeople 时申请管理员权限**，随后在
-原用户上下文安装 MSIX。Windows 部署服务还会验证整个包的完整性。不导入 Root，不修改全局策略。
-这些是使用固定测试证书签名的侧载安装包，不是微软商店提交包，不能直接按其他发布者身份上传商店。
+**Windows**：商店审核上线后，从 Microsoft Store 安装 Hermod，发布者为 **FeelLiao**，
+Store ID 为 **9PMPWN3HMR3M**。GitHub 的 x64 与 ARM64 MSIX 由维护者一起上传到 Partner Center
+的 **程序包 / Packages** 页面，审核通过后由微软签名。GitHub 上的未签名包无法直接双击安装，
+不再附带测试证书或安装脚本。旧 `Hermod.Transfer.Test` 版本迁移前，请先导出收件箱文件；
+商店版使用不同包身份。详见[商店提交说明](APP_BUILD.md#microsoft-store-packages)。
 
 **Linux**：以 Ubuntu 22.04 及兼容更新桌面为基线：
 
@@ -146,7 +145,7 @@ QUIC 支持 BBR/CUBIC/NewReno。不兼容组合会报错，不会静默忽略。
 - **传输码连不上**：检查双方 IPv6 路由、信令服务器、UDP 防火墙、完整传输码及强制协议是否一致。
 - **发送时网页很卡**：降低 GUI 限速或 `--limit-mbps`；上行跑满会挤占其他请求，见[性能分析](NETWORK_PERFORMANCE.md)。
 - **导出失败**：收件箱副本仍在，重新选择可写目录后导出；Android 重新授权目录。
-- **Windows 签名不匹配**：从同一个 Release 重新下载三份文件，不要把陌生证书导入 Root。
+- **Windows MSIX 无法安装**：GitHub 文件仅供商店提交，尚未签名；请在审核上线后安装商店签名的版本。
 
 Android 在 Actions 中只编译、签名并检查 ARM64 APK，不运行安卓模拟器或界面测试。
 

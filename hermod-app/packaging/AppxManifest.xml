@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" IgnorableNamespaces="uap rescap">
-  <Identity Name="__IDENTITY_NAME__" Publisher="__PUBLISHER__" Version="__VERSION__" ProcessorArchitecture="x64" />
-  <Properties><DisplayName>__DISPLAY_NAME__</DisplayName><PublisherDisplayName>__PUBLISHER_DISPLAY_NAME__</PublisherDisplayName><Logo>Assets\StoreLogo.png</Logo><Description>Encrypted peer-to-peer IPv6 file transfer</Description></Properties>
+  <Identity Name="FeelLiao.HermodTransfer" Publisher="CN=37A01BFF-1DAB-45E5-9B67-AA76C0655A7C" Version="__VERSION__" ProcessorArchitecture="x64" />
+  <Properties><DisplayName>Hermod</DisplayName><PublisherDisplayName>FeelLiao</PublisherDisplayName><Logo>Assets\StoreLogo.png</Logo><Description>ms-resource:AppDescription</Description></Properties>
   <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
-  <Resources><Resource Language="en-us" /></Resources>
+  <Resources><Resource Language="en-US" /><Resource Language="zh-CN" /></Resources>
   <Applications><Application Id="Hermod" Executable="hermod-app.exe" EntryPoint="Windows.FullTrustApplication">
-    <uap:VisualElements DisplayName="__DISPLAY_NAME__" Description="Encrypted peer-to-peer IPv6 file transfer" BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
+    <uap:VisualElements DisplayName="Hermod" Description="ms-resource:AppDescription" BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png" />
   </Application></Applications>
   <Capabilities><Capability Name="internetClient" /><Capability Name="internetClientServer" /><Capability Name="privateNetworkClientServer" /><rescap:Capability Name="runFullTrust" /></Capabilities>
 </Package>

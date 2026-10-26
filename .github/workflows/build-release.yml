@@ -90,14 +90,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Check fixed Windows signing secrets before building
-        shell: pwsh
-        env:
-          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
-          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
-        run: |
-          $missing = @('WINDOWS_PFX_BASE64', 'WINDOWS_PFX_PASSWORD') | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
-          if ($missing) { throw "Missing repository Actions secrets: $($missing -join ', '). Run hermod-app/scripts/init-signing-keys.sh once and configure Settings > Secrets and variables > Actions; see APP_BUILD.md." }
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -116,18 +108,9 @@ jobs:
         env:
           RUSTFLAGS: '-C target-feature=+crt-static'
         run: npm run tauri -- build --ci --target ${{ matrix.target }} --no-bundle -- --locked
-      - name: Fixed test signing and package verification
+      - name: Package unsigned Microsoft Store MSIX
         shell: pwsh
-        env:
-          WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
-          WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
-        run: |
-          if (-not $env:WINDOWS_PFX_BASE64 -or -not $env:WINDOWS_PFX_PASSWORD) { throw 'Missing fixed Windows signing secrets; see APP_BUILD.md' }
-          $env:WINDOWS_PFX_PATH = Join-Path $env:RUNNER_TEMP 'hermod-signing.pfx'
-          try {
-            [IO.File]::WriteAllBytes($env:WINDOWS_PFX_PATH, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
-            ./hermod-app/scripts/package-msix.ps1 -BinaryDirectory target/${{ matrix.target }}/release -Architecture ${{ matrix.arch }}
-          } finally { Remove-Item -LiteralPath $env:WINDOWS_PFX_PATH -Force -ErrorAction SilentlyContinue }
+        run: ./hermod-app/scripts/package-msix.ps1 -BinaryDirectory target/${{ matrix.target }}/release -Architecture ${{ matrix.arch }}
       - name: Ensure Microsoft WebView2 Runtime
         shell: pwsh
         run: |
@@ -140,13 +123,9 @@ jobs:
             $process = Start-Process $installer -ArgumentList '/silent','/install' -Wait -PassThru
             if ($process.ExitCode -ne 0) { throw 'WebView2 installation failed' }
           }
-      - name: Install and launch signed MSIX
+      - name: Install and launch a temporary-signed copy of the Store MSIX
         shell: powershell
         run: ./hermod-app/scripts/smoke-windows.ps1
-      - name: Common attachments are published once
-        if: matrix.arch == 'arm64'
-        shell: pwsh
-        run: Remove-Item dist/Hermod-Test.cer, dist/Install-Hermod.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: release-windows-${{ matrix.arch }}
@@ -253,6 +232,6 @@ jobs:
           generate_release_notes: true
           body: |
             Both peers need reachable IPv6. See README.md / README.zh-CN.md for setup and migration.
-            Windows: download the matching MSIX, Hermod-Test.cer and Install-Hermod.ps1 into one directory. Run the PowerShell installer as your normal user. A fixed test certificate is used; this is not a Microsoft Store package.
+            Windows: unsigned x64/ARM64 MSIX packages for Microsoft Store submission (FeelLiao.HermodTransfer, Store ID 9PMPWN3HMR3M). Upload both files to Partner Center. These are not direct-install packages; install the Store-signed app after publication. No certificate or install script is required.
             Linux: AppImage GUI or static musl CLI, x64 / ARM64.
             Android: ARM64 APK, Android 14 or newer (API 34), target API 37. Export inbox files before uninstalling an older temporary-key build.

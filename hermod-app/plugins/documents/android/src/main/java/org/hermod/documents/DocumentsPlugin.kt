@@ -20,9 +20,22 @@ class UriArgs { lateinit var uri: String }
 @InvokeArg
 class SaveArgs { lateinit var name: String; var folder: String? = null }
 @InvokeArg
-class ActiveArgs { var active: Boolean = false }
+class ActiveArgs {
+    var active: Boolean = false
+    var phase: String = "Connecting"
+    var cancel: String = "Cancel"
+    var channel: String = "File transfers"
+    var transferred: String = "0 KiB transferred"
+}
 @InvokeArg
-class ProgressArgs { var phase: String = "Connecting"; var bytes: Long = 0; var total: Long? = null }
+class ProgressArgs {
+    var phase: String = "Connecting"
+    var bytes: Long = 0
+    var total: Long? = null
+    var cancel: String = "Cancel"
+    var channel: String = "File transfers"
+    var transferred: String = "0 KiB transferred"
+}
 
 @TauriPlugin(permissions = [
     Permission(alias = "lan", strings = ["android.permission.ACCESS_LOCAL_NETWORK"]),
@@ -118,16 +131,18 @@ class DocumentsPlugin(private val activity: Activity) : Plugin(activity) {
     }
     @Command fun setActive(invoke: Invoke) = result(invoke) {
         val intent = Intent(activity, TransferService::class.java)
-        if (invoke.parseArgs(ActiveArgs::class.java).active) {
+        val args = invoke.parseArgs(ActiveArgs::class.java)
+        if (args.active) {
             check(TransferService.localNetworkAllowed(activity)) { "Local network permission denied; transfer cannot start" }
             TransferService.cancelRequested = false
+            TransferService.update(args.phase, 0, null, args.transferred, args.cancel, args.channel)
             ContextCompat.startForegroundService(activity, intent)
         } else activity.stopService(intent)
         JSObject()
     }
     @Command fun progress(invoke: Invoke) = result(invoke) {
         val args = invoke.parseArgs(ProgressArgs::class.java)
-        TransferService.update(args.phase, args.bytes, args.total)
+        TransferService.update(args.phase, args.bytes, args.total, args.transferred, args.cancel, args.channel)
         JSObject().put("cancel", TransferService.cancelRequested)
     }
 }

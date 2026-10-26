@@ -35,6 +35,7 @@ pub struct Settings {
     pub verbose: String,
     pub quiet: bool,
     pub theme: String,
+    pub language: String,
     pub destination: Option<String>,
 }
 impl Default for Settings {
@@ -50,6 +51,7 @@ impl Default for Settings {
             verbose: "none".into(),
             quiet: false,
             theme: "system".into(),
+            language: "system".into(),
             destination: None,
         }
     }
@@ -66,6 +68,9 @@ impl Settings {
         }
         if !["system", "light", "dark"].contains(&self.theme.as_str()) {
             return Err("Invalid theme".into());
+        }
+        if !["system", "en-US", "zh-CN"].contains(&self.language.as_str()) {
+            return Err("Invalid language".into());
         }
         config::normalize_server_url(&self.server).map_err(|e| e.to_string())?;
         Ok(())
@@ -476,10 +481,22 @@ mod tests {
         assert!(Engine::new(root.clone(), Config::default()).is_err());
         let mut settings = engine.settings();
         assert_eq!(settings.connection.limit_mbps, "8");
+        assert_eq!(settings.language, "system");
+        // 旧设置没有语言字段时仍可加载，并默认跟随系统。
+        let mut legacy = serde_json::to_value(&settings).unwrap();
+        legacy.as_object_mut().unwrap().remove("language");
+        assert_eq!(
+            serde_json::from_value::<Settings>(legacy).unwrap().language,
+            "system"
+        );
+        settings.language = "zh-CN".into();
         settings.connection.limit_mbps = "6.5".into();
         settings.words = 5;
         settings.quiet = true;
         engine.save_settings(settings.clone()).unwrap();
+        let mut invalid_language = settings.clone();
+        invalid_language.language = "unsupported".into();
+        assert!(engine.save_settings(invalid_language).is_err());
         settings.connection.mtu = "1100".parse().unwrap();
         settings.connection.transport = "quic".into();
         assert!(engine.save_settings(settings).is_err());
@@ -491,6 +508,7 @@ mod tests {
         let engine = Engine::new(root.clone(), Config::default()).unwrap();
         assert_eq!(engine.settings().words, 5);
         assert!(engine.settings().quiet);
+        assert_eq!(engine.settings().language, "zh-CN");
         drop(engine);
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -4,7 +4,6 @@ import pathlib
 import sys
 expected = {
     'hermod-windows-x64.msix', 'hermod-windows-arm64.msix',
-    'Hermod-Test.cer', 'Install-Hermod.ps1',
     'hermod-linux-x64.AppImage', 'hermod-linux-arm64.AppImage',
     'hermod-linux-x64-musl', 'hermod-linux-arm64-musl',
     'hermod-android-arm64.apk',
@@ -13,4 +12,4 @@ root = pathlib.Path(sys.argv[1])
 actual = {p.name for p in root.iterdir() if p.is_file() and not p.is_symlink()}
 assert actual == expected and len(list(root.iterdir())) == len(expected), f'Unexpected Release files: extra={actual - expected}, missing={expected - actual}'
 assert all((root / name).stat().st_size > 0 for name in expected), 'Empty Release file'
-print('Release allowlist passed: 7 programs, 1 public certificate, 1 PowerShell installer')
+print('Release allowlist passed: 2 Store upload MSIX packages, 4 Linux programs, 1 Android APK')

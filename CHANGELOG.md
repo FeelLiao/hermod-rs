@@ -6,6 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-26
+
+### Added
+
+- English/Simplified Chinese GUI with system-language detection, a persistent language
+  setting, translated accessibility labels, transfer states, native dialogs and Android
+  foreground notifications. Both platforms share one translation catalog.
+- English/Chinese MSIX declarations and localized descriptions compiled into resources.pri.
+
+### Changed
+
+- Windows MSIX packages now use the Partner Center identity `FeelLiao.HermodTransfer`,
+  publisher `CN=37A01BFF-1DAB-45E5-9B67-AA76C0655A7C` and display publisher `FeelLiao`.
+  Release MSIX files are unsigned Store uploads; CI signs only a disposable copy for
+  installation/launch checks and verifies the expected package family name.
+- Map app versions to Store versions as `(major + 1).minor.patch.0` (0.4.3 → 1.4.3.0),
+  satisfying the nonzero major and reserved revision requirements without future collisions.
+- Release allowlist contains seven packages/programs. Bump app versions to 0.4.3 and
+  Android versionCode to 40300; existing settings default to system language.
+
+### Removed
+
+- Windows release signing secrets, test certificate exports and `Install-Hermod.ps1`.
+  The one-time signing initializer now creates only the fixed Android key; existing
+  local signing files are preserved. Windows users install through Store after publication.
+
 ## [0.4.2] - 2026-10-25
 
 ### Changed

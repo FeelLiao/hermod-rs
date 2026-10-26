@@ -11,7 +11,8 @@ Guidance for LLM agents working on this repository.
 
 ## Conventions
 
-- Code identifiers, logs and application UI are English; code comments are Chinese (zh-CN).
+- Code identifiers and technical logs are English; GUI text supports English and Simplified Chinese.
+  Use the shared catalog in `hermod-app/src/locales/zh-CN.json`; code comments are Chinese (zh-CN).
 - Commits use Conventional Commits: `<type>(<scope>): <summary>`.
 - Handwritten unsafe Rust is forbidden by workspace lints. Mobile file descriptors use the official Tauri fs plugin.
 - Never regenerate release signing keys silently or publish private keys.
@@ -61,9 +62,11 @@ The ignored QUIC throughput benchmark is opt-in:
 `cargo test -p hermod-core --release -- --ignored quic_throughput`.
 No public signaling service is required for the quality gate.
 
-Browser tests validate Fluent desktop UI through mocked IPC. Native Linux AppImage smoke tests
-check real window creation. Windows CI validates signing identity and native MSIX
-installation/launch. Android CI only builds and signs the ARM64 APK, then checks its
+Browser tests validate Fluent desktop UI, language selection and persistence through mocked IPC.
+Native Linux AppImage smoke tests check real window creation. Windows CI validates Store identity,
+version and en-US/zh-CN resources, then signs a temporary copy for native installation/launch.
+The released MSIX stays unsigned for Partner Center; no Windows signing secrets, certificates
+or user installation scripts are used. Android CI only builds and signs the ARM64 APK, then checks its
 signature, SDK versions, ABI and alignment. Android emulator, instrumentation and
 Android UI tests are not run. API/toolchain versions are pinned in APP_BUILD.md and Gradle.
 `ci.yml` checks branch pushes and PRs and exposes the same checks via `workflow_call`.

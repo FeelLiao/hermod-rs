@@ -1,5 +1,6 @@
 //! Tauri 平台适配层；传输状态保存在 Rust，Web 页面只操作授权 ID。
 pub mod app;
+mod i18n;
 #[cfg(target_os = "android")]
 mod mobile;
 use app::{Bootstrap, Engine, Selection, Settings, Status, storage};
@@ -13,10 +14,24 @@ use tauri::{AppHandle, Manager, State};
 #[cfg(not(target_os = "android"))]
 use tauri_plugin_dialog::{DialogExt, FilePath};
 struct AppState {
+    locale: Mutex<String>,
     engine: Arc<Engine>,
     operation: tokio::sync::Mutex<()>,
     monitoring: AtomicBool,
     export_error: Mutex<Option<String>>,
+}
+impl AppState {
+    fn text(&self, message: &str) -> String {
+        i18n::translate(&self.locale.lock().unwrap(), message).to_owned()
+    }
+}
+#[tauri::command]
+fn set_locale(state: State<'_, AppState>, locale: String) -> Result<(), String> {
+    if !["en-US", "zh-CN"].contains(&locale.as_str()) {
+        return Err("Invalid language".into());
+    }
+    *state.locale.lock().unwrap() = locale;
+    Ok(())
 }
 #[tauri::command]
 async fn bootstrap(app: AppHandle, state: State<'_, AppState>) -> Result<Bootstrap, String> {
@@ -76,7 +91,7 @@ async fn choose_source(
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.dialog()
             .file()
-            .set_title("Choose a file to send")
+            .set_title(state.text("Choose a file to send"))
             .pick_file(move |value| {
                 let _ = tx.send(value);
             });
@@ -105,7 +120,7 @@ async fn choose_destination(
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.dialog()
             .file()
-            .set_title("Default export folder")
+            .set_title(state.text("Default export folder"))
             .pick_folder(move |value| {
                 let _ = tx.send(value);
             });
@@ -206,7 +221,7 @@ async fn export_received(
             let (tx, rx) = tokio::sync::oneshot::channel();
             app.dialog()
                 .file()
-                .set_title("Save verified file")
+                .set_title(state.text("Save verified file"))
                 .set_file_name(&item.name)
                 .save_file(move |value| {
                     let _ = tx.send(value);
@@ -280,6 +295,7 @@ pub fn run() {
             let engine =
                 Engine::new(app.path().app_data_dir()?, fallback).map_err(std::io::Error::other)?;
             app.manage(AppState {
+                locale: Mutex::new("en-US".into()),
                 engine: Arc::new(engine),
                 operation: tokio::sync::Mutex::new(()),
                 monitoring: AtomicBool::new(false),
@@ -288,6 +304,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            set_locale,
             bootstrap,
             save_settings,
             status,

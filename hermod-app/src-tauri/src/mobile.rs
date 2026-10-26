@@ -55,13 +55,30 @@ pub fn prepare(app: &AppHandle) -> Result<(), String> {
     call::<Value>(app, "prepare", json!({})).map(|_| ())
 }
 pub fn active(app: &AppHandle, value: bool) -> Result<(), String> {
-    call::<Value>(app, "setActive", json!({"active": value})).map(|_| ())
+    let state = app.state::<AppState>();
+    call::<Value>(
+        app,
+        "setActive",
+        json!({
+            "active": value,
+            "phase": state.text("Connecting"),
+            "cancel": state.text("Cancel"),
+            "channel": state.text("File transfers"),
+            "transferred": state.text("{size} KiB transferred").replace("{size}", "0"),
+        }),
+    )
+    .map(|_| ())
 }
 pub fn progress(app: &AppHandle, status: &crate::app::Status) -> Result<bool, String> {
+    let state = app.state::<AppState>();
     call::<Value>(
         app,
         "progress",
-        json!({"phase":status.phase,"bytes":status.bytes,"total":status.total}),
+        json!({
+            "phase":state.text(&status.phase), "bytes":status.bytes, "total":status.total,
+            "cancel":state.text("Cancel"), "channel":state.text("File transfers"),
+            "transferred":state.text("{size} KiB transferred").replace("{size}", &(status.bytes / 1024).to_string()),
+        }),
     )
     .map(|v| v["cancel"].as_bool().unwrap_or(false))
 }

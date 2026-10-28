@@ -74,8 +74,9 @@ CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release --target x8
 readelf -l target/x86_64-unknown-linux-musl/release/hermod
 ```
 
-The musl binary must have no `INTERP` program header. On ARM64 Actions runners the
-same procedure uses `aarch64-unknown-linux-musl`, native `musl-gcc`, and an ARM64 AppImage.
+The musl binary must have no `INTERP` program header. ARM64 Actions runners build only
+the CLI, using `aarch64-unknown-linux-musl` and native `musl-gcc`; AppImage packaging
+and GUI dependencies are limited to x64.
 
 ## Microsoft Store packages
 
@@ -304,11 +305,11 @@ Tags and manual runs build the following packages after the checks pass:
 | `windows-11-arm` | ARM64 GUI MSIX (tested intermediate) |
 | `windows-2025` (`windows_bundle`) | One x64 + ARM64 MSIXBundle (Store upload) |
 | `ubuntu-22.04` | x64 AppImage and musl CLI |
-| `ubuntu-22.04-arm` | ARM64 AppImage and musl CLI |
+| `ubuntu-22.04-arm` | ARM64 musl CLI |
 | `ubuntu-22.04` + Android SDK | ARM64 Tauri APK |
 
 Only version-tag pushes publish. Every required job must succeed first. `check-release-files.py`
-requires an exact six-file allowlist: one Store MSIXBundle, four Linux programs
+requires an exact five-file allowlist: one Store MSIXBundle, three Linux programs
 and one Android APK. No certificates, installation scripts, checksums, ZIPs, debs, debug symbols, build logs, private keys
 or canceled-platform programs are uploaded to Release. Internal Actions artifact
 containers are a GitHub transport mechanism, not ZIP release assets.

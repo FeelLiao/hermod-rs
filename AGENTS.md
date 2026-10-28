@@ -66,7 +66,8 @@ The ignored QUIC throughput benchmark is opt-in:
 No public signaling service is required for the quality gate.
 
 Browser tests validate Fluent desktop UI, language selection and persistence through mocked IPC.
-Native Linux AppImage smoke tests check real window creation. Windows CI validates Store identity,
+Linux builds x64 AppImage plus x64/ARM64 musl CLI; ARM64 skips GUI dependencies and packaging.
+Native Linux x64 AppImage smoke tests check real window creation. Windows CI validates Store identity,
 the reserved display name HermodTransfer in both package and application fields,
 version and en-US/zh-CN resources, then signs a temporary copy for native installation/launch.
 Both tested architectures are combined into one unsigned MSIXBundle; only the bundle is

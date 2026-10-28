@@ -20,6 +20,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   still requires signaling; no Internet IPv4 NAT traversal or offline discovery.
 - Add shared page and notification transitions, Material navigation/accordion motion,
   reduced-motion behavior, and independent progress rendering.
+- Stop building the Linux ARM64 GUI in Actions; retain its static CLI. Linux x64
+  still builds both programs. Release validation now requires exactly five files.
 
 ### Added
 

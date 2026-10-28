@@ -21,12 +21,12 @@ Choose your device's CPU architecture, not the architecture of the sender.
 | Device | Files to download |
 | --- | --- |
 | Windows 10 2004+ / Windows 11, x64 / ARM64 | `hermod-windows.msixbundle` (Store submission only; both architectures) |
-| Linux desktop x64 / ARM64 | `hermod-linux-x64.AppImage` / `hermod-linux-arm64.AppImage` |
+| Linux desktop x64 | `hermod-linux-x64.AppImage` |
 | Linux terminal x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
 | Android 14+ ARM64 | `hermod-android-arm64.apk` |
 
-There are no macOS, Windows CLI or Android CLI release builds. Release attachments
-contain only six packages/programs; the Windows MSIXBundle is an unsigned Store upload,
+There are no macOS, Linux ARM64 GUI, Windows CLI or Android CLI release builds. Release attachments
+contain only five packages/programs; the Windows MSIXBundle is an unsigned Store upload,
 not direct-install downloads. No certificates or installation scripts are published.
 GitHub also provides automatic source archives. Android CI builds and signs the APK
 and checks the package; it does not run Android emulator or UI tests.

@@ -17,7 +17,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   linux:
-    name: Linux ${{ matrix.arch }} GUI and CLI
+    name: Linux ${{ matrix.arch }}
     needs: verify
     strategy:
       fail-fast: false
@@ -27,14 +27,16 @@ jobs:
             arch: x64
             triple: x86_64
             appimage_arch: amd64
+            gui: true
           - os: ubuntu-22.04-arm
             arch: arm64
             triple: aarch64
-            appimage_arch: aarch64
+            gui: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
+        if: matrix.gui
         with:
           node-version: '22'
           cache: npm
@@ -47,15 +49,21 @@ jobs:
           key: linux-${{ matrix.arch }}-v040
       - run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config cmake perl clang musl-tools libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 xvfb xdotool
+          sudo apt-get install -y build-essential pkg-config cmake perl clang musl-tools
+      - name: GUI dependencies
+        if: matrix.gui
+        run: sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 xvfb xdotool
       - run: npm ci
+        if: matrix.gui
         working-directory: hermod-app
       - name: AppImage
+        if: matrix.gui
         working-directory: hermod-app
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: npm run tauri -- build --ci --bundles appimage -- --locked
       - name: Stage and launch AppImage
+        if: matrix.gui
         run: |
           mkdir -p dist
           version=$(node -p "require('./hermod-app/package.json').version")
@@ -63,6 +71,7 @@ jobs:
           hermod-app/scripts/smoke-appimage.sh dist/hermod-linux-${{ matrix.arch }}.AppImage
       - name: Static musl CLI
         run: |
+          mkdir -p dist
           export CC_${{ matrix.triple }}_unknown_linux_musl=musl-gcc
           cargo build --locked --release --target ${{ matrix.triple }}-unknown-linux-musl -p hermod-cli
           cp target/${{ matrix.triple }}-unknown-linux-musl/release/hermod dist/hermod-linux-${{ matrix.arch }}-musl
@@ -256,7 +265,7 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           body: |
-            Both peers need reachable IPv6. See README.md / README.zh-CN.md for setup and migration.
+            Both peers need the same IPv4 LAN or reachable IPv6, plus signaling access. See README.md / README.zh-CN.md for setup and migration.
             Windows: one unsigned MSIXBundle containing x64 and ARM64 for Microsoft Store submission (HermodTransfer, identity FeelLiao.HermodTransfer, Store ID 9PMPWN3HMR3M). Upload hermod-windows.msixbundle to Partner Center. This is not a direct-install package; install the Store-signed app after publication. No certificate or install script is required.
-            Linux: AppImage GUI or static musl CLI, x64 / ARM64.
+            Linux: x64 AppImage GUI; x64 / ARM64 static musl CLI.
             Android: ARM64 APK, Android 14 or newer (API 34), target API 37. Export inbox files before uninstalling an older temporary-key build.

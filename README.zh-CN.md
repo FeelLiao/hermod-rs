@@ -20,11 +20,11 @@ Hermod 是使用 Rust 编写的加密 P2P **IPv4 局域网 / IPv6** 文件传输
 | 设备 | 下载文件 |
 | --- | --- |
 | Windows 10 2004+ / Windows 11，x64 / ARM64 | `hermod-windows.msixbundle`（包含两种架构，仅供商店提交） |
-| Linux 桌面 x64 / ARM64 | `hermod-linux-x64.AppImage` / `hermod-linux-arm64.AppImage` |
+| Linux 桌面 x64 | `hermod-linux-x64.AppImage` |
 | Linux 命令行 x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
 | Android 14 及以上、ARM64 | `hermod-android-arm64.apk` |
 
-不再构建 macOS、Windows CLI 和 Android CLI。Release 只上传 6 个程序或包，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
+不再构建 macOS、Linux ARM64 GUI、Windows CLI 和 Android CLI。Release 只上传 5 个程序或包，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
 Windows MSIXBundle 是包含 x64 和 ARM64 的未签名商店提交包；普通用户请在产品上线后通过微软商店安装 **HermodTransfer**，商店会选择对应架构。
 GitHub 自动提供的源码下载链接属于平台功能。
 

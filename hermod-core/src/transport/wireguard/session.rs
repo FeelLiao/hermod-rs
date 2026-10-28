@@ -31,6 +31,9 @@ pub struct EndpointBundle {
         deserialize_with = "deserialize_ipv6_list"
     )]
     pub ipv6_candidates: Vec<Ipv6Addr>,
+    /// 可选局域网 IPv4 候选；旧端忽略，新端读取旧包时为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ipv4_candidates: Vec<std::net::Ipv4Addr>,
     /// 一次性凭证指纹：SHA-256(一次性 URL token)，防误连/串流（§3.4）。
     pub credential_fingerprint: [u8; 32],
 }
@@ -118,6 +121,7 @@ mod tests {
             wg_public_key: [0x22; 32],
             udp_port: 51820,
             http_port: 48231,
+            ipv4_candidates: Vec::new(),
             ipv6_candidates: vec![
                 "2001:db8::1".parse().unwrap(),
                 "fd00::1".parse().unwrap(),

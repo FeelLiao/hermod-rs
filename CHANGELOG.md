@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Keep one trusted signaling server per profile. Verifying a replacement atomically
+  replaces the pin and selects the server; migrate old lists using the selected URL.
+- New GUI settings default to QUIC and unlimited bandwidth; retain saved preferences
+  and offer an explicit migration to the new defaults. Receivers remain Auto.
+- Announce encrypted file metadata before transfer, report totals before payload,
+  validate offers against HTTP headers, and handle zero-byte files. CLI stdin uses
+  bounded private staging before pairing instead of an in-memory buffer.
+- Support IPv4 LAN direct transfer on independent QUIC and WireGuard transports,
+  using dual-stack UDP with IPv4 fallback and bounded address candidates. Pairing
+  still requires signaling; no Internet IPv4 NAT traversal or offline discovery.
+- Add shared page and notification transitions, Material navigation/accordion motion,
+  reduced-motion behavior, and independent progress rendering.
+
 ### Added
 
 - Bilingual privacy policy covering file and connection data, third-party signaling,

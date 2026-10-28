@@ -141,5 +141,21 @@
   "Server fingerprint changed or does not match; trust was not saved": "服务器指纹已变更或不匹配，未保存信任",
   "Local network permission denied. Peer discovery and direct transfers need this permission. Enable Local network in Android app settings.": "局域网权限已被拒绝。发现对端和直接传输需要此权限，请在 Android 应用设置中允许局域网访问。",
   "Local network permission denied; transfer cannot start": "局域网权限已被拒绝，无法开始传输",
-  "Android document operation failed; verified inbox copy retained": "Android 文件操作失败，已保留收件箱中的已验证副本"
+  "Android document operation failed; verified inbox copy retained": "Android 文件操作失败，已保留收件箱中的已验证副本",
+  "IPv4 LAN / IPv6 · No file relay": "IPv4 局域网 / IPv6 · 文件无需中转",
+  "IPv4 LAN available": "IPv4 局域网可用",
+  "No local network address": "未发现本地网络地址",
+  "Use the same IPv4 LAN or reachable IPv6. Keep the transfer code private.": "请使用同一 IPv4 局域网或可达的 IPv6。请勿公开传输码。",
+  "QUIC (default)": "QUIC（默认）",
+  "New defaults: QUIC and unlimited speed. Your saved choices have been kept.": "新的默认设置为 QUIC、不限速。已保留你之前保存的设置。",
+  "Use new defaults": "采用新默认设置",
+  "Keep my settings": "保留我的设置",
+  "Only one server is trusted. Verifying a new server replaces the current trust and switches the server.": "只信任一个服务器。验证新服务器后，将替换旧信任并立即切换。",
+  "Local IPv4 addresses": "本地 IPv4 地址",
+  "No local IPv4 address found": "未发现本地 IPv4 地址",
+  "Trusted server": "信任的服务器",
+  "Server fingerprint verified. The previous trust was replaced and the new server is active.": "服务器指纹已验证，旧信任已替换，新服务器已启用。",
+  "Verify and trust the new server before saving settings": "请先验证并信任新服务器，再保存设置。",
+  "Transfer metadata does not match the encrypted offer": "传输文件信息与加密协商结果不一致。",
+  "Invalid or conflicting server fingerprint": "服务器指纹无效或存在冲突。"
 }

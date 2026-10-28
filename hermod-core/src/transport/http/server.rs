@@ -121,6 +121,12 @@ where
                         p(sent);
                     }
                 }
+                // 同一来源在协商后增长时拒绝裁决，避免把截断前缀标记成完整文件。
+                if body.read(&mut buf[..1]).await? != 0 {
+                    return Err(HttpError::Malformed(
+                        "body longer than Content-Length".into(),
+                    ));
+                }
                 w.flush().await?;
                 computed_sha = transfer::hex(&hasher.finalize()[..]);
             }
@@ -255,6 +261,33 @@ mod tests {
             data.len() as u64
         );
         assert_eq!(got, data.len() as u64);
+    }
+
+    /// 文件在预告后变短或增长，双方都不能把传输标记为验证成功。
+    #[tokio::test]
+    async fn changed_source_length_never_verifies() {
+        for declared in [2, 4] {
+            let options = ServeOptions {
+                token: [1; 16],
+                kind: Kind::File,
+                name: "changed.bin".into(),
+                size: declared,
+                body: Box::new(std::io::Cursor::new(b"abc".to_vec())),
+                progress: None,
+            };
+            let (client, server) = tokio::io::duplex(4096);
+            let mut destination = Vec::new();
+            let (sent, received) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                tokio::join!(
+                    Box::pin(serve(server, options)),
+                    Box::pin(fetch(client, &[1; 16], &mut destination, None))
+                )
+            })
+            .await
+            .unwrap();
+            assert!(matches!(sent, Err(HttpError::Malformed(_))));
+            assert!(received.is_err());
+        }
     }
 
     /// 错误的 token → 404，客户端报错。

@@ -11,9 +11,10 @@
 //!   [`retransmit_handshake`](WireGuardTunnel::retransmit_handshake) /
 //!   [`send_keepalive`](WireGuardTunnel::send_keepalive)。
 
+use crate::transport::network::{canonical, for_socket};
 use crate::transport::wireguard::wg::endpoint::PeerEndpoint;
 use crate::transport::wireguard::wg::tunnel::{Outcome, WireGuardSession};
-use std::net::{IpAddr, SocketAddr, SocketAddrV6};
+use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 
 /// UDP 收包缓冲（最大 UDP 载荷 65535）。
@@ -29,12 +30,13 @@ pub enum SessionError {
 }
 
 /// 批量收包结果：(可选内层包, 需要回发的控制包列表)。
-pub type RecvBatch = (Option<Vec<u8>>, Vec<(Vec<u8>, SocketAddrV6)>);
+pub type RecvBatch = (Option<Vec<u8>>, Vec<(Vec<u8>, SocketAddr)>);
 
 /// 一个 WireGuard 隧道会话（由调用方在 async 任务里驱动）。
 pub struct WireGuardTunnel {
     session: WireGuardSession,
     udp: UdpSocket,
+    ipv6: bool,
     endpoint: PeerEndpoint,
     /// boringtun 是否已有可用会话（能成功封装/解封装数据）。
     session_ok: bool,
@@ -47,6 +49,7 @@ impl WireGuardTunnel {
     pub fn new(session: WireGuardSession, udp: UdpSocket, endpoint: PeerEndpoint) -> Self {
         Self {
             session,
+            ipv6: udp.local_addr().is_ok_and(|address| address.is_ipv6()),
             udp,
             endpoint,
             session_ok: false,
@@ -65,7 +68,7 @@ impl WireGuardTunnel {
             let cands = self.endpoint.candidates().to_vec();
             crate::log_info!(candidates = ?cands, "sending WireGuard handshake initiation");
             for cand in cands {
-                self.udp.send_to(&pkt, cand).await?;
+                let _ = self.udp.send_to(&pkt, for_socket(cand, self.ipv6)).await;
             }
         }
         Ok(())
@@ -76,12 +79,12 @@ impl WireGuardTunnel {
         if let Some(pkt) = self.session.force_initiate_handshake() {
             if let Some(cur) = self.endpoint.current() {
                 crate::log_debug!("retransmit handshake -> current endpoint {cur}");
-                self.udp.send_to(&pkt, cur).await?;
+                self.udp.send_to(&pkt, for_socket(cur, self.ipv6)).await?;
             } else {
                 let cands = self.endpoint.candidates().to_vec();
                 crate::log_debug!("retransmit handshake -> {} candidates", cands.len());
                 for cand in cands {
-                    self.udp.send_to(&pkt, cand).await?;
+                    let _ = self.udp.send_to(&pkt, for_socket(cand, self.ipv6)).await;
                 }
             }
         }
@@ -98,7 +101,7 @@ impl WireGuardTunnel {
                 .or_else(|| self.endpoint.candidates().first().copied())
                 .ok_or(SessionError::NoPeer)?;
             crate::log_debug!("flush boringtun queue: send {}B -> {to}", pkt.len());
-            self.udp.send_to(&pkt, to).await?;
+            self.udp.send_to(&pkt, for_socket(to, self.ipv6)).await?;
         }
         Ok(())
     }
@@ -106,10 +109,8 @@ impl WireGuardTunnel {
     /// 非阻塞地收一包（供驱动批量 drain）。返回 (内层包, 需回发的控制包)。
     pub fn try_recv_once(&mut self) -> Option<RecvBatch> {
         let (n, src) = self.udp.try_recv_from(&mut self.recv_buf).ok()?;
-        let SocketAddr::V6(src6) = src else {
-            return Some((None, Vec::new()));
-        };
-        let src_ip = IpAddr::V6(*src6.ip());
+        let src6 = canonical(src);
+        let src_ip = src6.ip();
         match self
             .session
             .handle_packet(Some(src_ip), &self.recv_buf[..n])
@@ -135,8 +136,8 @@ impl WireGuardTunnel {
     }
 
     /// 直接把原始字节发给指定端点（批量 drain 后回发控制包用）。
-    pub async fn send_raw(&mut self, pkt: &[u8], to: SocketAddrV6) -> Result<(), SessionError> {
-        self.udp.send_to(pkt, to).await?;
+    pub async fn send_raw(&mut self, pkt: &[u8], to: SocketAddr) -> Result<(), SessionError> {
+        self.udp.send_to(pkt, for_socket(to, self.ipv6)).await?;
         Ok(())
     }
 
@@ -148,7 +149,7 @@ impl WireGuardTunnel {
                 .current()
                 .or_else(|| self.endpoint.candidates().first().copied())
                 .ok_or(SessionError::NoPeer)?;
-            self.udp.send_to(&pkt, to).await?;
+            self.udp.send_to(&pkt, for_socket(to, self.ipv6)).await?;
         }
         Ok(())
     }
@@ -159,11 +160,8 @@ impl WireGuardTunnel {
     /// 成为新的对端端点。认证失败的包（`Outcome::Error`）不更新端点。
     pub async fn recv(&mut self) -> Result<Option<Vec<u8>>, SessionError> {
         let (n, src) = self.udp.recv_from(&mut self.recv_buf).await?;
-        let SocketAddr::V6(src6) = src else {
-            // IPV6_V6ONLY 下不应收到 IPv4；防御性忽略。
-            return Ok(None);
-        };
-        let src_ip = IpAddr::V6(*src6.ip());
+        let src6 = canonical(src);
+        let src_ip = src6.ip();
         match self
             .session
             .handle_packet(Some(src_ip), &self.recv_buf[..n])
@@ -176,7 +174,7 @@ impl WireGuardTunnel {
                     pkt.len()
                 );
                 self.endpoint.roam(src6);
-                self.udp.send_to(&pkt, src6).await?;
+                self.udp.send_to(&pkt, for_socket(src6, self.ipv6)).await?;
                 Ok(None)
             }
             Outcome::Tunnel(inner) => {
@@ -216,7 +214,9 @@ impl WireGuardTunnel {
                     .or_else(|| self.endpoint.candidates().first().copied())
                     .ok_or(SessionError::NoPeer)?;
                 crate::log_debug!("send inner {}B -> WG {len}B -> {to}", inner.len());
-                self.udp.send_to(self.session.scratch(len), to).await?;
+                self.udp
+                    .send_to(self.session.scratch(len), for_socket(to, self.ipv6))
+                    .await?;
             }
             None => {
                 crate::log_debug!("WG session not ready, dropping inner {}B", inner.len());
@@ -279,8 +279,8 @@ mod tests {
 
         let lo = std::net::Ipv6Addr::LOCALHOST;
         // 回环地址会被 PeerEndpoint::new 的候选过滤排除，测试用 from_addrs。
-        let ep_a = PeerEndpoint::from_addrs(vec![SocketAddrV6::new(lo, port_b, 0, 0)]);
-        let ep_b = PeerEndpoint::from_addrs(vec![SocketAddrV6::new(lo, port_a, 0, 0)]);
+        let ep_a = PeerEndpoint::from_addrs(vec![SocketAddrV6::new(lo, port_b, 0, 0).into()]);
+        let ep_b = PeerEndpoint::from_addrs(vec![SocketAddrV6::new(lo, port_a, 0, 0).into()]);
 
         let sa = WireGuardSession::new(ka.secret(), kb.public(), psk, Some(25), 1);
         let sb = WireGuardSession::new(kb.secret(), ka.public(), psk, Some(25), 2);

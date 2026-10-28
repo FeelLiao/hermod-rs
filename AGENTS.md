@@ -35,12 +35,15 @@ npm test --prefix hermod-app
 `hermod-core` contains crypto, the WebSocket signaling client with SPKI pinning,
 shared connection options, independent WireGuard and QUIC transports, transport-internal
 HTTP/1.1, session negotiation and tx/rx orchestration. WireGuard uses boringtun and
-smoltcp TCP (default sender, CUBIC); QUIC uses quinn/TLS 1.3 (optional sender, BBR).
+smoltcp TCP (CLI sender default, CUBIC); QUIC uses quinn/TLS 1.3 (GUI sender default, BBR).
 The receiver defaults to Auto. `AnyTransport` / `AnyConnection` dispatch at runtime;
 neither transport depends on the other. `--mtu` and `--congestion` are interpreted and
 validated for the selected protocol; no unsupported option is silently ignored.
-Automatic binding is `[::]:0`; internal overrides remain for tests. IPv6-only behavior,
-CPace and internal SHA-256 integrity verification are retained.
+Automatic binding uses a dual-stack socket with IPv4 fallback; internal overrides remain for tests.
+Private/link-local IPv4 LAN and IPv6 candidates are exchanged through authenticated signaling.
+There is no offline discovery, Internet IPv4 NAT traversal or relay. CPace and internal
+SHA-256 integrity verification are retained. File offers are optional encrypted endpoint extensions.
+GUI defaults to unlimited bandwidth. Each client profile persists one selected server and SPKI pin.
 
 `hermod_app_lib::app::Engine` owns persistent settings, private verified inbox, sources,
 job snapshots and cancellation. Every transfer copies settings before starting.
@@ -57,7 +60,7 @@ unknown-size sources are staged privately and verified receive data survives exp
 Crypto tests use independent RFC vectors (7748, 9380, 5869). Local transport tests
 exercise handshake, streams, HTTP and digest verdict on both protocols. CLI integration
 tests spawn actual command-line binaries and use the same application engine as both
-GUIs. A non-loopback local IPv6 address is needed; APP_BUILD.md shows an isolated namespace.
+GUIs. A non-loopback private IPv4 or IPv6 address is needed; APP_BUILD.md shows an isolated namespace.
 The ignored QUIC throughput benchmark is opt-in:
 `cargo test -p hermod-core --release -- --ignored quic_throughput`.
 No public signaling service is required for the quality gate.

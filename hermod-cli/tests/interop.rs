@@ -6,13 +6,13 @@ use hermod_core::{
 };
 use std::{path::Path, process::Stdio, time::Duration};
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::Command,
 };
 use tokio_tungstenite::tungstenite::Message as Frame;
 
 async fn relay() -> (Config, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("[::1]:0").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mut cfg = Config {
         server_url: format!("ws://{}", listener.local_addr().unwrap()),
         ..Default::default()
@@ -134,7 +134,11 @@ async fn cli_and_gui_interoperate_both_directions_with_files_and_text() {
     tokio::time::timeout(Duration::from_secs(180), async {
         for protocol in ["wireguard", "quic"] {
             for mode in ["gui-to-cli", "cli-to-gui", "cli-to-cli"] {
-                for text in [true, false] {
+                for source in ["text", "file", "stdin"] {
+                    if source == "stdin" && mode == "gui-to-cli" {
+                        continue;
+                    }
+                    let text = source == "text";
                     let root =
                         std::env::temp_dir().join(format!("hermod-interop-{}", storage::new_id()));
                     let cfgdir = root.join("config");
@@ -215,12 +219,19 @@ async fn cli_and_gui_interoperate_both_directions_with_files_and_text() {
                             .path();
                         assert_eq!(std::fs::read(received).unwrap(), bytes);
                     } else {
-                        let input_arg = if text {
+                        let input_arg = if source == "stdin" {
+                            "-".into()
+                        } else if text {
                             String::from_utf8(bytes.clone()).unwrap()
                         } else {
                             input.to_str().unwrap().into()
                         };
                         let mut child = cli(&cfgdir)
+                            .stdin(if source == "stdin" {
+                                Stdio::piped()
+                            } else {
+                                Stdio::null()
+                            })
                             .args([
                                 "tx",
                                 "--transport",
@@ -231,6 +242,12 @@ async fn cli_and_gui_interoperate_both_directions_with_files_and_text() {
                             ])
                             .spawn()
                             .unwrap();
+                        if source == "stdin" {
+                            let mut stdin = child.stdin.take().unwrap();
+                            stdin.write_all(&bytes).await.unwrap();
+                            stdin.shutdown().await.unwrap();
+                            drop(stdin);
+                        }
                         let mut lines = BufReader::new(child.stderr.take().unwrap()).lines();
                         let code = loop {
                             let line = lines

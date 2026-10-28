@@ -11,7 +11,7 @@ or runtime tests run. A successful Linux build does not verify other platforms.
 
 ## Repository layout
 
-- `hermod-core`: cryptography, IPv6 signaling, WireGuard/QUIC, HTTP transfer, settings validation.
+- `hermod-core`: cryptography, signaling, IPv4 LAN/IPv6 WireGuard/QUIC, HTTP transfer, settings validation.
 - `hermod-cli`: clap shell and terminal I/O.
 - `hermod-app/src`: shared React pages and a small official Fluent UI / Material Web component adapter.
 - `hermod-app/src-tauri/src/app`: persistent settings, jobs, cancellation, bounded streams, logs and verified inbox.
@@ -41,7 +41,8 @@ cd hermod-app
 npm run tauri -- dev
 ```
 
-End-to-end tests need a non-loopback local IPv6 address. On an isolated WSL host,
+End-to-end tests use a non-loopback private IPv4 or IPv6 address. For explicit IPv6
+coverage on an isolated WSL host,
 run the tests in a temporary network namespace (no host network changes):
 
 ```bash
@@ -49,6 +50,7 @@ sudo unshare --net bash -c '
   ip link set lo up
   ip link add hermodtest type dummy
   ip link set hermodtest up
+  ip addr add 10.200.0.1/24 dev hermodtest
   ip -6 addr add fd00:1234::1/64 dev hermodtest nodad
   cargo test --workspace --locked
 '
@@ -56,7 +58,9 @@ sudo unshare --net bash -c '
 
 The shell must have access to the installed Rust toolchain. Tests use a local signaling
 fixture and do not need the public server. CLI/GUI interop tests run real CLI processes
-against the shared GUI engine in both directions for file and text, on both protocols.
+against the shared GUI engine in both directions for file and text, plus staged CLI stdin,
+on both protocols. To verify IPv4-only operation, disable IPv6 in the namespace and run
+`cargo test -p hermod-cli --test interop --locked` with only its private IPv4 address.
 Browser tests mock IPC and validate UI behavior; they do not replace native dialog tests.
 
 ```bash

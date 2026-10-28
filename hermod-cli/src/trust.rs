@@ -27,11 +27,10 @@ pub async fn run(args: TrustArgs) -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("fingerprint mismatch: got {hex}, expected {expect}").into());
     }
 
-    let mut cfg = config::load().unwrap_or_default();
+    let mut cfg = config::load().map_err(util::boxed)?;
     let normalized = config::normalize_server_url(&url).map_err(util::boxed)?;
     // 对齐 Go：pin 指纹，**并把它设为默认 server**（否则 tx/rx 仍用旧默认）。
-    cfg.trusted_servers.insert(normalized.clone(), hex.clone());
-    cfg.server_url = normalized.clone();
+    cfg.replace_trust(&normalized, &hex).map_err(util::boxed)?;
     config::save(&cfg).map_err(util::boxed)?;
 
     // 对齐 Go 的 printStatus 输出

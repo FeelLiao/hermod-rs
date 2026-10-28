@@ -29,8 +29,8 @@ available; switching to CUBIC alone does not reserve upload capacity.
 Mbps means decimal megabits per second: 8 Mbps is 1,000,000 payload bytes/s.
 Encryption, IP headers and retransmissions are additional traffic. Start at
 70–85% of **measured upload capacity**, then compare browsing latency. The GUI
-starts at an explicit, editable 8 Mbps cap; this is not an automatic bandwidth
-estimate. CLI default 0 retains unlimited operation. Limits apply per transfer.
+starts unlimited, as does the CLI (0). Set an explicit cap when needed; the app
+does not automatically estimate uplink capacity. Limits apply per transfer.
 
 ## Reproduction
 
@@ -53,9 +53,9 @@ carries data and acknowledgements in both directions. Actual gains depend on
 uplink capacity, competing traffic and queue management. Router SQM/AQM can
 additionally help all applications; Hermod does not change router settings.
 
-## v0.4.0 settings
+## Protocol settings
 
-Sending now defaults to WireGuard; receiving defaults to Auto. `--congestion auto`
+GUI sending defaults to QUIC; CLI sending defaults to WireGuard. Receiving defaults to Auto. `--congestion auto`
 selects CUBIC for WireGuard or BBR for QUIC. WireGuard supports CUBIC/Reno; QUIC
 supports BBR/CUBIC/NewReno. Selecting an unsupported algorithm fails explicitly.
 The single `--mtu` option controls the active protocol: WireGuard inner IP MTU
@@ -64,13 +64,15 @@ never probes above an explicit ceiling. Neither MTU nor congestion control repla
 a bandwidth budget. Payload limits exclude outer headers and retransmissions.
 
 Desktop and Android share settings and take a snapshot for each transfer. The GUI
-starts at 8 Mbps; CLI starts unlimited. Changing settings while transferring affects
+starts unlimited; CLI also starts unlimited. Changing settings while transferring affects
 the next job. In-memory queues for document callbacks are limited to two 64 KiB chunks;
 unknown-length SAF documents stage to private storage before advertising a code.
 
 ## IPv6 and WSL
 
-No IPv4 mode or relay is included. Both devices need routed IPv6 and UDP firewall
+IPv4 LAN direct transfer is supported by both transports; pairing still uses the
+selected signaling server. No offline discovery, Internet IPv4 NAT traversal or relay
+is included. For Internet transfers, both devices need routed IPv6 and UDP firewall
 permission. Binding is automatic on `[::]:0`; the removed `--listen` flag is not a
 connectivity fix. Link-local-only and fabricated IPv6 addresses cannot reach remote peers.
 

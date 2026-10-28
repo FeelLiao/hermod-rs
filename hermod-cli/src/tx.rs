@@ -10,8 +10,8 @@ use hermod_core::session;
 use hermod_core::transfer::{self, Kind};
 use hermod_core::transport::NetworkStatsHandle;
 use hermod_core::transport::http::server::ServeOptions;
-use std::io::Read;
-use std::path::Path;
+use std::io::Seek;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -25,7 +25,7 @@ pub async fn run(
     args: TxArgs,
     abort_slot: util::AbortSlot,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cfg = config::load().unwrap_or_default();
+    let mut cfg = config::load().map_err(util::boxed)?;
     if let Some(s) = &args.server {
         cfg.server_url = config::normalize_server_url(s).map_err(util::boxed)?;
     }
@@ -33,13 +33,65 @@ pub async fn run(
     // 0) 先确认 server 已信任，避免打印一个用不了的传输码
     hermod_core::session::expected_spki(&cfg).map_err(util::boxed)?;
 
-    // 1) 生成传输码，频道创建成功后才在回调中打印到 stderr。
-    let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
-    let (_channel_id, code) = wordlist::generate_transfer_code(&mut rng, usize::from(args.words));
+    let mut opts = args.network.options(&args.transport, false)?;
 
-    // 2) 建会话
-    verbosity::debug(format!("server_url={}", cfg.server_url));
-    let opts = args.network.options(&args.transport, false)?;
+    // 先准备输入并确定大小；打开的同一个文件句柄贯穿预告和发送。
+    let (kind, name) = transfer::classify_input(&args.input, crate::tty::stdin_is_piped());
+    let mut staged = None;
+    let body: Box<dyn tokio::io::AsyncRead + Unpin + Send>;
+    let size;
+    let name = match kind {
+        Kind::File => {
+            let file = tokio::fs::File::open(Path::new(&args.input)).await?;
+            let metadata = file.metadata().await?;
+            if !metadata.is_file() {
+                return Err("Select a regular file".into());
+            }
+            size = metadata.len();
+            body = Box::new(file);
+            name
+        }
+        Kind::Text => {
+            size = args.input.len() as u64;
+            body = Box::new(std::io::Cursor::new(args.input.into_bytes()));
+            "message.txt".into()
+        }
+        Kind::Stream => {
+            // 临时文件守卫随阻塞任务的返回值移动；取消后返回值被丢弃也能清理。
+            let (temporary, file, length) =
+                tokio::task::spawn_blocking(|| -> std::io::Result<_> {
+                    let mut random = [0u8; 16];
+                    getrandom::fill(&mut random).map_err(std::io::Error::other)?;
+                    let path = std::env::temp_dir()
+                        .join(format!("hermod-stdin-{}", transfer::hex(&random)));
+                    let mut options = std::fs::OpenOptions::new();
+                    options.read(true).write(true).create_new(true);
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::OpenOptionsExt;
+                        options.mode(0o600);
+                    }
+                    let mut file = options.open(&path)?;
+                    let temporary = StagedInput(path);
+                    // Linux 发布版只保留已打开句柄，异常退出也不会留下标准输入内容。
+                    #[cfg(unix)]
+                    std::fs::remove_file(&temporary.0)?;
+                    let length = std::io::copy(&mut std::io::stdin().lock(), &mut file)?;
+                    file.rewind()?;
+                    Ok((temporary, file, length))
+                })
+                .await??;
+            staged = Some(temporary);
+            size = length;
+            body = Box::new(tokio::fs::File::from_std(file));
+            "stdin.bin".into()
+        }
+    };
+    let offer = transfer::TransferOffer { kind, name, size };
+    offer.validate()?;
+    opts.offer = Some(offer.clone());
+    let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
+    let (_, code) = wordlist::generate_transfer_code(&mut rng, usize::from(args.words));
     let mut tx = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         session::sender_session_with_ready(&cfg, &code, &opts, || {
@@ -49,117 +101,55 @@ pub async fn run(
     .await
     .map_err(|_| "handshake timed out")?
     .map_err(util::boxed)?;
-    // 连接已建立：把中止句柄交给 Ctrl+C 处理器（取消时对端立刻收到 RST）。
     if let Ok(mut s) = abort_slot.lock() {
         *s = Some(tx.conn.abort_handle());
     }
     verbosity::status("Establishing P2P connection...");
-
-    // 3) 按输入类型发送
-    let quiet = verbosity::is_quiet();
-    let (kind, _name) = transfer::classify_input(&args.input, crate::tty::stdin_is_piped());
-
-    match kind {
-        Kind::File => {
-            let path = Path::new(&args.input);
-            let total = std::fs::metadata(path).map_err(util::boxed)?.len();
-            let net = tx.conn.network_stats();
-            let pb = if net.is_some() {
-                progress::bar_net(total, quiet)
-            } else {
-                progress::bar(total, quiet)
-            };
-            let _net = spawn_net_progress(&pb, net, total);
-            let (tick_tx, tick_rx) = mpsc::channel(1);
-            let sent = Arc::new(AtomicU64::new(0));
-            let pb2 = pb.clone();
-            let sent2 = sent.clone();
-            let progress: Option<Box<dyn FnMut(u64) + Send>> = Some(Box::new(move |n| {
-                pb2.set_position(n);
-                sent2.store(n, Ordering::Relaxed);
-                let _ = tick_tx.try_send(());
-            }));
-            let fut = orchestrate::send_file_with_limit(
-                &mut tx.conn,
-                tx.token,
-                path,
-                progress,
-                args.network.limit_mbps,
-            );
-            let out = run_with_idle(fut, tick_rx, sent).await?;
-            pb.finish_and_clear();
-            finish_and_shutdown(&mut tx, out.verified, total, &out.sha256).await?;
-        }
-        Kind::Text => {
-            let total = args.input.len() as u64;
-            let net = tx.conn.network_stats();
-            let pb = if net.is_some() {
-                progress::bar_net(total, quiet)
-            } else {
-                progress::bar(total, quiet)
-            };
-            let _net = spawn_net_progress(&pb, net, total);
-            let (tick_tx, tick_rx) = mpsc::channel(1);
-            let sent = Arc::new(AtomicU64::new(0));
-            let pb2 = pb.clone();
-            let sent2 = sent.clone();
-            let progress: Option<Box<dyn FnMut(u64) + Send>> = Some(Box::new(move |n| {
-                pb2.set_position(n);
-                sent2.store(n, Ordering::Relaxed);
-                let _ = tick_tx.try_send(());
-            }));
-            let fut = orchestrate::send_text_with_limit(
-                &mut tx.conn,
-                tx.token,
-                &args.input,
-                progress,
-                args.network.limit_mbps,
-            );
-            let out = run_with_idle(fut, tick_rx, sent).await?;
-            pb.finish_and_clear();
-            finish_and_shutdown(&mut tx, out.verified, total, &out.sha256).await?;
-        }
-        Kind::Stream => {
-            let mut data = Vec::new();
-            std::io::stdin()
-                .read_to_end(&mut data)
-                .map_err(util::boxed)?;
-            let size = data.len() as u64;
-            let net = tx.conn.network_stats();
-            let pb = if net.is_some() {
-                progress::bar_net(size, quiet)
-            } else {
-                progress::bar(size, quiet)
-            };
-            let _net = spawn_net_progress(&pb, net, size);
-            let (tick_tx, tick_rx) = mpsc::channel(1);
-            let sent = Arc::new(AtomicU64::new(0));
-            let pb2 = pb.clone();
-            let sent2 = sent.clone();
-            let progress: Option<Box<dyn FnMut(u64) + Send>> = Some(Box::new(move |n| {
-                pb2.set_position(n);
-                sent2.store(n, Ordering::Relaxed);
-                let _ = tick_tx.try_send(());
-            }));
-            let serve_opts = ServeOptions {
+    let net = tx.conn.network_stats();
+    let pb = if net.is_some() {
+        progress::bar_net(size, verbosity::is_quiet())
+    } else {
+        progress::bar(size, verbosity::is_quiet())
+    };
+    let _net = spawn_net_progress(&pb, net, size);
+    let (tick_tx, tick_rx) = mpsc::channel(1);
+    let sent = Arc::new(AtomicU64::new(0));
+    let pb2 = pb.clone();
+    let sent2 = sent.clone();
+    let progress = Some(Box::new(move |n| {
+        pb2.set_position(n);
+        sent2.store(n, Ordering::Relaxed);
+        let _ = tick_tx.try_send(());
+    }) as Box<dyn FnMut(u64) + Send>);
+    let out = run_with_idle(
+        orchestrate::serve_file_with_limit(
+            &mut tx.conn,
+            ServeOptions {
                 token: tx.token,
-                kind: Kind::Stream,
-                name: "stdin.bin".into(),
+                kind,
+                name: offer.name,
                 size,
-                body: Box::new(std::io::Cursor::new(data)),
+                body,
                 progress,
-            };
-            let fut = orchestrate::serve_file_with_limit(
-                &mut tx.conn,
-                serve_opts,
-                args.network.limit_mbps,
-            );
-            let out = run_with_idle(fut, tick_rx, sent).await?;
-            pb.finish_and_clear();
-            finish_and_shutdown(&mut tx, out.verified, size, &out.sha256).await?;
-        }
-    }
+            },
+            args.network.limit_mbps,
+        ),
+        tick_rx,
+        sent,
+    )
+    .await?;
+    pb.finish_and_clear();
+    finish_and_shutdown(&mut tx, out.verified, size, &out.sha256).await?;
+    drop(staged);
     Ok(())
+}
+
+/// 已知长度的标准输入私有缓存。
+struct StagedInput(PathBuf);
+impl Drop for StagedInput {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// 网络统计后台任务的 RAII 守卫：离开作用域时 abort。

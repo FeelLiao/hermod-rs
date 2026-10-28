@@ -28,6 +28,8 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    #[serde(default = "legacy_settings_version")]
+    pub version: u8,
     pub connection: ConnectionSettings,
     pub receive_transport: String,
     pub server: String,
@@ -38,11 +40,17 @@ pub struct Settings {
     pub language: String,
     pub destination: Option<String>,
 }
+fn legacy_settings_version() -> u8 {
+    1
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            version: 2,
             connection: ConnectionSettings {
-                limit_mbps: "8".into(),
+                transport: "quic".into(),
+                limit_mbps: "0".into(),
                 ..Default::default()
             },
             receive_transport: "auto".into(),
@@ -111,6 +119,7 @@ pub struct Bootstrap {
     pub color_seed: Option<String>,
     pub version: String,
     pub ipv6: Vec<String>,
+    pub ipv4: Vec<String>,
     pub platform: String,
     pub settings: Settings,
     pub trusted_servers: std::collections::BTreeMap<String, String>,
@@ -156,23 +165,27 @@ impl Engine {
             std::fs::remove_dir_all(&cache).map_err(|e| e.to_string())?;
         }
         std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
-        let cfg = if root.join("config.yaml").exists() {
-            config::load_from(&root.join("config.yaml")).map_err(|e| e.to_string())?
-        } else {
-            fallback
-        };
-        let settings = if root.join("settings.json").exists() {
+        let mut settings = if root.join("settings.json").exists() {
             serde_json::from_slice::<Settings>(
                 &std::fs::read(root.join("settings.json")).map_err(|e| e.to_string())?,
             )
             .map_err(|e| format!("Could not read settings: {e}"))?
         } else {
             Settings {
-                server: cfg.server_url.clone(),
+                server: fallback.server_url.clone(),
                 ..Default::default()
             }
         };
+        let mut cfg = if root.join("config.yaml").exists() {
+            config::load_selected(&root.join("config.yaml"), Some(&settings.server))
+                .map_err(|e| e.to_string())?
+        } else {
+            fallback
+        };
+        cfg.retain_active_trust().map_err(|e| e.to_string())?;
+        settings.server = cfg.server_url.clone();
         settings.validate()?;
+        config::save_to(&cfg, &root.join("config.yaml")).map_err(|e| e.to_string())?;
         logs::initialize();
         logs::set_level(&settings.verbose);
         Ok(Self {
@@ -195,6 +208,10 @@ impl Engine {
         Bootstrap {
             color_seed: None,
             version: env!("CARGO_PKG_VERSION").into(),
+            ipv4: hermod_core::transport::network::local_ipv4()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             ipv6: hermod_core::transport::wireguard::addr::enumerate_local_ipv6()
                 .iter()
                 .map(ToString::to_string)
@@ -205,9 +222,15 @@ impl Engine {
             settings_saved: self.root.join("settings.json").exists(),
         }
     }
-    pub fn save_settings(&self, settings: Settings) -> Result<(), String> {
+    pub fn save_settings(&self, mut settings: Settings) -> Result<(), String> {
         settings.validate()?;
+        settings.version = 2;
         let mut current = self.settings.lock().unwrap();
+        if config::normalize_server_url(&settings.server).map_err(|e| e.to_string())?
+            != self.config.lock().unwrap().server_url
+        {
+            return Err("Verify and trust the new server before saving settings".into());
+        }
         if settings.destination != current.destination {
             return Err("Choose a destination using the system picker".into());
         }
@@ -301,11 +324,14 @@ impl Engine {
         {
             return Err("Choose a file, text, or a receive code".into());
         }
-        let settings = self.settings();
+        // 与替换信任保持相同锁顺序，使每个任务使用同一次服务器/指纹快照。
+        let (settings, mut config) = {
+            let settings = self.settings.lock().unwrap();
+            (settings.clone(), self.config.lock().unwrap().clone())
+        };
         settings.validate()?;
         let receiving = code.is_some();
         let options = settings.options(receiving)?;
-        let mut config = self.config.lock().unwrap().clone();
         config.server_url =
             config::normalize_server_url(&settings.server).map_err(|e| e.to_string())?;
         hermod_core::session::expected_spki(&config).map_err(|e| e.to_string())?;
@@ -459,11 +485,15 @@ impl Engine {
             return Err("Server fingerprint changed or does not match; trust was not saved".into());
         }
         let url = config::normalize_server_url(server).map_err(|e| e.to_string())?;
+        let mut settings = self.settings.lock().unwrap();
         let mut cfg = self.config.lock().unwrap();
         let mut updated = cfg.clone();
-        updated.trusted_servers.insert(url, fingerprint);
+        updated
+            .replace_trust(&url, &fingerprint)
+            .map_err(|e| e.to_string())?;
         config::save_to(&updated, &self.root.join("config.yaml")).map_err(|e| e.to_string())?;
         *cfg = updated;
+        settings.server = url;
         Ok(())
     }
     pub fn logs(&self) -> Vec<String> {
@@ -475,12 +505,69 @@ impl Engine {
 mod tests {
     use super::*;
     #[test]
+    fn legacy_settings_keep_preferences_and_migrate_the_selected_trust() {
+        let root = std::env::temp_dir().join(format!("hermod-migration-{}", storage::new_id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let server = "wss://selected.example:4376";
+        let mut config = Config {
+            trust_version: 0,
+            ..Default::default()
+        };
+        config
+            .trusted_servers
+            .insert(server.into(), "ab".repeat(32));
+        // JSON 是合法 YAML；保留旧多信任布局以覆盖真实加载迁移。
+        std::fs::write(
+            root.join("config.yaml"),
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .unwrap();
+        let settings = Settings {
+            server: server.into(),
+            connection: ConnectionSettings {
+                transport: "wireguard".into(),
+                limit_mbps: "8".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut legacy = serde_json::to_value(settings).unwrap();
+        legacy.as_object_mut().unwrap().remove("version");
+        std::fs::write(
+            root.join("settings.json"),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+        let engine = Engine::new(root.clone(), Config::default()).unwrap();
+        let settings = engine.settings();
+        assert_eq!(settings.version, 1);
+        assert_eq!(settings.connection.transport, "wireguard");
+        assert_eq!(settings.connection.limit_mbps, "8");
+        assert_eq!(settings.server, server);
+        assert_eq!(engine.bootstrap().trusted_servers.len(), 1);
+        drop(engine);
+
+        let mut config = config::load_from(&root.join("config.yaml")).unwrap();
+        assert_eq!(config.trusted_servers.len(), 1);
+        config
+            .replace_trust("replacement.example", &"cd".repeat(32))
+            .unwrap();
+        config::save_to(&config, &root.join("config.yaml")).unwrap();
+        let engine = Engine::new(root.clone(), Config::default()).unwrap();
+        assert_eq!(engine.settings().server, "wss://replacement.example:4376");
+        assert!(engine.save_settings(settings).is_err());
+        drop(engine);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn settings_persist_and_reject_invalid_or_unapproved_values() {
         let root = std::env::temp_dir().join(format!("hermod-settings-{}", storage::new_id()));
         let engine = Engine::new(root.clone(), Config::default()).unwrap();
         assert!(Engine::new(root.clone(), Config::default()).is_err());
         let mut settings = engine.settings();
-        assert_eq!(settings.connection.limit_mbps, "8");
+        assert_eq!(settings.connection.limit_mbps, "0");
+        assert_eq!(settings.connection.transport, "quic");
         assert_eq!(settings.language, "system");
         // 旧设置没有语言字段时仍可加载，并默认跟随系统。
         let mut legacy = serde_json::to_value(&settings).unwrap();

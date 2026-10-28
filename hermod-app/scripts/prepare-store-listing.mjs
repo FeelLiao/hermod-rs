@@ -66,7 +66,8 @@ try {
       await context.addInitScript(({ locale, dark, version, sampleName, sampleSize, inbox }) => {
         const server = 'wss://oracle.stariverfeel.eu.org:4376';
         let settings = {
-          connection: { transport: 'wireguard', mtu: 'auto', congestion: 'auto', limit_mbps: '8' },
+          version: 2,
+          connection: { transport: 'quic', mtu: 'auto', congestion: 'auto', limit_mbps: '0' },
           receive_transport: 'auto', server, words: 3, verbose: 'none', quiet: false,
           theme: dark ? 'dark' : 'light', language: locale, destination: null,
         };
@@ -75,7 +76,7 @@ try {
           invoke: async (command, args) => {
             switch (command) {
               case 'bootstrap': return {
-                version, ipv6: ['2001:db8::42'], platform: 'windows', settings: structuredClone(settings),
+                version, ipv6: ['2001:db8::42'], ipv4: ['192.168.1.42'], platform: 'windows', settings: structuredClone(settings),
                 settings_saved: true, trusted_servers: { [server]: 'demo-fingerprint-not-for-connections' },
               };
               case 'set_locale': return;

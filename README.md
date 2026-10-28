@@ -3,13 +3,13 @@
 [English](README.md) · [简体中文](README.zh-CN.md)
 
 **Send a file or text directly to another device with a short transfer code.**
-Hermod is an encrypted, peer-to-peer **IPv6** transfer tool written in Rust. Files
+Hermod is an encrypted, peer-to-peer **IPv4 LAN / IPv6** transfer tool written in Rust. Files
 travel between your devices; the signaling server only helps them connect.
 
 - **Desktop GUI:** Tauri 2, React and Microsoft's official Fluent UI React v9 (Fluent 2).
 - **Android GUI:** Tauri with Google’s official Material Design 3 Web components, dynamic colors and adaptive navigation.
 - **Linux CLI:** static musl binaries for terminals and automation.
-- **Two protocols:** WireGuard by default when sending; QUIC is available. Receivers automatically follow the sender.
+- **Two protocols:** GUI sends with QUIC by default; CLI sends with WireGuard. Receivers automatically follow the sender.
 - Files, text, cancellation, progress, adjustable bandwidth, server fingerprint pinning and SHA-256 verification.
 - Runs in userspace: no VPN configuration, TUN interface or administrator privileges for transfers.
 
@@ -33,9 +33,11 @@ and checks the package; it does not run Android emulator or UI tests.
 
 ## Before connecting
 
-**Both peers need reachable IPv6 and permission to exchange UDP traffic.** IPv4-only
-networks, IPv4 NAT traversal and relay transfers are not supported. An IPv6 address
-by itself does not guarantee that your router or firewall permits incoming traffic.
+**Use the same IPv4 LAN or reachable IPv6, and allow peer UDP traffic.** Both
+QUIC and WireGuard support private/link-local IPv4 LAN addresses, including IPv4-only
+networks. Pairing still requires the selected signaling server; offline discovery,
+Internet IPv4 NAT traversal and file relays are not provided. A network address
+by itself does not guarantee that your router or firewall permits peer traffic.
 The default signaling server is `wss://oracle.stariverfeel.eu.org:4376`; its SPKI
 fingerprint is built in. A transfer code becomes usable after the server allocates it.
 
@@ -65,8 +67,15 @@ immediately; original technical logs and unknown diagnostic details remain avail
 Settings cover send/receive protocol, MTU, congestion control, bandwidth, code length,
 server, fingerprint trust, receive folder, log level, reduced notifications, theme and language.
 They persist locally. Each new transfer takes a settings snapshot; saving changes does
-not reconfigure a running connection. The default GUI cap is **8 Mbps**: adjust it to
-your uplink, typically starting at 70–85% of measured upload capacity.
+not reconfigure a running connection. New GUI installations use **QUIC, Auto receive
+and unlimited speed (0)**. Existing preferences are preserved; Settings offers **Use
+new defaults**, followed by Save settings. You can still set a bandwidth cap to keep
+capacity available for other applications.
+
+The encrypted pairing exchange announces the filename, type and size before payload
+transfer. Receivers show the total immediately and reject a conflicting HTTP length
+or metadata. Older peers remain compatible over IPv6; their size is learned from
+HTTP headers. IPv4 LAN transfers require upgraded clients on both devices.
 
 ## Installation and upgrades
 
@@ -141,7 +150,10 @@ explicitly, including after an auto receiver learns the sender's protocol.
 **Custom server trust:** independently obtain the server's SHA-256 SPKI fingerprint,
 then use `hermod trust SERVER --fingerprint HEX` (see `hermod trust --help`). The GUI
 provides Fetch fingerprint and an explicit confirmation; fetching alone is not identity
-verification. Trust and server selection are separate settings. CLI config is
+verification. Each client profile keeps **one trusted server**. Successful verification replaces
+the old trust and selects the new server in one operation; failed verification
+retains the previous configuration. Old trust lists migrate to the selected server.
+`--server` must match that single trusted address. CLI config is
 `$XDG_CONFIG_HOME/hermod/config.yaml`, or `~/.config/hermod/config.yaml` by default;
 GUI config and verified inbox are in the platform's application data directory.
 
@@ -152,7 +164,7 @@ GUI config and verified inbox are in the platform's application data directory.
 | `--wg-mtu N` | `--transport wireguard --mtu N` |
 | `--quic-mtu N` | `--transport quic --mtu N` (now a hard discovery ceiling) |
 | `--quic-cc ALGORITHM` | `--transport quic --congestion ALGORITHM` |
-| `--listen ADDRESS` / bind address | Automatic `[::]:0`; no public binding control |
+| `--listen ADDRESS` / bind address | Automatic dual-stack binding with IPv4 fallback; no public binding control |
 | `serve` placeholder | Removed; run a compatible signaling server separately |
 
 Desktop uses Fluent 2; Android uses Material Design 3 Web. Both use the same React
@@ -162,7 +174,7 @@ are migrated on first launch when possible; private verified inbox data is retai
 
 ## Troubleshooting and development
 
-- **Code cannot connect:** check both peers' IPv6 routing, signaling reachability,
+- **Code cannot connect:** check both peers' IPv4 LAN/IPv6 routing, signaling reachability,
   UDP firewall rules, complete code and compatible forced protocols.
 - **Browsing slows while sending:** lower `--limit-mbps` / GUI bandwidth. A saturated
   upload can queue browsing requests; see [performance and latency](NETWORK_PERFORMANCE.md).

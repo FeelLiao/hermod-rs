@@ -20,7 +20,7 @@ pub async fn run(
     args: RxArgs,
     abort_slot: util::AbortSlot,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cfg = config::load().unwrap_or_default();
+    let mut cfg = config::load().map_err(util::boxed)?;
     if let Some(s) = &args.server {
         cfg.server_url = config::normalize_server_url(s).map_err(util::boxed)?;
     }
@@ -51,6 +51,7 @@ pub async fn run(
     let mut speed = progress::Speed::new();
     let mut on_progress = move |n: u64| {
         let rate = speed.update(n);
+        pb2.set_position(n);
         pb2.set_message(format!(
             "{} ({}/s)",
             indicatif::HumanBytes(n),
@@ -59,12 +60,28 @@ pub async fn run(
         got2.store(n, Ordering::Relaxed);
         let _ = tick_tx.try_send(());
     };
-    let fut = orchestrate::receive_with_limit(
+    let mut on_metadata = |offer: &hermod_core::transfer::TransferOffer| {
+        pb.set_length(offer.size);
+        pb.set_style(
+            indicatif::ProgressStyle::with_template(
+                "{bar:40} {bytes}/{total_bytes} {bytes_per_sec} ({eta})",
+            )
+            .unwrap(),
+        );
+    };
+    if let Some(offer) = &rx.offer {
+        on_metadata(offer);
+    }
+    let fut = orchestrate::receive_with_options(
         &mut rx.conn,
         &rx.token,
         Path::new(&dest),
-        Some(&mut on_progress),
-        args.network.limit_mbps,
+        orchestrate::ReceiveOptions {
+            limit: args.network.limit_mbps,
+            expected: rx.offer.as_ref(),
+            metadata: Some(&mut on_metadata),
+            progress: Some(&mut on_progress),
+        },
     );
     let receipt = match progress::with_idle_timeout(fut, tick_rx, IDLE).await {
         Ok(Ok(r)) => r,

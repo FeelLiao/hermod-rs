@@ -4,11 +4,11 @@
   "storeId": "9PMPWN3HMR3M",
   "locales": {
     "zh-CN": {
-      "shortDescription": "用传输码连接设备，通过 IPv6 加密直传文件与文本。支持 SHA-256 校验、私有收件箱和可调限速。",
-      "description": "把文件和文本，直接传到另一台设备。\n\nHermodTransfer 是一款使用 IPv6 的加密点对点传输工具。选择文件或输入文本，将传输码分享给接收方，即可建立连接。文件在双方设备之间传输，信令服务器负责协助连接。\n\n传输完成后，HermodTransfer 使用 SHA-256 校验文件内容。接收文件保存在私有收件箱，你可以查看并另存到指定位置。即使导出失败，已验证的收件箱副本仍会保留，方便稍后重试。文本以文本文件的形式接收。\n\n按你的网络情况调整传输限速，让上行带宽为其他应用留出余量。发送默认使用 WireGuard，接收自动跟随发送方；高级设置还支持 QUIC、MTU 和拥塞控制。你可以查看进度、复制传输码或随时取消当前任务。\n\n桌面界面支持简体中文、英文、跟随系统语言，以及浅色和深色主题。Windows 版提供 x64 与 ARM64 架构，并可与使用兼容版本 HermodTransfer 的其他设备传输。\n\n连接要求：双方设备都需要可达的 IPv6，并允许传输所需的 UDP 流量及信令连接。当前不支持 IPv4-only 网络、文件中转或断点续传。实际速度取决于双方带宽、网络路径和限速设置。传输期间请保持应用运行，并仅向接收方分享传输码。卸载应用前，请先导出收件箱中的重要文件。",
+      "shortDescription": "用传输码连接设备，通过 IPv4 局域网或 IPv6 加密直传文件与文本。支持 SHA-256 校验、私有收件箱和可调限速。",
+      "description": "把文件和文本，直接传到另一台设备。\n\nHermodTransfer 是一款支持 IPv4 局域网和 IPv6 的加密点对点传输工具。选择文件或输入文本，将传输码分享给接收方，即可建立连接。文件在双方设备之间传输，信令服务器负责协助连接。\n\n传输完成后，HermodTransfer 使用 SHA-256 校验文件内容。接收文件保存在私有收件箱，你可以查看并另存到指定位置。即使导出失败，已验证的收件箱副本仍会保留，方便稍后重试。文本以文本文件的形式接收。\n\n按你的网络情况调整传输限速，让上行带宽为其他应用留出余量。发送默认使用 QUIC 且不限速，接收自动跟随发送方；高级设置还支持 WireGuard、MTU 和拥塞控制。你可以查看进度、复制传输码或随时取消当前任务。\n\n桌面界面支持简体中文、英文、跟随系统语言，以及浅色和深色主题。Windows 版提供 x64 与 ARM64 架构，并可与使用兼容版本 HermodTransfer 的其他设备传输。\n\n连接要求：双方设备需处于同一 IPv4 局域网或具有可达的 IPv6，并允许传输所需的 UDP 流量及信令连接。IPv4 局域网传输需要双方使用升级版本。当前不支持离线配对、互联网 IPv4 NAT 打洞、文件中转或断点续传。实际速度取决于双方带宽、网络路径和限速设置。传输期间请保持应用运行，并仅向接收方分享传输码。卸载应用前，请先导出收件箱中的重要文件。",
       "features": [
         "通过传输码连接，发送文件或文本",
-        "基于 IPv6 的加密点对点直传",
+        "基于 IPv4 局域网 / IPv6 的加密点对点直传",
         "SHA-256 完整性校验",
         "私有收件箱，支持另存已验证副本",
         "可调传输限速，兼顾其他网络应用",
@@ -22,14 +22,14 @@
         "Windows 10 版本 2004 或更新版本，或 Windows 11",
         "x64 或 ARM64 处理器",
         "Microsoft Edge WebView2 Runtime",
-        "发送与接收设备均具备可达的 IPv6",
+        "双方处于同一 IPv4 局域网，或均具备可达的 IPv6",
         "网络和防火墙允许对端 UDP 流量及信令服务器连接"
       ],
       "updateNotes": "修正 Windows 商店显示名称为已保留的 HermodTransfer。将 x64 和 ARM64 合并为一个 MSIXBundle，商店按设备选择对应架构。支持简体中文、英文和系统语言选择。",
       "screenshots": [
         {
           "file": "01-send-file.png",
-          "caption": "选择文件，通过加密的 IPv6 直连发送给另一台设备。"
+          "caption": "选择文件，通过加密的 IPv4 局域网或 IPv6 连接发送给另一台设备。"
         },
         {
           "file": "02-share-code.png",
@@ -54,11 +54,11 @@
       ]
     },
     "en-US": {
-      "shortDescription": "Connect with a transfer code and send files or text directly over encrypted IPv6. Includes SHA-256 verification, a private inbox and adjustable bandwidth limits.",
-      "description": "Send files and text directly to another device.\n\nHermodTransfer is an encrypted, peer-to-peer transfer app built for IPv6. Choose a file or enter a message, share the transfer code with your recipient, and connect. File data travels between the two devices; the signaling server helps them establish the connection.\n\nHermodTransfer checks transferred content with SHA-256. Received files stay in a private inbox, ready to save to a location you choose. If an export fails, the verified inbox copy is retained so you can try again. Messages arrive as text files.\n\nAdjust the transfer limit to leave upload capacity for other apps. Send with WireGuard by default and let the receiver follow the sender automatically. Advanced settings also offer QUIC, MTU and congestion control options. View progress, copy the transfer code and cancel the current task when needed.\n\nThe desktop interface supports English and Simplified Chinese, system language selection, and light or dark themes. Windows builds support x64 and ARM64 devices and can transfer with other devices running compatible versions of HermodTransfer.\n\nConnection requirements: both devices need reachable IPv6, permission to exchange UDP traffic, and access to the signaling server. IPv4-only networks, file relays and transfer resumption are not supported. Actual speed depends on both connections, the network path and your bandwidth settings. Keep the app running during a transfer and share the code only with your recipient. Export important inbox files before uninstalling the app.",
+      "shortDescription": "Connect with a transfer code and send files or text directly over encrypted IPv4 LAN or IPv6 connections. Includes SHA-256 verification, a private inbox and adjustable bandwidth limits.",
+      "description": "Send files and text directly to another device.\n\nHermodTransfer is an encrypted, peer-to-peer transfer app for IPv4 LANs and IPv6. Choose a file or enter a message, share the transfer code with your recipient, and connect. File data travels between the two devices; the signaling server helps them establish the connection.\n\nHermodTransfer checks transferred content with SHA-256. Received files stay in a private inbox, ready to save to a location you choose. If an export fails, the verified inbox copy is retained so you can try again. Messages arrive as text files.\n\nAdjust the transfer limit to leave upload capacity for other apps. Send with QUIC and unlimited bandwidth by default, and let the receiver follow the sender automatically. Advanced settings also offer WireGuard, MTU and congestion control options. View progress, copy the transfer code and cancel the current task when needed.\n\nThe desktop interface supports English and Simplified Chinese, system language selection, and light or dark themes. Windows builds support x64 and ARM64 devices and can transfer with other devices running compatible versions of HermodTransfer.\n\nConnection requirements: both devices need the same IPv4 LAN or reachable IPv6, permission to exchange UDP traffic, and access to the signaling server. IPv4 LAN transfers require upgraded clients on both devices. Offline pairing, Internet IPv4 NAT traversal, file relays and transfer resumption are not supported. Actual speed depends on both connections, the network path and your bandwidth settings. Keep the app running during a transfer and share the code only with your recipient. Export important inbox files before uninstalling the app.",
       "features": [
         "Connect with a transfer code to send files or text",
-        "Encrypted peer-to-peer transfers over IPv6",
+        "Encrypted peer-to-peer transfers over IPv4 LAN or IPv6",
         "SHA-256 integrity verification",
         "Private inbox with exportable verified copies",
         "Adjustable bandwidth limits to leave room for other apps",
@@ -72,14 +72,14 @@
         "Windows 10 version 2004 or newer, or Windows 11",
         "x64 or ARM64 processor",
         "Microsoft Edge WebView2 Runtime",
-        "Reachable IPv6 on both the sending and receiving devices",
+        "The same IPv4 LAN or reachable IPv6 on both devices",
         "Network and firewall rules allowing peer UDP traffic and signaling server access"
       ],
       "updateNotes": "Corrected the Windows Store display name to the reserved HermodTransfer name. Bundled x64 and ARM64 into a single MSIXBundle; the Store delivers the matching architecture. Supports English, Simplified Chinese and system language selection.",
       "screenshots": [
         {
           "file": "01-send-file.png",
-          "caption": "Choose a file to send directly to another device over an encrypted IPv6 connection."
+          "caption": "Choose a file to send directly to another device over an encrypted IPv4 LAN or IPv6 connection."
         },
         {
           "file": "02-share-code.png",

@@ -27,6 +27,9 @@ pub struct TlsConfig {
 /// 顶层配置（对应 Go `Config`）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
+    /// 旧配置迁移标记；新配置只保留当前服务器的信任记录。
+    #[serde(default)]
+    pub trust_version: u8,
     #[serde(rename = "server_url", default = "default_server_url")]
     pub server_url: String,
     #[serde(rename = "tls_configuration", default = "default_tls_config")]
@@ -43,11 +46,7 @@ pub struct Config {
         skip_serializing_if = "String::is_empty"
     )]
     pub server_key_pem: String,
-    #[serde(
-        rename = "trusted_servers",
-        default = "default_trusted_servers",
-        skip_serializing_if = "BTreeMap::is_empty"
-    )]
+    #[serde(rename = "trusted_servers", default = "default_trusted_servers")]
     pub trusted_servers: BTreeMap<String, String>,
 }
 
@@ -62,12 +61,50 @@ impl Default for Config {
     /// 应用默认值：默认 server 为 [`DEFAULT_SERVER_URL`]，并内置信任其指纹。
     fn default() -> Self {
         Config {
+            trust_version: 1,
             server_url: default_server_url(),
             tls: default_tls_config(),
             server_cert_pem: String::new(),
             server_key_pem: String::new(),
             trusted_servers: default_trusted_servers(),
         }
+    }
+}
+
+impl Config {
+    /// 指纹验证完成后一次性替换服务器和信任，保留旧 YAML 字段以便升级。
+    pub fn replace_trust(&mut self, server: &str, fingerprint: &str) -> Result<(), ConfigError> {
+        let url = normalize_server_url(server)?;
+        if fingerprint.len() != 64 || !fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(ConfigError::InvalidFingerprint);
+        }
+        self.server_url = url.clone();
+        self.trusted_servers = BTreeMap::from([(url, fingerprint.to_ascii_lowercase())]);
+        self.trust_version = 1;
+        Ok(())
+    }
+
+    /// 迁移时按实际选中的服务器收敛；缺少匹配指纹时保持未信任状态。
+    pub fn retain_active_trust(&mut self) -> Result<(), ConfigError> {
+        self.server_url = normalize_server_url(&self.server_url)?;
+        let mut active = None;
+        for (url, fingerprint) in &self.trusted_servers {
+            if normalize_server_url(url).ok().as_ref() == Some(&self.server_url) {
+                if active
+                    .as_ref()
+                    .is_some_and(|value: &String| !value.eq_ignore_ascii_case(fingerprint))
+                {
+                    return Err(ConfigError::InvalidFingerprint);
+                }
+                active = Some(fingerprint.clone());
+            }
+        }
+        self.trusted_servers.clear();
+        if let Some(fingerprint) = active {
+            self.replace_trust(&self.server_url.clone(), &fingerprint)?;
+        }
+        self.trust_version = 1;
+        Ok(())
     }
 }
 
@@ -143,11 +180,23 @@ pub fn save(cfg: &Config) -> Result<(), ConfigError> {
 
 /// 从指定路径读（测试用）；文件不存在 → 默认值。
 pub fn load_from(p: &Path) -> Result<Config, ConfigError> {
+    load_selected(p, None)
+}
+
+/// GUI 的旧地址在 settings.json 中；必须先选择地址，再收敛旧信任列表。
+pub fn load_selected(p: &Path, selected: Option<&str>) -> Result<Config, ConfigError> {
     if !p.exists() {
         return Ok(Config::default());
     }
     let data = std::fs::read_to_string(p).map_err(ConfigError::Read)?;
-    serde_yaml::from_str(&data).map_err(ConfigError::Parse)
+    let mut config: Config = serde_yaml::from_str(&data).map_err(ConfigError::Parse)?;
+    if config.trust_version == 0
+        && let Some(server) = selected
+    {
+        config.server_url = server.into();
+    }
+    config.retain_active_trust()?;
+    Ok(config)
 }
 
 /// 写到指定路径（测试用）；权限 0600。
@@ -155,8 +204,31 @@ pub fn save_to(cfg: &Config, p: &Path) -> Result<(), ConfigError> {
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent).map_err(ConfigError::Write)?;
     }
-    let data = serde_yaml::to_string(cfg).map_err(ConfigError::Serialize)?;
-    std::fs::write(p, data).map_err(ConfigError::Write)
+    let mut cfg = cfg.clone();
+    cfg.retain_active_trust()?;
+    let data = serde_yaml::to_string(&cfg).map_err(ConfigError::Serialize)?;
+    // 独占临时文件并原子替换，失败不会破坏已信任的配置。
+    use std::io::Write;
+    let mut random = [0u8; 8];
+    getrandom::fill(&mut random).map_err(|e| ConfigError::Write(std::io::Error::other(e)))?;
+    let temporary = p.with_extension(format!("{}.tmp", crate::transfer::hex(&random)));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| {
+        let mut file = options.open(&temporary)?;
+        file.write_all(data.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, p)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result.map_err(ConfigError::Write)
 }
 
 /// 把 server URL 规范成 `scheme://host:port`（对应 Go `NormalizeServerURL`）：
@@ -222,6 +294,8 @@ fn split_host_port(authority: &str) -> (&str, Option<&str>) {
 /// 配置错误。
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
+    #[error("Invalid or conflicting server fingerprint")]
+    InvalidFingerprint,
     #[error("read config: {0}")]
     Read(#[from] std::io::Error),
     #[error("write config: {0}")]
@@ -241,6 +315,46 @@ pub enum ConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migration_and_replacement_keep_only_the_selected_trust() {
+        let path = temp_path("single-trust");
+        let mut config = Config {
+            trust_version: 0,
+            ..Config::default()
+        };
+        config
+            .trusted_servers
+            .insert("wss://custom:4376".into(), "ab".repeat(32));
+        std::fs::write(&path, serde_yaml::to_string(&config).unwrap()).unwrap();
+        let mut migrated = load_selected(&path, Some("custom")).unwrap();
+        assert_eq!(migrated.server_url, "wss://custom:4376");
+        assert_eq!(migrated.trusted_servers.len(), 1);
+        let previous = migrated.clone();
+        assert!(migrated.replace_trust("replacement", "invalid").is_err());
+        assert_eq!(migrated, previous);
+        migrated
+            .replace_trust("replacement", &"CD".repeat(32))
+            .unwrap();
+        save_to(&migrated, &path).unwrap();
+        // 新配置以原子保存的服务器为准，不再被旧 settings.json 的地址覆盖。
+        let loaded = load_selected(&path, Some("custom")).unwrap();
+        assert_eq!(loaded, migrated);
+        assert_eq!(loaded.trusted_servers.len(), 1);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn saving_empty_trust_does_not_restore_the_builtin_fingerprint() {
+        let path = temp_path("empty-trust");
+        let config = Config {
+            trusted_servers: BTreeMap::new(),
+            ..Default::default()
+        };
+        save_to(&config, &path).unwrap();
+        assert_eq!(load_from(&path).unwrap(), config);
+        std::fs::remove_file(path).unwrap();
+    }
 
     fn temp_path(tag: &str) -> PathBuf {
         use std::sync::atomic::{AtomicU32, Ordering};

@@ -17,6 +17,7 @@
 //!
 //! 本模块不引用 `transport::wireguard` 的任何类型：endpoint 格式见
 //! [crate::transport::quic::bundle]，IPv6 候选见 [crate::transport::quic::addr]，
+//! IPv4 候选与双栈 socket 见 [crate::transport::network]，
 //! 证书/握手见 [crate::transport::quic::auth]。
 
 use crate::crypto::cpace::Role;
@@ -29,10 +30,9 @@ use crate::transport::quic::auth::{self, Identity};
 use crate::transport::quic::bundle::{QUIC_ENDPOINT_VERSION, QuicEndpoint};
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use quinn::VarInt;
-use socket2::{Domain, Socket, Type};
 use std::future::Future;
 use std::io;
-use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
+use std::net::{Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -59,8 +59,6 @@ const KEEPALIVE: Duration = Duration::from_secs(10);
 const INITIAL_RTT: Duration = Duration::from_millis(100);
 /// 单条流的接收窗口 / 连接总接收窗口 / 发送窗口。
 const IO_WINDOW: u64 = 64 * 1024 * 1024;
-/// UDP socket 收发缓冲（内核可能截断）。
-const SOCKET_BUF: usize = 8 * 1024 * 1024;
 /// QUIC 初始 UDP payload 下限（RFC 9000 要求至少 1200）。
 const DEFAULT_MTU: u16 = 1200;
 /// 以太网内常见 IPv6 UDP payload 上限（1500 - 40 - 8）。
@@ -142,7 +140,7 @@ pub struct QuicTransport {
     socket: Option<std::net::UdpSocket>,
     identity: Option<Identity>,
     credential_fingerprint: [u8; 32],
-    bind: Option<SocketAddrV6>,
+    bind: Option<SocketAddr>,
     server_hint: Option<Ipv6Addr>,
     bandwidth_limit: crate::bandwidth::BandwidthLimit,
     congestion: CongestionControl,
@@ -167,7 +165,7 @@ impl QuicTransport {
     }
 
     /// 设置 UDP 绑定地址（内部测试用；默认 `[::]:0`）。
-    pub fn set_udp_bind(&mut self, addr: Option<SocketAddrV6>) {
+    pub fn set_udp_bind(&mut self, addr: Option<SocketAddr>) {
         self.bind = addr;
     }
 
@@ -211,31 +209,25 @@ impl Transport for QuicTransport {
     }
 
     async fn prepare(&mut self) -> Result<Vec<u8>, QuicError> {
-        let bind = self
-            .bind
-            .unwrap_or_else(|| SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
-        let socket = bind_udp(bind)?;
-        let udp_port = socket.local_addr()?.port();
+        let socket = crate::transport::network::bind_udp(self.bind)?;
+        let bound = socket.local_addr()?;
+        let udp_port = bound.port();
         let identity = Identity::generate()?;
-
-        // 候选顺序：显式绑定地址（测试/指定网卡）→ server 观测地址 → 本地枚举。
         let mut candidates = addr::enumerate_local_ipv6();
-        if !bind.ip().is_unspecified() {
-            let ip = *bind.ip();
-            candidates.retain(|a| *a != ip);
-            candidates.insert(0, ip);
-        }
         if let Some(hint) = self.server_hint
             && addr::classify(&hint).is_some()
         {
-            candidates.retain(|a| *a != hint);
+            candidates.retain(|address| *address != hint);
             candidates.insert(0, hint);
         }
+        let (candidates, ipv4_candidates) =
+            crate::transport::network::candidates(bound, candidates);
 
         let bundle = QuicEndpoint {
             version: QUIC_ENDPOINT_VERSION,
             udp_port,
             ipv6_candidates: candidates.clone(),
+            ipv4_candidates: ipv4_candidates.clone(),
             cert_fingerprint: identity.fingerprint,
             credential_fingerprint: self.credential_fingerprint,
         };
@@ -245,6 +237,7 @@ impl Transport for QuicTransport {
             congestion = %self.congestion,
             initial_mtu = self.initial_mtu,
             candidates = ?candidates,
+            ipv4_candidates = ?ipv4_candidates,
             cert_fingerprint = %identity.fingerprint_hex(),
             "QUIC transport prepared"
         );
@@ -275,16 +268,12 @@ impl Transport for QuicTransport {
         let identity = self.identity.take().ok_or(QuicError::NotPrepared)?;
         let peer_fingerprint = peer.cert_fingerprint;
         let credential_fingerprint = self.credential_fingerprint;
-        let peer_addrs: Vec<SocketAddrV6> = peer
-            .ipv6_candidates
-            .iter()
-            .map(|ip| SocketAddrV6::new(*ip, peer.udp_port, 0, 0))
-            .collect();
-        if peer_addrs.is_empty() {
-            return Err(QuicError::Handshake(
-                "peer advertised no IPv6 candidates".into(),
-            ));
-        }
+        let peer_addrs = crate::transport::network::peer_addresses(
+            &peer.ipv6_candidates,
+            &peer.ipv4_candidates,
+            peer.udp_port,
+            socket.local_addr()?,
+        )?;
 
         let transport = transport_config_with_limit(
             self.congestion,
@@ -330,7 +319,13 @@ impl Transport for QuicTransport {
                 // 有状态防火墙的返回路径（WireGuard 的「双方同时发」等价物）。
                 for _ in 0..3 {
                     for addr in &peer_addrs {
-                        let _ = socket.send_to(b"hermod-quic-pinhole", addr);
+                        let _ = socket.send_to(
+                            b"hermod-quic-pinhole",
+                            crate::transport::network::for_socket(
+                                *addr,
+                                socket.local_addr()?.is_ipv6(),
+                            ),
+                        );
                     }
                 }
                 let tls = auth::server_config(&identity)?;
@@ -642,19 +637,19 @@ impl AsyncWrite for QuicStream {
 async fn connect_task(
     endpoint: quinn::Endpoint,
     config: quinn::ClientConfig,
-    addrs: Vec<SocketAddrV6>,
+    addrs: Vec<SocketAddr>,
     tx: oneshot::Sender<Result<quinn::Connection, QuicError>>,
 ) {
     let mut attempts = FuturesUnordered::new();
     for addr in addrs {
-        match endpoint.connect_with(config.clone(), SocketAddr::V6(addr), auth::SERVER_NAME) {
+        match endpoint.connect_with(config.clone(), addr, auth::SERVER_NAME) {
             Ok(connecting) => attempts.push(async move { (addr, connecting.await) }),
             Err(e) => crate::log_warn!(addr = %addr, error = %e, "QUIC connect setup failed"),
         }
     }
     if attempts.is_empty() {
         let _ = tx.send(Err(QuicError::Handshake(
-            "no usable IPv6 candidates".into(),
+            "no usable IPv4/IPv6 candidates".into(),
         )));
         return;
     }
@@ -669,7 +664,7 @@ async fn connect_task(
                 Err(e) => crate::log_warn!(peer = %addr, error = %e, "QUIC candidate failed"),
             }
         }
-        Err(QuicError::Handshake("all IPv6 candidates failed".into()))
+        Err(QuicError::Handshake("all IPv4/IPv6 candidates failed".into()))
     })
     .await;
 
@@ -756,32 +751,15 @@ fn transport_config_with_limit(
     Arc::new(config)
 }
 
-/// 绑定 IPv6-only UDP socket，并尽量放大内核收发缓冲。
-fn bind_udp(addr: SocketAddrV6) -> io::Result<std::net::UdpSocket> {
-    let socket = Socket::new(Domain::IPV6, Type::DGRAM, None)?;
-    socket.set_only_v6(true)?;
-    socket.set_nonblocking(true)?;
-    // 默认 ~208 KiB 的 UDP 缓冲在高吞吐下会直接丢包，误导拥塞控制。
-    let _ = socket.set_recv_buffer_size(SOCKET_BUF);
-    let _ = socket.set_send_buffer_size(SOCKET_BUF);
-    socket.bind(&SocketAddr::V6(addr).into())?;
-    crate::log_info!(
-        local = %addr,
-        recv_buffer = ?socket.recv_buffer_size().ok(),
-        send_buffer = ?socket.send_buffer_size().ok(),
-        "QUIC UDP socket bound"
-    );
-    Ok(socket.into())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::SocketAddrV6;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn loopback_transport() -> QuicTransport {
         let mut t = QuicTransport::new();
-        t.set_udp_bind(Some(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0)));
+        t.set_udp_bind(Some(SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0).into()));
         t
     }
 

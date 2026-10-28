@@ -11,6 +11,15 @@ use crate::transport::http::{HttpError, ResponseHead, write_request};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
+/// 接收端统一观察接口：先报告元数据，再报告字节进度。
+#[derive(Default)]
+pub struct ReceiveOptions<'a> {
+    pub limit: BandwidthLimit,
+    pub expected: Option<&'a transfer::TransferOffer>,
+    pub metadata: Option<&'a mut (dyn FnMut(&transfer::TransferOffer) + Send)>,
+    pub progress: Option<&'a mut (dyn FnMut(u64) + Send)>,
+}
+
 /// 拉取结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchOutcome {
@@ -45,13 +54,43 @@ pub async fn fetch_with_limit<S, D>(
     stream: S,
     token: &[u8; 16],
     dest: &mut D,
-    mut progress: Option<&mut (dyn FnMut(u64) + Send)>,
+    progress: Option<&mut (dyn FnMut(u64) + Send)>,
     limit: BandwidthLimit,
 ) -> Result<FetchOutcome, HttpError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
     D: AsyncWrite + Unpin,
 {
+    fetch_with_options(
+        stream,
+        token,
+        dest,
+        ReceiveOptions {
+            limit,
+            progress,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+/// 新旧发送端共用 HTTP 校验；不一致时在写入载荷前拒绝。
+pub async fn fetch_with_options<S, D>(
+    stream: S,
+    token: &[u8; 16],
+    dest: &mut D,
+    options: ReceiveOptions<'_>,
+) -> Result<FetchOutcome, HttpError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    D: AsyncWrite + Unpin,
+{
+    let ReceiveOptions {
+        limit,
+        expected,
+        mut metadata,
+        mut progress,
+    } = options;
     let pacer = Pacer::new(limit);
     let (r, mut w) = tokio::io::split(stream);
     let mut reader = BufReader::new(r);
@@ -87,6 +126,21 @@ where
         head.content_length()
             .ok_or_else(|| HttpError::Malformed("missing Content-Length".into()))? as u64;
     crate::log_info!(status = head.status, size, filename = %name, "response headers");
+
+    let offer = transfer::TransferOffer {
+        kind,
+        name: name.clone(),
+        size,
+    };
+    offer.validate().map_err(HttpError::Malformed)?;
+    if expected.is_some_and(|expected| expected != &offer) {
+        return Err(HttpError::Malformed(
+            "Transfer metadata does not match the encrypted offer".into(),
+        ));
+    }
+    if let Some(callback) = metadata.as_mut() {
+        callback(&offer);
+    }
 
     // 2) 边收边算 SHA-256，写入目标
     let mut hasher = Sha256::new();
@@ -167,4 +221,72 @@ where
         sha256,
         verified: verdict.status == 200,
     })
+}
+
+#[cfg(test)]
+mod offer_tests {
+    use super::*;
+    use crate::transport::http::server::{ServeOptions, serve};
+
+    #[tokio::test]
+    async fn old_sender_headers_report_size_and_mismatches_write_nothing() {
+        for mismatch in [false, true] {
+            let (sender, receiver) = tokio::io::duplex(4096);
+            let offer = transfer::TransferOffer {
+                kind: Kind::File,
+                name: "file.bin".into(),
+                size: 3,
+            };
+            let expected = transfer::TransferOffer {
+                size: 4,
+                ..offer.clone()
+            };
+            let mut announced = None;
+            let mut metadata = |value: &transfer::TransferOffer| {
+                announced = Some(value.clone());
+            };
+            let mut output = Vec::new();
+            let send = Box::pin(serve(
+                sender,
+                ServeOptions {
+                    token: [3; 16],
+                    kind: Kind::File,
+                    name: offer.name.clone(),
+                    size: 3,
+                    body: Box::new(std::io::Cursor::new(b"abc".to_vec())),
+                    progress: None,
+                },
+            ));
+            let receive = Box::pin(fetch_with_options(
+                receiver,
+                &[3; 16],
+                &mut output,
+                ReceiveOptions {
+                    expected: mismatch.then_some(&expected),
+                    metadata: Some(&mut metadata),
+                    ..Default::default()
+                },
+            ));
+            let (sent, received) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                tokio::join!(send, receive)
+            })
+            .await
+            .unwrap();
+            if mismatch {
+                assert!(
+                    received
+                        .unwrap_err()
+                        .to_string()
+                        .contains("encrypted offer")
+                );
+                assert!(output.is_empty());
+                assert!(announced.is_none());
+                assert!(sent.is_err());
+            } else {
+                assert!(received.unwrap().verified && sent.unwrap().verified);
+                assert_eq!(announced, Some(offer));
+                assert_eq!(output, b"abc");
+            }
+        }
+    }
 }

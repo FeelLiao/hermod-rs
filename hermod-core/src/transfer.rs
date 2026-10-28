@@ -60,6 +60,24 @@ pub struct Metadata {
     pub sha256: String,
 }
 
+/// 在加密端点交换阶段预告载荷；不包含本地路径或文件内容。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransferOffer {
+    pub kind: Kind,
+    pub name: String,
+    pub size: u64,
+}
+
+impl TransferOffer {
+    pub fn validate(&self) -> Result<(), String> {
+        crate::http_meta::content_disposition(&self.name).map_err(|e| e.to_string())?;
+        if self.size > i64::MAX as u64 {
+            return Err("File size exceeds the supported range".into());
+        }
+        Ok(())
+    }
+}
+
 /// 序列化元数据为 JSON 字节（对应 Go `EncodeMetadata`）。
 pub fn encode_metadata(m: &Metadata) -> Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec(m)

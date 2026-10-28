@@ -22,6 +22,7 @@
 
 pub mod http;
 pub mod iface;
+pub mod network;
 pub mod quic;
 pub mod wireguard;
 
@@ -33,7 +34,7 @@ pub use quic::transport::{CongestionControl, QuicConnection, QuicError, QuicTran
 pub use wireguard::transport::{WgConnection, WgError, WireGuardTransport};
 
 use crate::crypto::cpace::Role;
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::{Ipv6Addr, SocketAddr};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// 两个传输实现统一的错误类型。
@@ -71,7 +72,7 @@ impl AnyTransport {
     }
 
     /// UDP 绑定地址（内部测试用）。
-    pub fn set_udp_bind(&mut self, addr: Option<SocketAddrV6>) {
+    pub fn set_udp_bind(&mut self, addr: Option<SocketAddr>) {
         match self {
             AnyTransport::WireGuard(t) => t.set_udp_bind(addr),
             AnyTransport::Quic(t) => t.set_udp_bind(addr),

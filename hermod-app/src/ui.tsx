@@ -1,5 +1,11 @@
 // 两个平台共用页面；这个适配层只负责官方控件和事件签名的差异。
-import React, { createContext, useContext, useEffect, useId } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useState,
+} from "react";
 import * as F from "@fluentui/react-components";
 import "@material/web/button/filled-button.js";
 import "@material/web/button/outlined-button.js";
@@ -21,9 +27,21 @@ import {
   applyTheme,
 } from "@material/material-color-utilities";
 import "./material.css";
+import { reducedMotion } from "./motion";
 
 const Platform = createContext(false);
 const FieldLabel = createContext("");
+const AccordionState = createContext({ open: false, id: "", toggle: () => {} });
+function useReducedMotion() {
+  const [reduce, setReduce] = useState(reducedMotion);
+  useEffect(() => {
+    const media = matchMedia("(prefers-reduced-motion: reduce)");
+    const changed = () => setReduce(media.matches);
+    media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, []);
+  return reduce;
+}
 const h = React.createElement;
 export const webDarkTheme = F.webDarkTheme;
 export const webLightTheme = F.webLightTheme;
@@ -41,6 +59,7 @@ export function UiProvider({
   className: string;
 }) {
   useEffect(() => {
+    document.documentElement.dataset.ui = android ? "material" : "fluent";
     if (android)
       applyTheme(themeFromSourceColor(argbFromHex(seed ?? "#385ca8")), {
         target: document.documentElement,
@@ -208,17 +227,52 @@ export const Spinner = adapt(F.Spinner, ({ label }) => (
 export const Accordion = adapt(F.Accordion, ({ children }) => (
   <div>{children}</div>
 ));
-export const AccordionItem = adapt(F.AccordionItem, ({ children }) => (
-  <details className="md-details">{children}</details>
-));
-export const AccordionHeader = adapt(F.AccordionHeader, ({ children }) => (
-  <summary role="button">{children as React.ReactNode}</summary>
-));
+export const AccordionItem = adapt(F.AccordionItem, ({ children }) => {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <AccordionState.Provider
+      value={{ open, id, toggle: () => setOpen((value) => !value) }}
+    >
+      <section className="md-details">{children}</section>
+    </AccordionState.Provider>
+  );
+});
+export const AccordionHeader = adapt(F.AccordionHeader, ({ children }) => {
+  const { open, id, toggle } = useContext(AccordionState);
+  return (
+    <button
+      className="md-details-header"
+      aria-expanded={open}
+      aria-controls={id}
+      onClick={toggle}
+    >
+      {children as React.ReactNode}
+      <span className="md-chevron" aria-hidden="true">
+        ⌄
+      </span>
+    </button>
+  );
+});
 export const AccordionPanel = adapt(
   F.AccordionPanel,
-  ({ children, className }) => (
-    <div className={className}>{children as React.ReactNode}</div>
-  ),
+  ({ children, className }) => {
+    const { open, id } = useContext(AccordionState);
+    return (
+      <div
+        className="md-collapse"
+        data-open={open}
+        inert={!open}
+        aria-hidden={!open}
+      >
+        <div className="md-collapse-inner">
+          <div id={id} className={className}>
+            {children as React.ReactNode}
+          </div>
+        </div>
+      </div>
+    );
+  },
 );
 export const Tab = F.Tab;
 export const TabList = adapt(
@@ -311,6 +365,7 @@ export const Dialog = adapt(F.Dialog, ({ open, onOpenChange, children }) =>
     "md-dialog",
     {
       open,
+      quick: useReducedMotion(),
       "aria-hidden": !open,
       inert: !open,
       oncancel: (e: Event) => {

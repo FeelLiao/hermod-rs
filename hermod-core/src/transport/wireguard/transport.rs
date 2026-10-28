@@ -2,7 +2,7 @@
 //! 组装成 [`Transport`] / [`TransportConnection`]。
 //!
 //! 生命周期（DEVELOPMENT.md §3.2 步骤 5–7）：
-//! 1. [`WireGuardTransport::prepare`]：绑 UDP、生成临时 X25519、枚举本机 IPv6，
+//! 1. [`WireGuardTransport::prepare`]：绑 UDP、生成临时 X25519、枚举本机 IPv4/IPv6，
 //!    返回加密 bundle 的明文（由上层用 CPace 密钥 AEAD 加密后经会合层交换）；
 //! 2. [`WireGuardTransport::establish`]：解析对端 bundle、建会话、起驱动任务，
 //!    返回 [`WgConnection`]；
@@ -69,7 +69,7 @@ pub struct WireGuardTransport {
     mtu: usize,
     congestion: smoltcp::socket::tcp::CongestionControl,
     /// UDP 绑定地址（内部测试用；默认 `[::]:0`）。
-    udp_bind: Option<std::net::SocketAddrV6>,
+    udp_bind: Option<std::net::SocketAddr>,
 }
 
 impl WireGuardTransport {
@@ -107,7 +107,7 @@ impl WireGuardTransport {
     }
 
     /// 设置 UDP 绑定地址（内部测试用；默认 `[::]:0`）。
-    pub fn set_udp_bind(&mut self, addr: Option<std::net::SocketAddrV6>) {
+    pub fn set_udp_bind(&mut self, addr: Option<std::net::SocketAddr>) {
         self.udp_bind = addr;
     }
 }
@@ -144,6 +144,9 @@ impl Transport for WireGuardTransport {
             candidates.insert(0, hint);
         }
 
+        let (candidates, ipv4_candidates) =
+            crate::transport::network::candidates(udp.local_addr()?, candidates);
+
         // 凭证指纹由会话层通过 set_credential_fingerprint 填入。
         let fingerprint = self.fingerprint;
 
@@ -153,6 +156,7 @@ impl Transport for WireGuardTransport {
             inner_mtu = self.mtu,
             outer_mtu = self.mtu + 80,
             candidates = ?candidates,
+            ipv4_candidates = ?ipv4_candidates,
             "transport prepared"
         );
         let bundle = EndpointBundle {
@@ -161,6 +165,7 @@ impl Transport for WireGuardTransport {
             udp_port,
             http_port: self.http_port,
             ipv6_candidates: candidates.clone(),
+            ipv4_candidates,
             credential_fingerprint: fingerprint,
         };
         self.udp = Some(udp);
@@ -215,7 +220,13 @@ impl Transport for WireGuardTransport {
             Some(KEEPALIVE_SECS as u16),
             index,
         );
-        let endpoint = PeerEndpoint::new(peer.ipv6_candidates.clone(), peer.udp_port);
+        let addresses = crate::transport::network::peer_addresses(
+            &peer.ipv6_candidates,
+            &peer.ipv4_candidates,
+            peer.udp_port,
+            udp.local_addr()?,
+        )?;
+        let endpoint = PeerEndpoint::from_addrs(addresses);
         let tunnel = WireGuardTunnel::new(session, udp, endpoint);
         let mut stack = TunnelStack::new(overlay, seed, self.mtu);
         stack.set_congestion(self.congestion);

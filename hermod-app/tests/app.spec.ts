@@ -4,11 +4,12 @@ import { resolveLocale, runtimeText } from "../src/i18n";
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     const defaults = {
+      version: 2,
       connection: {
-        transport: "wireguard",
+        transport: "quic",
         mtu: "auto",
         congestion: "auto",
-        limit_mbps: "8",
+        limit_mbps: "0",
       },
       receive_transport: "auto",
       server: "wss://relay.example:4376",
@@ -23,6 +24,10 @@ test.beforeEach(async ({ page }) => {
       localStorage.getItem("mock-settings") ?? JSON.stringify(defaults),
     );
     let status: any = null;
+    let trusted = { [settings.server]: "a".repeat(64) };
+    (window as any).setMockStatus = (value: any) => {
+      status = value;
+    };
     const calls: any[] = [];
     const files = [
       {
@@ -43,10 +48,11 @@ test.beforeEach(async ({ page }) => {
             return {
               version: "0.4.3",
               ipv6: ["2001:db8::1"],
+              ipv4: ["192.168.1.2"],
               platform: "linux",
               settings: structuredClone(settings),
               settings_saved: true,
-              trusted_servers: { "wss://relay.example:4376": "a".repeat(64) },
+              trusted_servers: structuredClone(trusted),
             };
           case "save_settings":
             settings = structuredClone(args.settings);
@@ -94,6 +100,8 @@ test.beforeEach(async ({ page }) => {
           case "probe_server":
             return "b".repeat(64);
           case "trust_server":
+            settings.server = args.server;
+            trusted = { [args.server]: args.fingerprint };
             return;
           case "choose_destination":
             settings.destination = "/exports";
@@ -221,6 +229,152 @@ test("server trust requires explicit fingerprint confirmation", async ({
           .args.fingerprint,
     ),
   ).toBe("b".repeat(64));
+  await expect(
+    page.getByText(
+      "Server fingerprint verified. The previous trust was replaced and the new server is active.",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Save settings" }),
+  ).toBeEnabled();
+  await expect(
+    page.locator("dd").filter({ hasText: "wss://relay.example:4376" }),
+  ).toHaveCount(0);
+});
+
+test("new defaults and explicit legacy preference migration persist", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(
+    page.getByText("QUIC · Unlimited", { exact: true }),
+  ).toBeVisible();
+  await page.evaluate(() =>
+    localStorage.setItem(
+      "mock-settings",
+      JSON.stringify({
+        version: 1,
+        connection: {
+          transport: "wireguard",
+          limit_mbps: "8",
+          mtu: "auto",
+          congestion: "auto",
+        },
+        receive_transport: "auto",
+        server: "wss://relay.example:4376",
+        words: 3,
+        verbose: "none",
+        quiet: false,
+        theme: "system",
+        language: "en-US",
+        destination: null,
+      }),
+    ),
+  );
+  await page.reload();
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  await expect(page.getByLabel("Send protocol", { exact: true })).toHaveValue(
+    "wireguard",
+  );
+  await expect(page.getByLabel("Payload limit (Mbps)")).toHaveValue("8");
+  await page.getByRole("button", { name: "Use new defaults" }).click();
+  await page.getByRole("button", { name: "Save settings" }).click();
+  await page.reload();
+  await expect(
+    page.getByText("QUIC · Unlimited", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Use new defaults" }),
+  ).toHaveCount(0);
+});
+
+test("receive shows announced totals before bytes and handles empty files", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const status = {
+    phase: "Receiving file",
+    code: null,
+    bytes: 0,
+    total: 1048576,
+    elapsed: 0,
+    done: false,
+    cancelled: false,
+    error: null,
+    digest: null,
+    rtt_ms: null,
+    transport: "quic",
+    received_id: null,
+  };
+  await page.evaluate(
+    (status) => (window as any).setMockStatus(status),
+    status,
+  );
+  await expect(page.getByText("0 B / 1.0 MiB")).toBeVisible();
+  await expect(page.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "0",
+  );
+  await page.evaluate(
+    (status) => (window as any).setMockStatus({ ...status, total: 0 }),
+    status,
+  );
+  await expect(page.getByText("0 B / 0 B")).toBeVisible();
+  await expect(page.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "0",
+  );
+  await page.evaluate(
+    (status) =>
+      (window as any).setMockStatus({
+        ...status,
+        total: 0,
+        done: true,
+        digest: "a".repeat(64),
+      }),
+    status,
+  );
+  await expect(page.getByRole("progressbar")).toHaveAttribute(
+    "aria-valuenow",
+    "1",
+  );
+});
+
+test("page motion runs and reduced motion disables page transitions", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Create transfer code" }).waitFor();
+  await page.evaluate(() => {
+    const original = document.startViewTransition.bind(document);
+    (window as any).transitionCount = 0;
+    document.startViewTransition = ((update: any) => {
+      (window as any).transitionCount++;
+      const transition = original(update);
+      void transition.ready.then(() => {
+        (window as any).animatedPage = document
+          .getAnimations()
+          .some((animation) =>
+            ["page-in", "page-out"].includes(
+              (animation as CSSAnimation).animationName,
+            ),
+          );
+      });
+      return transition;
+    }) as typeof document.startViewTransition;
+  });
+  await page.getByRole("tab", { name: "Settings", exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).animatedPage))
+    .toBe(true);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.getByRole("tab", { name: "Transfer", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Create transfer code" }),
+  ).toBeVisible();
+  expect(await page.evaluate(() => (window as any).transitionCount)).toBe(1);
 });
 
 test("language choice updates the UI and native dialogs and persists", async ({
@@ -231,7 +385,7 @@ test("language choice updates the UI and native dialogs and persists", async ({
   await page.getByLabel("Language", { exact: true }).selectOption("zh-CN");
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
   await expect(page.getByLabel("发送协议", { exact: true })).toHaveValue(
-    "wireguard",
+    "quic",
   );
   await page.getByRole("button", { name: "保存设置" }).click();
   await expect(

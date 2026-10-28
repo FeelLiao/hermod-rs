@@ -6,15 +6,15 @@
 //! - 漫游：任何成功解封装的 WG 报文的源地址 = 新的对端端点。
 
 use crate::transport::wireguard::addr;
-use std::net::{Ipv6Addr, SocketAddrV6};
+use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 
 /// 对端端点：候选列表 + 当前生效端点（漫游更新）。
 #[derive(Debug, Clone, Default)]
 pub struct PeerEndpoint {
     /// 候选地址（已按 §3.5 排序）。
-    candidates: Vec<SocketAddrV6>,
+    candidates: Vec<SocketAddr>,
     /// 当前生效的对端端点（收到第一个已认证包后确定；漫游时更新）。
-    current: Option<SocketAddrV6>,
+    current: Option<SocketAddr>,
 }
 
 impl PeerEndpoint {
@@ -25,7 +25,7 @@ impl PeerEndpoint {
     pub fn new(addrs: Vec<Ipv6Addr>, port: u16) -> Self {
         let candidates = addr::rank_candidates(addrs)
             .into_iter()
-            .map(|a| SocketAddrV6::new(a, port, 0, 0))
+            .map(|a| SocketAddrV6::new(a, port, 0, 0).into())
             .collect();
         Self {
             candidates,
@@ -34,7 +34,7 @@ impl PeerEndpoint {
     }
 
     /// 直接用给定的套接字地址构造候选（不排序、不过滤；测试与内部使用）。
-    pub fn from_addrs(candidates: Vec<SocketAddrV6>) -> Self {
+    pub fn from_addrs(candidates: Vec<SocketAddr>) -> Self {
         Self {
             candidates,
             current: None,
@@ -42,12 +42,12 @@ impl PeerEndpoint {
     }
 
     /// 全部候选（按顺序；建连时对它们同时发握手）。
-    pub fn candidates(&self) -> &[SocketAddrV6] {
+    pub fn candidates(&self) -> &[SocketAddr] {
         &self.candidates
     }
 
     /// 当前生效的端点。
-    pub fn current(&self) -> Option<SocketAddrV6> {
+    pub fn current(&self) -> Option<SocketAddr> {
         self.current
     }
 
@@ -57,7 +57,7 @@ impl PeerEndpoint {
     }
 
     /// 漫游：成功解封装的报文源地址成为新端点（WireGuard 规则，§3.3）。
-    pub fn roam(&mut self, src: SocketAddrV6) {
+    pub fn roam(&mut self, src: SocketAddr) {
         self.current = Some(src);
     }
 }
@@ -97,13 +97,13 @@ mod tests {
         assert_eq!(ep.current(), None);
 
         let a = SocketAddrV6::new(v6("2001:db8::2"), 51820, 0, 0);
-        ep.roam(a);
+        ep.roam(a.into());
         assert!(ep.is_established());
-        assert_eq!(ep.current(), Some(a));
+        assert_eq!(ep.current(), Some(a.into()));
 
         // 漫游到新地址（例如临时地址被弃用）
         let b = SocketAddrV6::new(v6("2001:db8::3"), 51820, 0, 0);
-        ep.roam(b);
-        assert_eq!(ep.current(), Some(b));
+        ep.roam(b.into());
+        assert_eq!(ep.current(), Some(b.into()));
     }
 }

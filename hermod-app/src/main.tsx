@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Accordion,
@@ -20,7 +20,6 @@ import {
   Input,
   MessageBar,
   MessageBarBody,
-  ProgressBar,
   Select,
   Spinner,
   Tab,
@@ -49,6 +48,12 @@ import {
 } from "./api";
 import { resolveLocale, runtimeText, translator, type Language } from "./i18n";
 import "./style.css";
+import { MotionRegion, Presence, transition } from "./motion";
+import {
+  publishStatus,
+  statusSummary,
+  TransferMetrics,
+} from "./transfer-status";
 function App() {
   const [info, setInfo] = useState<Bootstrap | null>(null);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -95,6 +100,12 @@ function App() {
   const [code, setCode] = useState("");
   const [text, setText] = useState("");
   const [status, setStatus] = useState<Status | null>(null);
+  const updateStatus = useCallback((value: Status | null) => {
+    publishStatus(value);
+    setStatus((current) =>
+      statusSummary(current) === statusSummary(value) ? current : value,
+    );
+  }, []);
   const [busy, setBusy] = useState(false);
   const operation = useRef(false);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(
@@ -163,7 +174,7 @@ function App() {
       try {
         const value = await api.status();
         if (stopped) return;
-        setStatus(value);
+        updateStatus(value);
         if (
           value?.done &&
           value.received_id &&
@@ -217,7 +228,7 @@ function App() {
         mode === "receive" ? code.trim() : null,
         mode === "text" ? text : null,
       );
-      setStatus(await api.status());
+      updateStatus(await api.status());
       completed.current = null;
       if (mode === "file") setSource(null);
     });
@@ -238,7 +249,7 @@ function App() {
           vertical
           aria-label={t("Main navigation")}
           selectedValue={page}
-          onTabSelect={(_, d) => setPage(String(d.value))}
+          onTabSelect={(_, d) => transition(() => setPage(String(d.value)))}
         >
           <Tab value="transfer" icon={<ArrowUpload24Regular />}>
             {t("Transfer")}
@@ -258,612 +269,633 @@ function App() {
           <span>
             {t("Encrypted peer to peer")}
             <br />
-            {t("IPv6 · No file relay")}
+            {t("IPv4 LAN / IPv6 · No file relay")}
           </span>
         </div>
       </aside>
       <main>
-        <header>
-          <div>
-            <Title1>
-              {page === "transfer"
-                ? t("A direct connection.")
-                : page === "inbox"
-                  ? t("Your verified files.")
-                  : page === "settings"
-                    ? t("Make it yours.")
-                    : t("Connection logs.")}
-            </Title1>
-            <p className="subtle">
-              {page === "transfer"
-                ? t(
-                    "Send a file or a message. Share the code. Stay in control.",
-                  )
-                : t("Hermod · private file transfer")}
-            </p>
-          </div>
-          <Badge
-            appearance="tint"
-            color={info?.ipv6.length ? "success" : "warning"}
-          >
-            {info?.ipv6.length ? t("IPv6 available") : t("IPv6 required")}
-          </Badge>
-        </header>
-        {notice && (
-          <MessageBar intent={notice.error ? "error" : "success"}>
-            <MessageBarBody>
-              {runtimeText(notice.text, locale, notice.error)}
-            </MessageBarBody>
-            <Button
-              appearance="transparent"
-              aria-label={t("Dismiss message")}
-              onClick={() => setNotice(null)}
-            >
-              {t("Dismiss")}
-            </Button>
-          </MessageBar>
-        )}
-        {!settings && <Spinner label={t("Loading settings")} />}
-        {settings && page === "transfer" && (
-          <div className="transfer-grid">
-            <Card className="panel">
-              <TabList
-                aria-label={t("Transfer type")}
-                selectedValue={mode}
-                onTabSelect={(_, d) => setMode(String(d.value))}
-                disabled={running || busy}
-              >
-                <Tab value="file">{t("File")}</Tab>
-                <Tab value="text">{t("Text")}</Tab>
-                <Tab value="receive">{t("Receive")}</Tab>
-              </TabList>
-              {mode === "file" && (
-                <>
-                  <Title2>{t("Choose what to send")}</Title2>
-                  <button
-                    className="file-picker"
-                    disabled={running || busy}
-                    onClick={() =>
-                      void work(async () => {
-                        const selected = await api.choose();
-                        if (selected) setSource(selected);
-                      })
-                    }
-                  >
-                    <FolderOpen24Regular />
-                    <strong>{source?.name ?? t("Choose file")}</strong>
-                    <span>
-                      {source
-                        ? size(source.size)
-                        : t("Open the system file picker")}
-                    </span>
-                  </button>
-                </>
-              )}
-              {mode === "text" && (
-                <Field
-                  label={t("Message")}
-                  hint={t("Up to 1 MiB; received as a verified text file")}
-                >
-                  <Textarea
-                    resize="vertical"
-                    rows={8}
-                    value={text}
-                    onChange={(_, d) => setText(d.value)}
-                    disabled={running || busy}
-                  />
-                </Field>
-              )}
-              {mode === "receive" && (
-                <>
-                  <Title2>{t("Connect with a code")}</Title2>
-                  <Field
-                    label={t("Transfer code")}
-                    hint={t("Ask your sender for their complete code")}
-                  >
-                    <Input
-                      value={code}
-                      onChange={(_, d) => setCode(d.value)}
-                      disabled={running || busy}
-                      placeholder="1234-word-word-word"
-                    />
-                  </Field>
-                  <p>
-                    {t(
-                      "Verified files stay in your private inbox. Save a copy anywhere.",
-                    )}
-                  </p>
-                </>
-              )}
-              <div className="summary">
-                <span>
-                  {protocolName(
-                    mode === "receive"
-                      ? saved.current?.receive_transport
-                      : saved.current?.connection.transport,
-                  )}{" "}
-                  ·{" "}
-                  {saved.current?.connection.limit_mbps === "0"
-                    ? t("Unlimited")
-                    : t("{limit} Mbps cap", {
-                        limit: saved.current?.connection.limit_mbps ?? "0",
-                      })}
-                </span>
-                <Button appearance="subtle" onClick={() => setPage("settings")}>
-                  {t("Adjust")}
-                </Button>
-              </div>
-              <Button
-                appearance="primary"
-                size="large"
-                icon={
-                  mode === "receive" ? (
-                    <ArrowDownload24Regular />
-                  ) : (
-                    <ArrowUpload24Regular />
-                  )
-                }
-                disabled={
-                  busy ||
-                  running ||
-                  (mode === "file" && !source) ||
-                  (mode === "text" && !text)
-                }
-                onClick={() => void start()}
-              >
-                {mode === "receive"
-                  ? t("Connect & receive")
-                  : t("Create transfer code")}
-              </Button>
+        <MotionRegion motionKey={page} className="page-content">
+          <header>
+            <div>
+              <Title1>
+                {page === "transfer"
+                  ? t("A direct connection.")
+                  : page === "inbox"
+                    ? t("Your verified files.")
+                    : page === "settings"
+                      ? t("Make it yours.")
+                      : t("Connection logs.")}
+              </Title1>
               <p className="subtle">
-                {t(
-                  "Both devices need reachable IPv6. Keep the transfer code private.",
-                )}
+                {page === "transfer"
+                  ? t(
+                      "Send a file or a message. Share the code. Stay in control.",
+                    )
+                  : t("Hermod · private file transfer")}
               </p>
-            </Card>
-            <Card className="panel">
-              <Badge
-                appearance="tint"
-                color={
-                  status?.error
-                    ? "danger"
-                    : status?.digest
-                      ? "success"
-                      : "brand"
-                }
-              >
-                {running
-                  ? t("ACTIVE")
-                  : status?.digest
-                    ? t("VERIFIED")
-                    : t("READY")}
-              </Badge>
-              <Title2>
-                {status
-                  ? runtimeText(status.phase, locale)
-                  : t("Ready when you are.")}
-              </Title2>
-              {!status && (
-                <p className="subtle">
-                  {t(
-                    "Your file travels directly between devices. The signaling server only helps them meet.",
-                  )}
-                </p>
-              )}
-              {status?.export_error && (
-                <MessageBar intent="error">
-                  <MessageBarBody>
-                    {runtimeText(status.export_error, locale, true)}
-                  </MessageBarBody>
-                </MessageBar>
-              )}
-              {status?.error && (
-                <MessageBar intent="error">
-                  <MessageBarBody>
-                    {runtimeText(status.error, locale, true)}
-                  </MessageBarBody>
-                </MessageBar>
-              )}
-              {status?.code && (
-                <div className="code-box">
-                  <span>{t("Share this code")}</span>
-                  <code data-testid="transfer-code">{status.code}</code>
-                  <Button
-                    icon={<Copy24Regular />}
-                    onClick={() =>
-                      void work(async () => {
-                        await api.copy();
-                        report("Transfer code copied.");
-                      })
-                    }
-                  >
-                    {t("Copy code")}
-                  </Button>
-                </div>
-              )}
-              {status && (
-                <>
-                  <ProgressBar
-                    aria-label={t("Transfer progress")}
-                    value={
-                      status.total
-                        ? Math.min(1, status.bytes / status.total)
-                        : undefined
-                    }
-                  />
-                  <div className="summary">
-                    <span>
-                      {size(status.bytes)} / {size(status.total)}
-                    </span>
-                    <span>{protocolName(status.transport)}</span>
-                  </div>
-                  <div className="metrics">
-                    <div>
-                      <strong>
-                        {size(
-                          status.elapsed > 0
-                            ? status.bytes / status.elapsed
-                            : 0,
-                        )}
-                        /s
-                      </strong>
-                      <span>{t("Average payload")}</span>
-                    </div>
-                    <div>
-                      <strong>
-                        {status.rtt_ms == null
-                          ? "—"
-                          : `${status.rtt_ms.toFixed(0)} ms`}
-                      </strong>
-                      <span>{t("Network RTT")}</span>
-                    </div>
-                  </div>
-                </>
-              )}
-              {status?.digest && (
-                <div className="digest">
-                  <ShieldCheckmark24Regular />
-                  <span>{t("SHA-256 verified")}</span>
-                  <code>{status.digest}</code>
-                </div>
-              )}
-              {running && (
-                <Button
-                  onClick={() =>
-                    void work(async () => {
-                      await api.cancel();
-                      setStatus(await api.status());
-                    })
-                  }
-                >
-                  {t("Cancel transfer")}
-                </Button>
-              )}
-            </Card>
-          </div>
-        )}
-        {page === "inbox" && (
-          <>
-            <div className="toolbar">
-              <span>
-                {t("{count} verified files", { count: files.length })}
-              </span>
-              <Button
-                onClick={() =>
-                  void work(async () => setFiles(await api.files()))
-                }
-              >
-                {t("Refresh")}
-              </Button>
             </div>
-            {files.length === 0 && (
-              <Card className="panel">
-                <Title2>{t("Your inbox is empty")}</Title2>
-                <p>{t("Completed, verified transfers will appear here.")}</p>
-              </Card>
-            )}
-            {files.map((file) => (
-              <Card key={file.id} className="inbox-row">
-                <Document24Regular />
-                <div className="file-detail">
-                  <strong>{file.name}</strong>
-                  <span className="subtle">
-                    {size(file.size)} · {t("SHA-256 verified")}
-                  </span>
-                </div>
+            <Badge
+              appearance="tint"
+              color={
+                info?.ipv6.length || info?.ipv4?.length ? "success" : "warning"
+              }
+            >
+              {info?.ipv6.length
+                ? t("IPv6 available")
+                : info?.ipv4?.length
+                  ? t("IPv4 LAN available")
+                  : t("No local network address")}
+            </Badge>
+          </header>
+          <Presence visible={!!notice}>
+            {notice && (
+              <MessageBar intent={notice.error ? "error" : "success"}>
+                <MessageBarBody>
+                  {runtimeText(notice.text, locale, notice.error)}
+                </MessageBarBody>
                 <Button
-                  disabled={busy || running}
-                  icon={<ArrowDownload24Regular />}
-                  onClick={() =>
-                    void work(async () => {
-                      if (await api.export(file.id))
-                        report("Verified copy saved.");
-                    })
-                  }
+                  appearance="transparent"
+                  aria-label={t("Dismiss message")}
+                  onClick={() => setNotice(null)}
                 >
-                  {t("Save a copy")}
+                  {t("Dismiss")}
                 </Button>
-                <Button
-                  disabled={busy || running}
-                  icon={<Delete24Regular />}
-                  aria-label={t("Remove {name}", { name: file.name })}
-                  onClick={() => setRemoving(file)}
-                />
-              </Card>
-            ))}
-            <p className="subtle">
-              {t(
-                "Export important files before uninstalling. Removing an inbox copy does not remove exported copies.",
-              )}
-            </p>
-          </>
-        )}
-        {settings && page === "settings" && (
-          <div className="settings-grid">
-            <Card className="panel">
-              <Title2>{t("Transfer preferences")}</Title2>
-              <Field label={t("Send protocol")}>
-                <Select
-                  value={settings.connection.transport}
-                  onChange={(_, d) =>
-                    network({ transport: d.value, congestion: "auto" })
+              </MessageBar>
+            )}
+          </Presence>
+          {!settings && <Spinner label={t("Loading settings")} />}
+          {settings && page === "transfer" && (
+            <div className="transfer-grid">
+              <Card className="panel">
+                <TabList
+                  aria-label={t("Transfer type")}
+                  selectedValue={mode}
+                  onTabSelect={(_, d) =>
+                    transition(() => setMode(String(d.value)))
                   }
+                  disabled={running || busy}
                 >
-                  <option value="wireguard">{t("WireGuard (default)")}</option>
-                  <option value="quic">QUIC</option>
-                </Select>
-              </Field>
-              <Field label={t("Receive protocol")}>
-                <Select
-                  value={settings.receive_transport}
-                  onChange={(_, d) => patch({ receive_transport: d.value })}
-                >
-                  <option value="auto">{t("Auto — follow the sender")}</option>
-                  <option value="wireguard">{t("WireGuard only")}</option>
-                  <option value="quic">{t("QUIC only")}</option>
-                </Select>
-              </Field>
-              <Field
-                label={t("Payload limit (Mbps)")}
-                hint={t("0 = unlimited. Start at 70–85% of your upload speed.")}
-              >
-                <Input
-                  value={settings.connection.limit_mbps}
-                  type="number"
-                  min={0}
-                  step="0.1"
-                  onChange={(_, d) => network({ limit_mbps: d.value })}
-                />
-              </Field>
-              <Field label={t("Code length (words)")}>
-                <Input
-                  type="number"
-                  min={1}
-                  max={32}
-                  value={String(settings.words)}
-                  onChange={(_, d) => patch({ words: Number(d.value) })}
-                />
-              </Field>
-              <Accordion collapsible>
-                <AccordionItem value="network">
-                  <AccordionHeader>
-                    {t("Advanced network settings")}
-                  </AccordionHeader>
-                  <AccordionPanel className="field-stack">
+                  <Tab value="file">{t("File")}</Tab>
+                  <Tab value="text">{t("Text")}</Tab>
+                  <Tab value="receive">{t("Receive")}</Tab>
+                </TabList>
+                <MotionRegion motionKey={mode} className="mode-content">
+                  {mode === "file" && (
+                    <>
+                      <Title2>{t("Choose what to send")}</Title2>
+                      <button
+                        className="file-picker"
+                        disabled={running || busy}
+                        onClick={() =>
+                          void work(async () => {
+                            const selected = await api.choose();
+                            if (selected) setSource(selected);
+                          })
+                        }
+                      >
+                        <FolderOpen24Regular />
+                        <strong>{source?.name ?? t("Choose file")}</strong>
+                        <span>
+                          {source
+                            ? size(source.size)
+                            : t("Open the system file picker")}
+                        </span>
+                      </button>
+                    </>
+                  )}
+                  {mode === "text" && (
                     <Field
-                      label="MTU"
-                      hint={t(
-                        "auto, or bytes: WireGuard inner IP; QUIC UDP payload cap (1200–1452).",
-                      )}
+                      label={t("Message")}
+                      hint={t("Up to 1 MiB; received as a verified text file")}
                     >
-                      <Input
-                        value={settings.connection.mtu}
-                        onChange={(_, d) => network({ mtu: d.value })}
+                      <Textarea
+                        resize="vertical"
+                        rows={8}
+                        value={text}
+                        onChange={(_, d) => setText(d.value)}
+                        disabled={running || busy}
                       />
                     </Field>
-                    <Field label={t("Congestion control")}>
-                      <Select
-                        value={settings.connection.congestion}
-                        onChange={(_, d) => network({ congestion: d.value })}
+                  )}
+                  {mode === "receive" && (
+                    <>
+                      <Title2>{t("Connect with a code")}</Title2>
+                      <Field
+                        label={t("Transfer code")}
+                        hint={t("Ask your sender for their complete code")}
                       >
-                        {algorithms.map((a) => (
-                          <option key={a} value={a}>
-                            {a === "auto" ? t("Auto") : a.toUpperCase()}
-                          </option>
-                        ))}
-                      </Select>
-                    </Field>
-                  </AccordionPanel>
-                </AccordionItem>
-              </Accordion>
-              <Field
-                label={t("Default export folder")}
-                hint={t("A verified inbox copy is always retained.")}
-              >
-                <div className="actions">
-                  <Input
-                    readOnly
-                    value={settings.destination ?? t("Private inbox only")}
-                  />
+                        <Input
+                          value={code}
+                          onChange={(_, d) => setCode(d.value)}
+                          disabled={running || busy}
+                          placeholder="1234-word-word-word"
+                        />
+                      </Field>
+                      <p>
+                        {t(
+                          "Verified files stay in your private inbox. Save a copy anywhere.",
+                        )}
+                      </p>
+                    </>
+                  )}
+                </MotionRegion>
+                <div className="summary">
+                  <span>
+                    {protocolName(
+                      mode === "receive"
+                        ? saved.current?.receive_transport
+                        : saved.current?.connection.transport,
+                    )}{" "}
+                    ·{" "}
+                    {saved.current?.connection.limit_mbps === "0"
+                      ? t("Unlimited")
+                      : t("{limit} Mbps cap", {
+                          limit: saved.current?.connection.limit_mbps ?? "0",
+                        })}
+                  </span>
+                  <Button
+                    appearance="subtle"
+                    onClick={() => transition(() => setPage("settings"))}
+                  >
+                    {t("Adjust")}
+                  </Button>
+                </div>
+                <Button
+                  appearance="primary"
+                  size="large"
+                  icon={
+                    mode === "receive" ? (
+                      <ArrowDownload24Regular />
+                    ) : (
+                      <ArrowUpload24Regular />
+                    )
+                  }
+                  disabled={
+                    busy ||
+                    running ||
+                    (mode === "file" && !source) ||
+                    (mode === "text" && !text)
+                  }
+                  onClick={() => void start()}
+                >
+                  {mode === "receive"
+                    ? t("Connect & receive")
+                    : t("Create transfer code")}
+                </Button>
+                <p className="subtle">
+                  {t(
+                    "Use the same IPv4 LAN or reachable IPv6. Keep the transfer code private.",
+                  )}
+                </p>
+              </Card>
+              <Card className="panel">
+                <Badge
+                  appearance="tint"
+                  color={
+                    status?.error
+                      ? "danger"
+                      : status?.digest
+                        ? "success"
+                        : "brand"
+                  }
+                >
+                  {running
+                    ? t("ACTIVE")
+                    : status?.digest
+                      ? t("VERIFIED")
+                      : t("READY")}
+                </Badge>
+                <Title2>
+                  {status
+                    ? runtimeText(status.phase, locale)
+                    : t("Ready when you are.")}
+                </Title2>
+                {!status && (
+                  <p className="subtle">
+                    {t(
+                      "Your file travels directly between devices. The signaling server only helps them meet.",
+                    )}
+                  </p>
+                )}
+                {status?.export_error && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>
+                      {runtimeText(status.export_error, locale, true)}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {status?.error && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>
+                      {runtimeText(status.error, locale, true)}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {status?.code && (
+                  <div className="code-box">
+                    <span>{t("Share this code")}</span>
+                    <code data-testid="transfer-code">{status.code}</code>
+                    <Button
+                      icon={<Copy24Regular />}
+                      onClick={() =>
+                        void work(async () => {
+                          await api.copy();
+                          report("Transfer code copied.");
+                        })
+                      }
+                    >
+                      {t("Copy code")}
+                    </Button>
+                  </div>
+                )}
+                <TransferMetrics locale={locale} size={size} />
+                {status?.digest && (
+                  <div className="digest">
+                    <ShieldCheckmark24Regular />
+                    <span>{t("SHA-256 verified")}</span>
+                    <code>{status.digest}</code>
+                  </div>
+                )}
+                {running && (
                   <Button
                     onClick={() =>
                       void work(async () => {
-                        const value = await api.destination();
-                        if (value) {
-                          patch({ destination: value });
+                        await api.cancel();
+                        updateStatus(await api.status());
+                      })
+                    }
+                  >
+                    {t("Cancel transfer")}
+                  </Button>
+                )}
+              </Card>
+            </div>
+          )}
+          {page === "inbox" && (
+            <>
+              <div className="toolbar">
+                <span>
+                  {t("{count} verified files", { count: files.length })}
+                </span>
+                <Button
+                  onClick={() =>
+                    void work(async () => setFiles(await api.files()))
+                  }
+                >
+                  {t("Refresh")}
+                </Button>
+              </div>
+              {files.length === 0 && (
+                <Card className="panel">
+                  <Title2>{t("Your inbox is empty")}</Title2>
+                  <p>{t("Completed, verified transfers will appear here.")}</p>
+                </Card>
+              )}
+              {files.map((file) => (
+                <Card key={file.id} className="inbox-row">
+                  <Document24Regular />
+                  <div className="file-detail">
+                    <strong>{file.name}</strong>
+                    <span className="subtle">
+                      {size(file.size)} · {t("SHA-256 verified")}
+                    </span>
+                  </div>
+                  <Button
+                    disabled={busy || running}
+                    icon={<ArrowDownload24Regular />}
+                    onClick={() =>
+                      void work(async () => {
+                        if (await api.export(file.id))
+                          report("Verified copy saved.");
+                      })
+                    }
+                  >
+                    {t("Save a copy")}
+                  </Button>
+                  <Button
+                    disabled={busy || running}
+                    icon={<Delete24Regular />}
+                    aria-label={t("Remove {name}", { name: file.name })}
+                    onClick={() => setRemoving(file)}
+                  />
+                </Card>
+              ))}
+              <p className="subtle">
+                {t(
+                  "Export important files before uninstalling. Removing an inbox copy does not remove exported copies.",
+                )}
+              </p>
+            </>
+          )}
+          {settings && page === "settings" && (
+            <div className="settings-grid">
+              <Card className="panel">
+                <Title2>{t("Transfer preferences")}</Title2>
+                {(settings.version ?? 1) < 2 && (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      {t(
+                        "New defaults: QUIC and unlimited speed. Your saved choices have been kept.",
+                      )}
+                    </MessageBarBody>
+                    <Button
+                      onClick={() =>
+                        patch({
+                          version: 2,
+                          connection: {
+                            transport: "quic",
+                            limit_mbps: "0",
+                            mtu: "auto",
+                            congestion: "auto",
+                          },
+                        })
+                      }
+                    >
+                      {t("Use new defaults")}
+                    </Button>
+                    <Button onClick={() => patch({ version: 2 })}>
+                      {t("Keep my settings")}
+                    </Button>
+                  </MessageBar>
+                )}
+                <Field label={t("Send protocol")}>
+                  <Select
+                    value={settings.connection.transport}
+                    onChange={(_, d) =>
+                      network({ transport: d.value, congestion: "auto" })
+                    }
+                  >
+                    <option value="wireguard">WireGuard</option>
+                    <option value="quic">{t("QUIC (default)")}</option>
+                  </Select>
+                </Field>
+                <Field label={t("Receive protocol")}>
+                  <Select
+                    value={settings.receive_transport}
+                    onChange={(_, d) => patch({ receive_transport: d.value })}
+                  >
+                    <option value="auto">
+                      {t("Auto — follow the sender")}
+                    </option>
+                    <option value="wireguard">{t("WireGuard only")}</option>
+                    <option value="quic">{t("QUIC only")}</option>
+                  </Select>
+                </Field>
+                <Field
+                  label={t("Payload limit (Mbps)")}
+                  hint={t(
+                    "0 = unlimited. Start at 70–85% of your upload speed.",
+                  )}
+                >
+                  <Input
+                    value={settings.connection.limit_mbps}
+                    type="number"
+                    min={0}
+                    step="0.1"
+                    onChange={(_, d) => network({ limit_mbps: d.value })}
+                  />
+                </Field>
+                <Field label={t("Code length (words)")}>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={32}
+                    value={String(settings.words)}
+                    onChange={(_, d) => patch({ words: Number(d.value) })}
+                  />
+                </Field>
+                <Accordion collapsible>
+                  <AccordionItem value="network">
+                    <AccordionHeader>
+                      {t("Advanced network settings")}
+                    </AccordionHeader>
+                    <AccordionPanel className="field-stack">
+                      <Field
+                        label="MTU"
+                        hint={t(
+                          "auto, or bytes: WireGuard inner IP; QUIC UDP payload cap (1200–1452).",
+                        )}
+                      >
+                        <Input
+                          value={settings.connection.mtu}
+                          onChange={(_, d) => network({ mtu: d.value })}
+                        />
+                      </Field>
+                      <Field label={t("Congestion control")}>
+                        <Select
+                          value={settings.connection.congestion}
+                          onChange={(_, d) => network({ congestion: d.value })}
+                        >
+                          {algorithms.map((a) => (
+                            <option key={a} value={a}>
+                              {a === "auto" ? t("Auto") : a.toUpperCase()}
+                            </option>
+                          ))}
+                        </Select>
+                      </Field>
+                    </AccordionPanel>
+                  </AccordionItem>
+                </Accordion>
+                <Field
+                  label={t("Default export folder")}
+                  hint={t("A verified inbox copy is always retained.")}
+                >
+                  <div className="actions">
+                    <Input
+                      readOnly
+                      value={settings.destination ?? t("Private inbox only")}
+                    />
+                    <Button
+                      onClick={() =>
+                        void work(async () => {
+                          const value = await api.destination();
+                          if (value) {
+                            patch({ destination: value });
+                            if (saved.current)
+                              saved.current = {
+                                ...saved.current,
+                                destination: value,
+                              };
+                          }
+                        })
+                      }
+                    >
+                      {t("Choose folder")}
+                    </Button>
+                    <Button
+                      onClick={() =>
+                        void work(async () => {
+                          await api.clearDestination();
+                          patch({ destination: null });
                           if (saved.current)
                             saved.current = {
                               ...saved.current,
-                              destination: value,
+                              destination: null,
                             };
-                        }
-                      })
+                        })
+                      }
+                    >
+                      {t("Clear")}
+                    </Button>
+                  </div>
+                </Field>
+                <Field
+                  label={t("Language")}
+                  hint={t(
+                    "Language changes apply immediately. Save settings to remember your choice.",
+                  )}
+                >
+                  <Select
+                    value={settings.language}
+                    onChange={(_, d) =>
+                      patch({ language: d.value as Language })
                     }
                   >
-                    {t("Choose folder")}
-                  </Button>
-                  <Button
-                    onClick={() =>
-                      void work(async () => {
-                        await api.clearDestination();
-                        patch({ destination: null });
-                        if (saved.current)
-                          saved.current = {
-                            ...saved.current,
-                            destination: null,
-                          };
-                      })
-                    }
-                  >
-                    {t("Clear")}
-                  </Button>
-                </div>
-              </Field>
-              <Field
-                label={t("Language")}
-                hint={t(
-                  "Language changes apply immediately. Save settings to remember your choice.",
-                )}
-              >
-                <Select
-                  value={settings.language}
-                  onChange={(_, d) => patch({ language: d.value as Language })}
-                >
-                  <option value="system">{t("System")}</option>
-                  <option value="en-US" lang="en-US">
-                    English
-                  </option>
-                  <option value="zh-CN" lang="zh-CN">
-                    简体中文
-                  </option>
-                </Select>
-              </Field>
-              <Field label={t("Appearance")}>
-                <Select
-                  value={settings.theme}
-                  onChange={(_, d) => patch({ theme: d.value })}
-                >
-                  <option value="system">{t("System")}</option>
-                  <option value="light">{t("Light")}</option>
-                  <option value="dark">{t("Dark")}</option>
-                </Select>
-              </Field>
-              <Field label={t("Log level")}>
-                <Select
-                  value={settings.verbose}
-                  onChange={(_, d) => patch({ verbose: d.value })}
-                >
-                  {["none", "error", "warning", "info", "debug"].map((v) => (
-                    <option key={v} value={v}>
-                      {v === "none"
-                        ? t("None")
-                        : v === "error"
-                          ? t("Error")
-                          : v === "warning"
-                            ? t("Warning")
-                            : v === "info"
-                              ? t("Info")
-                              : t("Debug")}
+                    <option value="system">{t("System")}</option>
+                    <option value="en-US" lang="en-US">
+                      English
                     </option>
-                  ))}
-                </Select>
-              </Field>
-              <Checkbox
-                label={t("Reduce status notifications")}
-                checked={settings.quiet}
-                onChange={(_, d) => patch({ quiet: d.checked === true })}
-              />
-              <Button
-                appearance="primary"
-                disabled={busy}
-                onClick={() =>
-                  void work(async () => {
-                    await api.save(settings);
-                    saved.current = settings;
-                    setNotice({
-                      text: "Settings saved for the next transfer.",
-                      error: false,
-                    });
-                  })
-                }
-              >
-                {t("Save settings")}
-              </Button>
-            </Card>
-            <Card className="panel">
-              <Title2>{t("Server & trust")}</Title2>
-              <Field label={t("Signaling server")}>
-                <Input
-                  value={settings.server}
-                  onChange={(_, d) => {
-                    patch({ server: d.value });
-                    setFingerprint("");
-                  }}
+                    <option value="zh-CN" lang="zh-CN">
+                      简体中文
+                    </option>
+                  </Select>
+                </Field>
+                <Field label={t("Appearance")}>
+                  <Select
+                    value={settings.theme}
+                    onChange={(_, d) => patch({ theme: d.value })}
+                  >
+                    <option value="system">{t("System")}</option>
+                    <option value="light">{t("Light")}</option>
+                    <option value="dark">{t("Dark")}</option>
+                  </Select>
+                </Field>
+                <Field label={t("Log level")}>
+                  <Select
+                    value={settings.verbose}
+                    onChange={(_, d) => patch({ verbose: d.value })}
+                  >
+                    {["none", "error", "warning", "info", "debug"].map((v) => (
+                      <option key={v} value={v}>
+                        {v === "none"
+                          ? t("None")
+                          : v === "error"
+                            ? t("Error")
+                            : v === "warning"
+                              ? t("Warning")
+                              : v === "info"
+                                ? t("Info")
+                                : t("Debug")}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Checkbox
+                  label={t("Reduce status notifications")}
+                  checked={settings.quiet}
+                  onChange={(_, d) => patch({ quiet: d.checked === true })}
                 />
-              </Field>
-              <p className="subtle">
-                {t(
-                  "The default server is pinned. For another server, verify its fingerprint before trusting it.",
-                )}
-              </p>
-              <Field label={t("Expected SPKI fingerprint")}>
-                <Textarea
-                  value={fingerprint}
-                  onChange={(_, d) => setFingerprint(d.value)}
-                  resize="vertical"
-                />
-              </Field>
-              <div className="actions">
                 <Button
-                  disabled={busy}
+                  appearance="primary"
+                  disabled={busy || settings.server !== info?.settings.server}
                   onClick={() =>
-                    void work(async () =>
-                      setFingerprint(await api.probe(settings.server)),
-                    )
+                    void work(async () => {
+                      const updated = { ...settings, version: 2 };
+                      await api.save(updated);
+                      setSettings(updated);
+                      saved.current = updated;
+                      setNotice({
+                        text: "Settings saved for the next transfer.",
+                        error: false,
+                      });
+                    })
                   }
                 >
-                  {t("Fetch fingerprint")}
+                  {t("Save settings")}
                 </Button>
+              </Card>
+              <Card className="panel">
+                <Title2>{t("Server & trust")}</Title2>
+                <Field label={t("Signaling server")}>
+                  <Input
+                    value={settings.server}
+                    onChange={(_, d) => {
+                      patch({ server: d.value });
+                      setFingerprint("");
+                    }}
+                  />
+                </Field>
+                <p className="subtle">
+                  {t(
+                    "Only one server is trusted. Verifying a new server replaces the current trust and switches the server.",
+                  )}
+                </p>
+                <Field label={t("Expected SPKI fingerprint")}>
+                  <Textarea
+                    value={fingerprint}
+                    onChange={(_, d) => setFingerprint(d.value)}
+                    resize="vertical"
+                  />
+                </Field>
+                <div className="actions">
+                  <Button
+                    disabled={busy}
+                    onClick={() =>
+                      void work(async () =>
+                        setFingerprint(await api.probe(settings.server)),
+                      )
+                    }
+                  >
+                    {t("Fetch fingerprint")}
+                  </Button>
+                  <Button
+                    disabled={busy || !/^[a-fA-F0-9]{64}$/.test(fingerprint)}
+                    onClick={() => setTrusting(true)}
+                  >
+                    {t("Verify & trust")}
+                  </Button>
+                </div>
+                <Title2>{t("Connection details")}</Title2>
+                <dl>
+                  <dt>{t("Local IPv4 addresses")}</dt>
+                  <dd>
+                    {info?.ipv4?.join("\n") || t("No local IPv4 address found")}
+                  </dd>
+                  <dt>{t("Local IPv6 addresses")}</dt>
+                  <dd>
+                    {info?.ipv6.join("\n") || t("No usable IPv6 address found")}
+                  </dd>
+                  <dt>{t("Version")}</dt>
+                  <dd>{info?.version}</dd>
+                  <dt>{t("Trusted server")}</dt>
+                  <dd>{Object.keys(info?.trusted_servers ?? {}).join("\n")}</dd>
+                </dl>
+              </Card>
+            </div>
+          )}
+          {page === "logs" && (
+            <Card className="panel">
+              <div className="toolbar">
+                <p>
+                  {t(
+                    "Log level follows your saved settings. Logs are bounded and kept in memory.",
+                  )}
+                </p>
                 <Button
-                  disabled={busy || !/^[a-fA-F0-9]{64}$/.test(fingerprint)}
-                  onClick={() => setTrusting(true)}
+                  onClick={() =>
+                    void work(async () => setLogs(await api.logs()))
+                  }
                 >
-                  {t("Verify & trust")}
+                  {t("Refresh logs")}
                 </Button>
               </div>
-              <Title2>{t("Connection details")}</Title2>
-              <dl>
-                <dt>{t("Local IPv6 addresses")}</dt>
-                <dd>
-                  {info?.ipv6.join("\n") || t("No usable IPv6 address found")}
-                </dd>
-                <dt>{t("Version")}</dt>
-                <dd>{info?.version}</dd>
-                <dt>{t("Trusted servers")}</dt>
-                <dd>{Object.keys(info?.trusted_servers ?? {}).join("\n")}</dd>
-              </dl>
+              <pre aria-label={t("Connection logs")}>
+                {logs.join("\n") ||
+                  t("No logs. Select a log level in Settings.")}
+              </pre>
             </Card>
-          </div>
-        )}
-        {page === "logs" && (
-          <Card className="panel">
-            <div className="toolbar">
-              <p>
-                {t(
-                  "Log level follows your saved settings. Logs are bounded and kept in memory.",
-                )}
-              </p>
-              <Button
-                onClick={() => void work(async () => setLogs(await api.logs()))}
-              >
-                {t("Refresh logs")}
-              </Button>
-            </div>
-            <pre aria-label={t("Connection logs")}>
-              {logs.join("\n") || t("No logs. Select a log level in Settings.")}
-            </pre>
-          </Card>
-        )}
+          )}
+        </MotionRegion>
       </main>
       <Dialog
         open={!!removing}
@@ -889,7 +921,8 @@ function App() {
                   void work(async () => {
                     await api.remove(removing!.id);
                     setRemoving(null);
-                    setFiles(await api.files());
+                    const received = await api.files();
+                    transition(() => setFiles(received));
                   })
                 }
               >
@@ -921,9 +954,16 @@ function App() {
                   void work(async () => {
                     await api.trust(settings!.server, fingerprint);
                     setTrusting(false);
-                    setInfo(await api.bootstrap());
+                    const updated = await api.bootstrap();
+                    setInfo(updated);
+                    patch({ server: updated.settings.server });
+                    if (saved.current)
+                      saved.current = {
+                        ...saved.current,
+                        server: updated.settings.server,
+                      };
                     report(
-                      "Server fingerprint verified and pinned. Save settings to use this server.",
+                      "Server fingerprint verified. The previous trust was replaced and the new server is active.",
                     );
                   })
                 }

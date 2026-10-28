@@ -27,6 +27,9 @@ pub struct QuicEndpoint {
         deserialize_with = "deserialize_ipv6_list"
     )]
     pub ipv6_candidates: Vec<Ipv6Addr>,
+    /// 可选局域网 IPv4 候选；旧端忽略，新端读取旧包时为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ipv4_candidates: Vec<std::net::Ipv4Addr>,
     /// 临时自签名证书 DER 的 SHA-256。
     pub cert_fingerprint: [u8; 32],
     /// 一次性凭证指纹：SHA-256(HTTP token)。
@@ -69,6 +72,7 @@ mod tests {
         QuicEndpoint {
             version: QUIC_ENDPOINT_VERSION,
             udp_port: 4433,
+            ipv4_candidates: Vec::new(),
             ipv6_candidates: vec!["2001:db8::1".parse().unwrap(), "fd00::1".parse().unwrap()],
             cert_fingerprint: [0x11; 32],
             credential_fingerprint: [0x22; 32],

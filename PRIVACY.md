@@ -4,7 +4,7 @@
 
 ## 简体中文
 
-更新及生效日期：2026 年 10 月 26 日。
+更新及生效日期：2026 年 10 月 28 日。
 
 本政策适用于 FeelLiao 发布的 HermodTransfer（Microsoft Store ID：`9PMPWN3HMR3M`），
 以及同一项目的 Hermod 桌面端、Android 端和命令行客户端。下文“应用”指这些客户端，
@@ -12,7 +12,7 @@
 
 ### 1. 应用如何工作
 
-应用通过传输码让两台设备建立加密的 IPv6 点对点连接，用于发送你选择的文件或输入的文本。
+应用通过传输码让两台设备建立加密的 IPv4 局域网或 IPv6 点对点连接，用于发送你选择的文件或输入的文本。
 信令服务器协助双方配对和交换连接信息；文件内容在两台设备之间直传，不经过信令服务器中转。
 应用不要求注册账户。我们没有在应用中集成广告、用户行为分析，或自动向开发者上传日志、文件及崩溃报告的功能。
 这不表示应用“完全不处理个人信息”：你选择的内容、文件名和连接地址本身可能包含个人信息。
@@ -28,7 +28,7 @@
 ### 3. 信令服务器和其他接收方
 
 默认信令地址是 `wss://oracle.stariverfeel.eu.org:4376`。这是第三方服务，并非由本应用发布者管理。
-服务器能够看到你的连接来源地址、配对频道编号、请求时间和信令消息；它中继密码协商消息及加密的端点信息。
+服务器能够看到你的连接来源地址、配对频道编号、请求时间和信令消息；它中继密码协商消息，以及加密的端点与文件预告信息（文件名、类型、大小）。
 客户端不会向信令服务器直接发送传输码的密码单词、明文文件内容或文本正文。
 我们无法确认该第三方服务器的实际日志内容、保存期限或服务器所在地，因此不承诺其“零日志”或立即删除数据。
 你可以在设置中改用自行信任的兼容信令服务器，并独立核对其指纹和隐私安排。
@@ -91,7 +91,7 @@ Android 使用系统 Storage Access Framework 授权读取选定文件、写入�
 
 ## English
 
-Updated and effective: October 26, 2026.
+Updated and effective: October 28, 2026.
 
 This policy covers HermodTransfer, published by FeelLiao (Microsoft Store ID:
 `9PMPWN3HMR3M`), and the same project's Hermod desktop, Android and command-line
@@ -100,7 +100,7 @@ Privacy contact: [feel2027@outlook.com](mailto:feel2027@outlook.com).
 
 ### 1. How the app works
 
-The app uses a transfer code to establish an encrypted IPv6 peer-to-peer connection
+The app uses a transfer code to establish an encrypted IPv4 LAN or IPv6 peer-to-peer connection
 for a file you select or text you enter. A signaling server helps pair devices and
 exchange connection information. File contents travel directly between the devices,
 not through the signaling server. No app account is required. We have not integrated
@@ -121,7 +121,7 @@ selected content, filenames and network addresses can themselves be personal inf
 The default signaling address is `wss://oracle.stariverfeel.eu.org:4376`. This is a
 third-party service, not managed by the app publisher. The server can see connection
 source addresses, pairing channel numbers, request timing and signaling messages.
-It relays password-agreement messages and encrypted endpoint information. The client
+It relays password-agreement messages and encrypted endpoint information and file offers (name, type and size). The client
 does not directly send the code's password words, plaintext file contents or message
 text to the signaling server. We cannot confirm that server's actual logging,
 retention periods or hosting location, and do not promise zero logging or immediate

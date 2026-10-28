@@ -78,14 +78,16 @@ fn sha256_32(data: &[u8]) -> [u8; 32] {
 /// 会话建立的可选参数（对应 CLI 的 `--transport` / `--mtu` / `--congestion` 等）。
 #[derive(Debug, Clone)]
 pub struct SessionOptions {
+    /// 发送前预告；旧端忽略这个可选 JSON 扩展。
+    pub offer: Option<crate::transfer::TransferOffer>,
     /// 载荷限速，同时用于控制 QUIC 排队窗口。
     pub bandwidth_limit: crate::bandwidth::BandwidthLimit,
     /// 当前协议的 MTU：WireGuard 内层 IP（自动 1400），QUIC UDP 载荷上限（自动 1452）。
     pub mtu: Option<usize>,
     /// UDP 绑定地址（默认 `[::]:0`）。
-    pub udp_bind: Option<std::net::SocketAddrV6>,
+    pub udp_bind: Option<std::net::SocketAddr>,
     /// 传输协议：
-    /// - tx：`Some(kind)` 指定；`None` 等同于 QUIC。
+    /// - tx：`Some(kind)` 指定；`None` 等同于 WireGuard。
     /// - rx：`None` = 自动跟随对端；`Some(kind)` = 强制并校验。
     pub transport: Option<TransportKind>,
     /// 统一拥塞控制；auto 在 WireGuard 下为 CUBIC，在 QUIC 下为 BBR。
@@ -95,6 +97,7 @@ pub struct SessionOptions {
 impl Default for SessionOptions {
     fn default() -> Self {
         Self {
+            offer: None,
             bandwidth_limit: crate::bandwidth::BandwidthLimit::UNLIMITED,
             mtu: None,
             udp_bind: None,
@@ -130,6 +133,8 @@ pub struct TxSession {
 
 /// rx 会话（已建立，`dial` 后收文件）。
 pub struct RxSession {
+    /// 对端的加密预告；旧发送端为 None，后续从 HTTP 头补齐。
+    pub offer: Option<crate::transfer::TransferOffer>,
     /// 已建立的传输连接（WireGuard 或 QUIC）。
     pub conn: AnyConnection,
     /// 传输内 HTTP 的一次性 token（rx 用同一个 token 拨号）。
@@ -173,7 +178,7 @@ async fn open(config: &Config) -> Result<WsStream, SessionError> {
         client::ClientError::Ws(tokio_tungstenite::tungstenite::Error::Io(
             std::io::Error::new(
                 std::io::ErrorKind::TimedOut,
-                "signaling connection timed out after 15s; check IPv6 connectivity and the server",
+                "signaling connection timed out after 15s; check network connectivity and the server",
             ),
         ))
     })??;
@@ -204,6 +209,9 @@ pub async fn sender_session_with_ready(
 ) -> Result<TxSession, SessionError> {
     opts.validate_for(opts.transport.unwrap_or(TransportKind::WireGuard))
         .map_err(SessionError::Options)?;
+    if let Some(offer) = &opts.offer {
+        offer.validate().map_err(SessionError::Options)?;
+    }
     let (channel_id, words) = wordlist::parse_transfer_code(code)?;
     let password = words.join("-");
     let mut ws = open(config).await?;
@@ -216,7 +224,7 @@ pub async fn sender_session_with_ready(
         "PAKE handshake complete"
     );
     let token = derive_http_token(&k, channel_id);
-    let conn = exchange_and_establish(
+    let (conn, _) = exchange_and_establish(
         &mut ws,
         channel_id,
         &k,
@@ -254,7 +262,7 @@ pub async fn receiver_session_with(
         "PAKE handshake complete"
     );
     let token = derive_http_token(&k, channel_id);
-    let conn = exchange_and_establish(
+    let (conn, offer) = exchange_and_establish(
         &mut ws,
         channel_id,
         &k,
@@ -264,7 +272,7 @@ pub async fn receiver_session_with(
         opts,
     )
     .await?;
-    Ok(RxSession { conn, token })
+    Ok(RxSession { conn, token, offer })
 }
 
 /// 构造指定传输实现，并应用所有通用/协议特有选项。
@@ -318,6 +326,40 @@ fn parse_endpoint(bytes: &[u8]) -> Result<(TransportKind, &[u8]), SessionError> 
     Ok((kind, &bytes[ENDPOINT_HEADER_LEN..]))
 }
 
+/// 两种端点当前都是 JSON 对象；旧解析器会忽略未知字段，HE v1 保持不变。
+fn attach_offer(
+    endpoint: &[u8],
+    offer: Option<&crate::transfer::TransferOffer>,
+) -> Result<Vec<u8>, SessionError> {
+    let Some(offer) = offer else {
+        return Ok(endpoint.to_vec());
+    };
+    offer.validate().map_err(SessionError::Options)?;
+    let mut value: serde_json::Value = serde_json::from_slice(endpoint)
+        .map_err(|e| SessionError::BadEndpointHeader(e.to_string()))?;
+    value
+        .as_object_mut()
+        .ok_or_else(|| SessionError::BadEndpointHeader("expected endpoint object".into()))?
+        .insert(
+            "transfer_offer".into(),
+            serde_json::to_value(offer)
+                .map_err(|e| SessionError::BadEndpointHeader(e.to_string()))?,
+        );
+    serde_json::to_vec(&value).map_err(|e| SessionError::BadEndpointHeader(e.to_string()))
+}
+
+fn read_offer(endpoint: &[u8]) -> Result<Option<crate::transfer::TransferOffer>, SessionError> {
+    let value: serde_json::Value = serde_json::from_slice(endpoint)
+        .map_err(|e| SessionError::BadEndpointHeader(e.to_string()))?;
+    let Some(offer) = value.get("transfer_offer") else {
+        return Ok(None);
+    };
+    let offer: crate::transfer::TransferOffer = serde_json::from_value(offer.clone())
+        .map_err(|e| SessionError::BadEndpointHeader(e.to_string()))?;
+    offer.validate().map_err(SessionError::Options)?;
+    Ok(Some(offer))
+}
+
 /// 交换加密端点字节，并 establish 传输。
 ///
 /// tx 先 prepare+send，因为接收端需要先看到 tx 的端点头才能选传输实现。
@@ -329,7 +371,7 @@ async fn exchange_and_establish(
     observed: ObservedAddrs,
     role: Role,
     opts: &SessionOptions,
-) -> Result<AnyConnection, SessionError> {
+) -> Result<(AnyConnection, Option<crate::transfer::TransferOffer>), SessionError> {
     let fingerprint = sha256_32(token);
     let psk = derive_wg_psk(k, channel_id);
     let aad = channel_id.to_be_bytes();
@@ -339,6 +381,7 @@ async fn exchange_and_establish(
             let kind = opts.transport.unwrap_or(TransportKind::WireGuard);
             let mut transport = build_transport(opts, kind, &observed, fingerprint)?;
             let my_endpoint = transport.prepare().await?;
+            let my_endpoint = attach_offer(&my_endpoint, opts.offer.as_ref())?;
             let my_blob = aead::seal(k, &aad, &wrap_endpoint(kind, &my_endpoint))?;
             client::send_blob(ws, channel_id, &my_blob).await?;
 
@@ -353,7 +396,7 @@ async fn exchange_and_establish(
             }
 
             crate::log_info!(transport = %kind, "endpoint exchanged, establishing transport");
-            Ok(transport.establish(role, &psk, peer_endpoint).await?)
+            Ok((transport.establish(role, &psk, peer_endpoint).await?, None))
         }
         Role::Receiver => {
             let peer_blob = client::recv_blob(ws).await?;
@@ -368,6 +411,7 @@ async fn exchange_and_establish(
                 });
             }
 
+            let offer = read_offer(peer_endpoint)?;
             let mut transport = build_transport(opts, peer_kind, &observed, fingerprint)?;
             let my_endpoint = transport.prepare().await?;
             let my_blob = aead::seal(k, &aad, &wrap_endpoint(peer_kind, &my_endpoint))?;
@@ -378,7 +422,7 @@ async fn exchange_and_establish(
                 auto = opts.transport.is_none(),
                 "endpoint exchanged, establishing transport"
             );
-            Ok(transport.establish(role, &psk, peer_endpoint).await?)
+            Ok((transport.establish(role, &psk, peer_endpoint).await?, offer))
         }
     }
 }
@@ -386,6 +430,24 @@ async fn exchange_and_establish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_offer_is_compatible_and_validated() {
+        let endpoint = br#"{"version":1,"udp_port":1234,"ipv6_candidates":[]}"#;
+        assert_eq!(read_offer(endpoint).unwrap(), None);
+        let offer = crate::transfer::TransferOffer {
+            kind: crate::transfer::Kind::File,
+            name: "empty.bin".into(),
+            size: 0,
+        };
+        let extended = attach_offer(endpoint, Some(&offer)).unwrap();
+        assert_eq!(read_offer(&extended).unwrap(), Some(offer));
+        let malformed = br#"{"transfer_offer":{"kind":"file","name":"bad\nname","size":1}}"#;
+        assert!(read_offer(malformed).is_err());
+        let overflow =
+            br#"{"transfer_offer":{"kind":"file","name":"file","size":18446744073709551615}}"#;
+        assert!(read_offer(overflow).is_err());
+    }
 
     fn cfg_with(url: &str, fp_hex: Option<&str>) -> Config {
         let trusted = match fp_hex {

@@ -6,7 +6,7 @@ use hermod_core::options::{Congestion, ConnectionSettings, Mtu};
 #[command(
     name = "hermod",
     version,
-    about = "Private IPv6 peer-to-peer file and text transfer",
+    about = "Private IPv4 LAN / IPv6 peer-to-peer file and text transfer",
     after_help = "Migration: use --mtu instead of --wg-mtu/--quic-mtu; --congestion instead of --quic-cc. Binding is automatic; --listen and the unimplemented serve command have been removed."
 )]
 pub struct Cli {

@@ -171,7 +171,7 @@ fn progress(state: Arc<Mutex<Snapshot>>) -> impl FnMut(u64) + Send {
 
 async fn run(
     config: Config,
-    options: SessionOptions,
+    mut options: SessionOptions,
     action: Action,
     words: u8,
     state: Arc<Mutex<Snapshot>>,
@@ -204,6 +204,11 @@ async fn run(
                 file = Box::new(staged);
                 size
             };
+            options.offer = Some(hermod_core::transfer::TransferOffer {
+                kind: source.kind,
+                name: source.name.clone(),
+                size,
+            });
             state.lock().unwrap().total = Some(size);
             let (_, code) = hermod_core::crypto::wordlist::generate_transfer_code(
                 &mut rand_core::UnwrapErr(getrandom::SysRng),
@@ -269,6 +274,7 @@ async fn run(
             *abort.lock().unwrap() = Some(rx.conn.abort_handle());
             {
                 let mut s = state.lock().unwrap();
+                s.total = rx.offer.as_ref().map(|offer| offer.size);
                 s.phase = "Receiving file".into();
                 s.started = Instant::now();
                 s.network = rx.conn.network_stats();
@@ -281,12 +287,19 @@ async fn run(
                 );
             }
             let mut on_progress = progress(state.clone());
-            let receipt = orchestrate::receive_with_limit(
+            let mut on_metadata = |offer: &hermod_core::transfer::TransferOffer| {
+                state.lock().unwrap().total = Some(offer.size);
+            };
+            let receipt = orchestrate::receive_with_options(
                 &mut rx.conn,
                 &rx.token,
                 &directory,
-                Some(&mut on_progress),
-                limit,
+                orchestrate::ReceiveOptions {
+                    limit,
+                    expected: rx.offer.as_ref(),
+                    metadata: Some(&mut on_metadata),
+                    progress: Some(&mut on_progress),
+                },
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -408,10 +421,14 @@ mod tests {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 };
                 let rx = Job::start(cfg, options.clone(), Action::Receive { code, directory: dir.join("out") }, 3, Box::new(|| {}));
+                let mut announced_before_complete = false;
                 loop {
+                    let receiving = rx.snapshot();
+                    if receiving.completed.is_none() && receiving.total == Some(data.len() as u64) { announced_before_complete = true; }
                     if tx.snapshot().completed.is_some() && rx.snapshot().completed.is_some() { break; }
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
+                assert!(announced_before_complete, "receiver must know the size before completion");
                 for job in [&tx, &rx] {
                     let s = job.snapshot();
                     assert!(s.error.is_none(), "{:?}", s.error);

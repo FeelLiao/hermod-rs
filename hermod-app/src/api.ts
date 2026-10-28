@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Language, Locale } from "./i18n";
 export interface Settings {
+  version: number;
   connection: {
     transport: string;
     mtu: string;
@@ -45,6 +46,7 @@ export interface Status {
 export interface Bootstrap {
   version: string;
   ipv6: string[];
+  ipv4: string[];
   platform: string;
   color_seed?: string;
   settings: Settings;

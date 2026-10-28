@@ -8,7 +8,8 @@
 
 use crate::bandwidth::BandwidthLimit;
 use crate::transport::http::HttpError;
-use crate::transport::http::client::{FetchOutcome, fetch_with_limit};
+pub use crate::transport::http::client::ReceiveOptions;
+use crate::transport::http::client::{FetchOutcome, fetch_with_limit, fetch_with_options};
 use crate::transport::http::server::{ServeOptions, ServeOutcome, serve_with_limit};
 use crate::transport::iface::TransportConnection;
 use tokio::io::AsyncWrite;
@@ -247,6 +248,29 @@ pub async fn receive_with_limit<C>(
 where
     C: TransportConnection,
 {
+    receive_with_options(
+        conn,
+        token,
+        dest_dir,
+        ReceiveOptions {
+            limit,
+            progress,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+/// 先公布并校验元数据，保留临时文件、摘要裁决和最终改名的原有语义。
+pub async fn receive_with_options<C>(
+    conn: &mut C,
+    token: &[u8; 16],
+    dest_dir: &std::path::Path,
+    options: ReceiveOptions<'_>,
+) -> Result<Receipt, OrchestrateError>
+where
+    C: TransportConnection,
+{
     std::fs::create_dir_all(dest_dir)?;
     // 唯一临时名（避免并发/重名）；create_temp 用 O_EXCL + 0600
     let mut rnd = [0u8; 8];
@@ -264,7 +288,14 @@ where
     let guard = TempGuard(temp.clone());
     let mut file = tokio::fs::File::from_std(std_file);
 
-    let out = match fetch_file_with_limit(conn, token, &mut file, progress, limit).await {
+    let stream = conn
+        .dial()
+        .await
+        .map_err(|e| OrchestrateError::Transport(e.to_string()))?;
+    let out = match fetch_with_options(stream, token, &mut file, options)
+        .await
+        .map_err(map_http)
+    {
         Ok(out) => out,
         Err(e) => {
             let _ = std::fs::remove_file(&temp);
@@ -306,6 +337,78 @@ mod tests {
     use crate::transport::WgConnection;
     use crate::transport::iface::Transport;
     use crate::transport::wireguard::transport::WireGuardTransport;
+
+    /// IPv4-only 绑定验证两个独立协议、空文件和 HTTP 元数据先于载荷到达。
+    #[tokio::test]
+    async fn ipv4_transfers_and_metadata_on_both_protocols() {
+        use crate::transport::{AnyTransport, TransportKind};
+        tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            for kind in [TransportKind::Quic, TransportKind::WireGuard] {
+                for size in [0, 128 * 1024] {
+                    let mut tx = AnyTransport::new(kind);
+                    let mut rx = AnyTransport::new(kind);
+                    tx.set_udp_bind(Some("127.0.0.1:0".parse().unwrap()));
+                    rx.set_udp_bind(Some("127.0.0.1:0".parse().unwrap()));
+                    tx.set_credential_fingerprint([9; 32]);
+                    rx.set_credential_fingerprint([9; 32]);
+                    let tx_ep = tx.prepare().await.unwrap();
+                    let rx_ep = rx.prepare().await.unwrap();
+                    let mut tx = tx.establish(Role::Sender, &[8; 32], &rx_ep).await.unwrap();
+                    let mut rx = rx
+                        .establish(Role::Receiver, &[8; 32], &tx_ep)
+                        .await
+                        .unwrap();
+                    let bytes = vec![42; size];
+                    let expected = transfer::TransferOffer {
+                        kind: Kind::File,
+                        name: "ipv4.bin".into(),
+                        size: size as u64,
+                    };
+                    let announced = std::sync::atomic::AtomicBool::new(false);
+                    let mut metadata = |offer: &transfer::TransferOffer| {
+                        assert_eq!(offer, &expected);
+                        announced.store(true, std::sync::atomic::Ordering::Relaxed);
+                    };
+                    let mut progress = |_| {
+                        assert!(announced.load(std::sync::atomic::Ordering::Relaxed));
+                    };
+                    let mut dest = Vec::new();
+                    let send = ServeOptions {
+                        token: [4; 16],
+                        kind: Kind::File,
+                        name: expected.name.clone(),
+                        size: size as u64,
+                        body: Box::new(std::io::Cursor::new(bytes.clone())),
+                        progress: None,
+                    };
+                    let receive = async {
+                        let stream = rx.dial().await.unwrap();
+                        fetch_with_options(
+                            stream,
+                            &[4; 16],
+                            &mut dest,
+                            ReceiveOptions {
+                                expected: Some(&expected),
+                                metadata: Some(&mut metadata),
+                                progress: Some(&mut progress),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                        .unwrap()
+                    };
+                    let (sent, received) = tokio::join!(serve_file(&mut tx, send), receive);
+                    assert!(sent.unwrap().verified && received.verified);
+                    assert_eq!(dest, bytes);
+                    assert!(announced.load(std::sync::atomic::Ordering::Relaxed));
+                    tx.shutdown().await.unwrap();
+                    rx.shutdown().await.unwrap();
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
 
     /// 建一对已建立、可 listen/dial 的连接。
     async fn connected_pair() -> (WgConnection, WgConnection) {
@@ -393,8 +496,8 @@ mod tests {
         let mut tx = QuicTransport::new();
         let mut rx = QuicTransport::new();
         let bind = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0);
-        tx.set_udp_bind(Some(bind));
-        rx.set_udp_bind(Some(bind));
+        tx.set_udp_bind(Some(bind.into()));
+        rx.set_udp_bind(Some(bind.into()));
         tx.set_credential_fingerprint([0x91; 32]);
         rx.set_credential_fingerprint([0x91; 32]);
         let tx_ep = tx.prepare().await.unwrap();
@@ -449,8 +552,8 @@ mod tests {
         let mut tx = QuicTransport::new();
         let mut rx = QuicTransport::new();
         let bind = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0);
-        tx.set_udp_bind(Some(bind));
-        rx.set_udp_bind(Some(bind));
+        tx.set_udp_bind(Some(bind.into()));
+        rx.set_udp_bind(Some(bind.into()));
         tx.set_credential_fingerprint([0x55; 32]);
         rx.set_credential_fingerprint([0x55; 32]);
         let tx_ep = tx.prepare().await.unwrap();

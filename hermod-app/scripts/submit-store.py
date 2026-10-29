@@ -77,7 +77,7 @@ class StoreCli:
         return None
 
 
-def submit(cli, values, bundle, version):
+def configured_app(cli, values):
     app_id = values["MS_STORE_APP_ID"]
     cli.call(
         "reconfigure", "--tenantId", values["AZURE_AD_TENANT_ID"],
@@ -91,10 +91,74 @@ def submit(cli, values, bundle, version):
     if (app.get("id") != app_id or app.get("packageidentityname") != PACKAGE_IDENTITY
             or app.get("packagefamilyname") != PACKAGE_FAMILY):
         raise SubmissionError("Store product does not match the HermodTransfer package identity")
-    # 官方 publish 会删除现有草稿；预检先阻止覆盖手工草稿或仍在审核的版本。
-    if app.get("pendingapplicationsubmission"):
-        raise SubmissionError("An unfinished Store submission exists; complete or resolve it in Partner Center before retrying")
-    published_id = (app.get("lastpublishedapplicationsubmission") or {}).get("id")
+    return app
+
+
+def reference_id(app, key, label):
+    reference = app.get(key)
+    if reference is None:
+        return None
+    if not isinstance(reference, dict):
+        raise SubmissionError(f"Store returned an invalid {label} submission reference")
+    value = reference.get("id")
+    if value is not None and (not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value)):
+        raise SubmissionError(f"Store returned an invalid {label} submission ID; inspect Partner Center")
+    return value
+
+
+def submission_status(submission):
+    # 状态只允许短字母串；不把意外的 URL、JSON 或控制字符带入日志。
+    status = submission.get("status")
+    return status if isinstance(status, str) and re.fullmatch(r"[A-Za-z]{1,40}", status) else "Unknown"
+
+
+def diagnose(cli, values):
+    app = configured_app(cli, values)
+    pending_id = reference_id(app, "pendingapplicationsubmission", "pending")
+    published_id = reference_id(app, "lastpublishedapplicationsubmission", "published")
+    reference = "present" if app.get("pendingapplicationsubmission") is not None else "absent"
+    lines = [
+        "Microsoft Store read-only diagnostics",
+        f"Last published submission ID: {published_id or 'none'}",
+        f"Pending submission reference: {reference}",
+        f"Pending submission ID: {pending_id or 'none'}",
+    ]
+    expected_id = pending_id or published_id
+    if expected_id:
+        current = cli.call("submission", "get", values["MS_STORE_APP_ID"], json_output=True)
+        if current.get("id") != expected_id:
+            raise SubmissionError("Store submission changed during diagnostics; rerun diagnostics")
+        status = submission_status(current)
+        lines.append(f"{'Pending' if pending_id else 'Published'} submission status: {status}")
+        if pending_id and status == "PendingCommit":
+            lines.append("PendingCommit is an unsubmitted draft, not a submission under review.")
+    if not pending_id:
+        lines.append("No pending submission ID was returned; there is no pending submission reference to block publication.")
+    lines.append("No Store submission was created, changed, deleted or uploaded by this diagnostic run.")
+    return "\n".join(lines)
+
+
+def submit(cli, values, bundle, version):
+    app_id = values["MS_STORE_APP_ID"]
+    app = configured_app(cli, values)
+    # CLI 以非 null 的 ID 判断待处理提交，不能仅凭非空对象把占位字段误判为草稿。
+    pending_id = reference_id(app, "pendingapplicationsubmission", "pending")
+    if pending_id:
+        current = cli.call("submission", "get", app_id, json_output=True)
+        if current.get("id") != pending_id:
+            raise SubmissionError("Store submission changed during preflight; retry after checking Partner Center")
+        status = submission_status(current)
+        if status == "PendingCommit":
+            detail = "This is an unsubmitted draft, not a submission under review."
+        else:
+            detail = "Inspect its processing state in Partner Center."
+        # 官方 publish 会删除草稿；即使尚未送审，也不能自动丢弃其中的编辑。
+        raise SubmissionError(
+            f"Store pending submission {pending_id} has status {status}. {detail} "
+            "The existing submission was preserved and no package was uploaded. "
+            "Resolve it in Partner Center before retrying."
+        )
+    published_id = reference_id(app, "lastpublishedapplicationsubmission", "published")
     if not published_id:
         raise SubmissionError("The first publication must be completed in Partner Center")
     published = cli.call("submission", "get", app_id, json_output=True)
@@ -117,10 +181,20 @@ def submit(cli, values, bundle, version):
     return {"submission_id": submission_id, "status": status, "version": version}
 
 
+def report(message):
+    print(message)
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+            summary.write("```text\n" + message + "\n```\n")
+
+
 def main():
     values = credentials(os.environ)
     if len(sys.argv) != 2:
-        raise SubmissionError("Usage: submit-store.py PATH_TO_MSIXBUNDLE")
+        raise SubmissionError("Usage: submit-store.py PATH_TO_MSIXBUNDLE | --diagnose")
+    if sys.argv[1] == "--diagnose":
+        report(diagnose(StoreCli(os.environ), values))
+        return
     bundle = Path(sys.argv[1]).resolve(strict=True)
     if bundle.name != "hermod-windows.msixbundle":
         raise SubmissionError("Expected hermod-windows.msixbundle")
@@ -137,10 +211,7 @@ def main():
         f"Microsoft Store submission {result['submission_id']}: {result['status']} "
         f"(package {result['version']}). Certification and publication continue in Partner Center."
     )
-    print(message)
-    if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-            summary.write(message + "\n")
+    report(message)
 
 
 if __name__ == "__main__":

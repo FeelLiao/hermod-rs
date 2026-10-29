@@ -84,4 +84,6 @@ succeed and an exact four-file Release allowlist is enforced (three Linux progra
 After Release succeeds, tag runs submit the Windows bundle on a disposable Windows runner through the pinned official Store CLI,
 using `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`, `AZURE_AD_APPLICATION_SECRET`,
 `SELLER_ID` and `MS_STORE_APP_ID`. Validate identity/version and preserve existing Store drafts;
-never print credentials or full submission JSON/SAS URLs. Manual runs only build artifacts.
+never print credentials or full submission JSON/SAS URLs. Manual release runs only build artifacts.
+`store-diagnostics.yml` is a separate manual, read-only Store query: report submission
+IDs and status without creating, updating, deleting, uploading or committing submissions.

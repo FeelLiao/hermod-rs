@@ -201,6 +201,20 @@ before upload. Every update must increase the application version (and mapped St
 version). Existing drafts or reviews stop submission before `publish`, because the
 CLI would otherwise replace the existing draft. Complete or resolve that submission
 in Partner Center before retrying; don't edit the same submission while Actions runs.
+The pending reference must contain an ID; an object with a null ID is not a pending
+submission. On a real conflict the script reads and reports its ID and status.
+`PendingCommit` means an unsubmitted draft, not an update already sent for review.
+Inspect that draft before deciding whether to keep or discard its edits; the script
+does not delete it. It never logs the full submission or its upload URL.
+
+For an unclear pending-submission error, run **Actions → Microsoft Store diagnostics
+→ Run workflow → master** (`store-diagnostics.yml`). It uses the existing secrets on
+a disposable Windows runner and runs `submit-store.py --diagnose`, with no package
+build or download. The job summary shows whether the pending reference is present,
+its ID (or `none`), the last published submission ID and the selected submission's
+status. This workflow only reads Store state; it does not create, update, delete,
+upload or commit a Store submission. A rerun of an old release uses that tag's old
+script, so use the diagnostic workflow on `master` to inspect the current API state.
 
 The script updates packages and commits them for processing, retaining existing
 listings, pricing and publication mode. The job summary records the submission ID

@@ -35,10 +35,11 @@ class FakeCli:
             "pendingapplicationsubmission": None,
             "lastpublishedapplicationsubmission": {"id": "100"},
         }
-        self.published = {"id": "100", "applicationpackages": [
+        self.published = {"id": "100", "status": "Published", "applicationpackages": [
             {"version": "1.4.3.0", "filestatus": "Uploaded"},
         ]}
         self.submitted = {"id": "101", "status": "PreProcessing", "statusdetails": {"errors": []}}
+        self.pending = None
         self.upload_error = None
         self.did_publish = False
 
@@ -47,7 +48,7 @@ class FakeCli:
         if arguments[:2] == ("apps", "get"):
             return copy.deepcopy(self.app)
         if arguments[:2] == ("submission", "get"):
-            return copy.deepcopy(self.submitted if self.did_publish else self.published)
+            return copy.deepcopy(self.submitted if self.did_publish else self.pending or self.published)
         if arguments[0] == "publish":
             if self.upload_error:
                 raise self.upload_error
@@ -73,10 +74,88 @@ class StoreSubmissionTests(unittest.TestCase):
         publish = next(command for command in cli.calls if command[0] == "publish")
         self.assertEqual(publish, ("publish", "/tmp/verified/hermod-windows.msixbundle", "--appId", SECRETS["MS_STORE_APP_ID"]))
 
-    def test_existing_draft_or_review_is_preserved(self):
+    def test_pending_reference_without_an_id_does_not_block_publication(self):
+        for pending in ({}, {"id": None, "resourcelocation": None}):
+            with self.subTest(pending=pending):
+                cli = FakeCli()
+                cli.app["pendingapplicationsubmission"] = pending
+                self.assertEqual(self.run_submit(cli)["submission_id"], "101")
+
+    def test_existing_draft_or_review_reports_status_and_is_preserved(self):
+        for status in ("PendingCommit", "CommitStarted", "Certification", "CommitFailed", "Published"):
+            with self.subTest(status=status):
+                cli = FakeCli()
+                cli.app["pendingapplicationsubmission"] = {"id": "200"}
+                cli.pending = {"id": "200", "status": status}
+                self.assert_not_published(cli, f"pending submission 200 has status {status}")
+
+    def test_draft_diagnostic_explains_it_has_not_been_submitted_and_hides_upload_url(self):
         cli = FakeCli()
         cli.app["pendingapplicationsubmission"] = {"id": "200"}
-        self.assert_not_published(cli, "unfinished Store submission")
+        cli.pending = {"id": "200", "status": "PendingCommit", "fileuploadurl": "https://storage.example/?sig=hidden"}
+        with self.assertRaises(store.SubmissionError) as error:
+            self.run_submit(cli)
+        self.assertIn("unsubmitted draft, not a submission under review", str(error.exception))
+        self.assertNotIn("hidden", str(error.exception))
+        self.assertFalse(cli.did_publish)
+
+    def test_pending_reference_changes_or_invalid_responses_fail_without_upload(self):
+        cli = FakeCli()
+        cli.app["pendingapplicationsubmission"] = {"id": "200"}
+        cli.pending = {"id": "201", "status": "PendingCommit"}
+        self.assert_not_published(cli, "changed during preflight")
+        for pending in ("invalid", {"id": ""}, {"id": "not-an-id"}):
+            with self.subTest(pending=pending):
+                cli = FakeCli()
+                cli.app["pendingapplicationsubmission"] = pending
+                self.assert_not_published(cli, "invalid pending submission")
+
+    def test_diagnostics_distinguish_absent_and_null_id_references_without_publishing(self):
+        for pending in (None, {}, {"id": None, "resourcelocation": None}):
+            with self.subTest(pending=pending):
+                cli = FakeCli()
+                cli.app["pendingapplicationsubmission"] = pending
+                report = store.diagnose(cli, SECRETS)
+                self.assertIn("Pending submission ID: none", report)
+                self.assertIn("Published submission status: Published", report)
+                self.assertIn(f"Pending submission reference: {'absent' if pending is None else 'present'}", report)
+                self.assertFalse(cli.did_publish)
+                self.assertEqual([call[:2] for call in cli.calls[2:]], [("apps", "get"), ("submission", "get")])
+
+    def test_diagnostics_report_drafts_without_leaking_upload_urls_or_changing_them(self):
+        cli = FakeCli()
+        cli.app["pendingapplicationsubmission"] = {"id": "200"}
+        cli.pending = {"id": "200", "status": "PendingCommit", "fileuploadurl": "https://storage.example/?sig=hidden"}
+        report = store.diagnose(cli, SECRETS)
+        self.assertIn("Pending submission ID: 200", report)
+        self.assertIn("Pending submission status: PendingCommit", report)
+        for private in (*SECRETS.values(), "hidden", "storage.example"):
+            self.assertNotIn(private, report)
+        self.assertEqual([call[:2] for call in cli.calls[2:]], [("apps", "get"), ("submission", "get")])
+        cli.pending["id"] = "201"
+        with self.assertRaisesRegex(store.SubmissionError, "changed during diagnostics"):
+            store.diagnose(cli, SECRETS)
+
+    def test_diagnostics_run_without_a_bundle_and_write_a_safe_job_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            summary = Path(directory) / "summary.md"
+            cli = FakeCli()
+            with patch.dict(os.environ, dict(SECRETS, GITHUB_STEP_SUMMARY=str(summary))), \
+                    patch.object(store.sys, "argv", ["submit-store.py", "--diagnose"]), \
+                    patch.object(store, "StoreCli", return_value=cli), \
+                    patch.object(store, "submit") as submit, contextlib.redirect_stdout(io.StringIO()):
+                store.main()
+            self.assertIn("Pending submission ID: none", summary.read_text())
+            submit.assert_not_called()
+
+    def test_unexpected_status_does_not_expose_response_content(self):
+        for status in (None, {}, "https://storage.example/?sig=hidden", "Published\n::error::hidden"):
+            with self.subTest(status=status):
+                cli = FakeCli()
+                cli.published["status"] = status
+                report = store.diagnose(cli, SECRETS)
+                self.assertIn("Published submission status: Unknown", report)
+                self.assertNotIn("hidden", report)
 
     def test_wrong_product_or_package_identity_never_uploads(self):
         for key in ("id", "packageidentityname", "packagefamilyname"):

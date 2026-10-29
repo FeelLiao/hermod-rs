@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Check the pending Microsoft Store submission ID instead of object presence, and
+  report its actual status so an unsubmitted draft is distinguishable from review.
+
+### Added
+
+- A manual read-only Store diagnostics workflow that reports submission references
+  and status using the existing Actions secrets, without rebuilding packages.
+
 ## [0.4.5] - 2026-10-29
 
 ### Changed

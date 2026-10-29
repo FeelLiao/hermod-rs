@@ -99,7 +99,7 @@ APPIMAGE_EXTRACT_AND_RUN=1 ./hermod-linux-x64.AppImage
 **Android:** allow APK installation from your download application, then open the APK.
 Only ARM64 is published. Minimum SDK is 34; compile/target SDK is 37. Keep the same
 signing keys when upgrading. For old releases signed with a temporary key, **export
-all inbox files before uninstalling** and installing v0.4.4. The same precaution
+all inbox files before uninstalling** and installing v0.4.5. The same precaution
 applies to Windows packages with a different prior signing identity. Uninstalling can
 remove private application data.
 

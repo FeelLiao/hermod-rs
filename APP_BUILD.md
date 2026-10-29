@@ -1,4 +1,4 @@
-# Building and releasing Hermod 0.4.4
+# Building and releasing Hermod 0.4.5
 
 [User guide](README.md) · [中文使用说明](README.zh-CN.md)
 
@@ -69,7 +69,7 @@ npm test --prefix hermod-app
 cd hermod-app
 APPIMAGE_EXTRACT_AND_RUN=1 npm run tauri -- build --ci --bundles appimage -- --locked
 cd ..
-hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.4_amd64.AppImage
+hermod-app/scripts/smoke-appimage.sh target/release/bundle/appimage/Hermod_0.4.5_amd64.AppImage
 CC_x86_64_unknown_linux_musl=musl-gcc cargo build --locked --release --target x86_64-unknown-linux-musl -p hermod-cli
 readelf -l target/x86_64-unknown-linux-musl/release/hermod
 ```
@@ -140,9 +140,9 @@ Submission remains subject to Microsoft's review and account requirements.
 
 The Store [version rules](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/app-package-requirements#package-version-numbering)
 require a nonzero first component and a final `0`. `msix-version.mjs` maps application
-`major.minor.patch` to **`(major + 1).minor.patch.0`**: release **0.4.4 → 1.4.4.0**,
+`major.minor.patch` to **`(major + 1).minor.patch.0`**: release **0.4.5 → 1.4.5.0**,
 and future app 1.0.0 → MSIX 2.0.0.0. All components are range-checked. Keep this mapping
-stable so upgrades remain ordered; the app's About/version field still shows 0.4.4.
+stable so upgrades remain ordered; the app's About/version field still shows 0.4.5.
 
 Windows CI requires no `WINDOWS_PFX_BASE64` or `WINDOWS_PFX_PASSWORD` secrets. Any old
 Windows secrets may be removed from GitHub, but local signing backups are not touched.
@@ -249,7 +249,7 @@ missing, configure them and re-run the failed jobs. Source/workflow changes requ
 new commit; retrying an old tag still uses its old source. Use **Actions → Build and
 release → Run workflow → master** to check new packaging, then publish a new version.
 Do not move an already pushed tag. Android retains `org.hermod.transfer` and uses
-`versionCode=40400` for 0.4.4; keep its signing key and alias for future upgrades.
+`versionCode=40500` for 0.4.5; keep its signing key and alias for future upgrades.
 
 ## GUI localization
 
@@ -362,7 +362,7 @@ After reviewing the commit and configuring signing secrets, the maintainer pushe
 
 ```bash
 git push origin master
-git push origin v0.4.4
+git push origin v0.4.5
 ```
 
 Do not move an already published tag to hide a failed build. Fix it in a new commit

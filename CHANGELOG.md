@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-10-29
+
 ### Changed
 
 - Keep one trusted signaling server per profile. Verifying a replacement atomically
@@ -24,6 +26,8 @@ adheres to [Semantic Versioning](https://semver.org/).
   still builds both programs.
 - Deliver Windows MSIXBundle updates only to Microsoft Store; GitHub Releases contain
   exactly three Linux programs and one Android APK.
+- Bump application versions to 0.4.5, Store bundle/package version to 1.4.5.0
+  and Android versionCode to 40500.
 
 ### Added
 

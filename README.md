@@ -20,14 +20,14 @@ Choose your device's CPU architecture, not the architecture of the sender.
 
 | Device | Files to download |
 | --- | --- |
-| Windows 10 2004+ / Windows 11, x64 / ARM64 | `hermod-windows.msixbundle` (Store submission only; both architectures) |
+| Windows 10 2004+ / Windows 11, x64 / ARM64 | [HermodTransfer in Microsoft Store](https://apps.microsoft.com/detail/9PMPWN3HMR3M) |
 | Linux desktop x64 | `hermod-linux-x64.AppImage` |
 | Linux terminal x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
 | Android 14+ ARM64 | `hermod-android-arm64.apk` |
 
 There are no macOS, Linux ARM64 GUI, Windows CLI or Android CLI release builds. Release attachments
-contain only five packages/programs; the Windows MSIXBundle is an unsigned Store upload,
-not direct-install downloads. No certificates or installation scripts are published.
+contain only four Linux/Android packages/programs. Windows packages are submitted
+directly to Microsoft Store. No certificates or installation scripts are published.
 GitHub also provides automatic source archives. Android CI builds and signs the APK
 and checks the package; it does not run Android emulator or UI tests.
 
@@ -79,12 +79,11 @@ HTTP headers. IPv4 LAN transfers require upgraded clients on both devices.
 
 ## Installation and upgrades
 
-**Windows:** install **HermodTransfer** from Microsoft Store after the listing is approved and
-published (publisher **FeelLiao**, Store ID **9PMPWN3HMR3M**). The single MSIXBundle
-on GitHub contains x64 and ARM64 packages. The maintainer uploads it to Partner Center's
-**Packages** page; Microsoft signs the certified packages and delivers the matching architecture.
-The unsigned GitHub bundle cannot be installed by double-clicking; no test certificate
-or installation script is provided. Before migrating from `Hermod.Transfer.Test`,
+**Windows:** install **HermodTransfer** from [Microsoft Store](https://apps.microsoft.com/detail/9PMPWN3HMR3M)
+(publisher **FeelLiao**, Store ID **9PMPWN3HMR3M**). Version-tag builds automatically submit
+the validated x64/ARM64 bundle after GitHub Release succeeds. Microsoft signs certified
+updates and delivers the matching architecture. Windows packages stay in Actions and
+Microsoft Store, outside GitHub Release attachments. Before migrating from `Hermod.Transfer.Test`,
 export important inbox files: the Store package uses a different identity.
 See [Store submission details](APP_BUILD.md#microsoft-store-packages).
 

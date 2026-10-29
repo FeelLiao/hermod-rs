@@ -21,10 +21,15 @@ adheres to [Semantic Versioning](https://semver.org/).
 - Add shared page and notification transitions, Material navigation/accordion motion,
   reduced-motion behavior, and independent progress rendering.
 - Stop building the Linux ARM64 GUI in Actions; retain its static CLI. Linux x64
-  still builds both programs. Release validation now requires exactly five files.
+  still builds both programs.
+- Deliver Windows MSIXBundle updates only to Microsoft Store; GitHub Releases contain
+  exactly three Linux programs and one Android APK.
 
 ### Added
 
+- Automatically submit the validated Windows bundle after successful version-tag
+  releases using the official Store CLI and `MS_STORE_APP_ID`. Preserve existing
+  drafts, check product identity and increasing versions, and report initial acceptance.
 - Bilingual privacy policy covering file and connection data, third-party signaling,
   local storage, permissions, retention and privacy contact. Store preparation now
   includes the policy and instructions for its public URL or text submission.

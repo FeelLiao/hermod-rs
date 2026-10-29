@@ -87,7 +87,9 @@ https://github.com/FeelLiao/hermod-rs/blob/master/PRIVACY.md
 ## 素材和程序包是两回事
 
 此 ZIP 是供你整理上传内容的素材包，不是 MSIX，不应上传到“程序包 / Packages”栏。
-程序包栏只需上传 GitHub Actions 产出的 `hermod-windows.msixbundle`，其中包含 x64 和 ARM64，商店自动选择设备适用的架构。
+版本标签构建会自动把 GitHub Actions 内部 `store-windows` 产物中的 `hermod-windows.msixbundle` 提交商店，
+其中包含 x64 和 ARM64，商店自动选择设备适用的架构。MSIX/MSIXBundle 不放入 GitHub Release。
+若需手动处理失败的提交，可从该次 Actions 下载产物后，在程序包栏上传 bundle。
 商店文案和截图应分别添加到对应语言的商店列表中。
 
 ## 官方参考（2026-10-26 核对）

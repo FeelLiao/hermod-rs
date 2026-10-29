@@ -99,11 +99,13 @@ developer analytics service; do not describe it as never accessing or transmitti
 personal information. A policy/documentation update does not require moving a release
 tag or changing the MSIX identity. See the [Microsoft privacy submission guidance](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/support-info).
 
-The Windows release file is **one unsigned MSIXBundle for Partner Center**, containing
-the native x64 and ARM64 packages. Download `hermod-windows.msixbundle` from Release,
-then upload it to the app submission's **Packages** page. No ZIP conversion, certificate,
-PowerShell installer or additional signing is needed. Microsoft signs the packages after
-certification; these GitHub files are not direct-install downloads. See Microsoft's
+Windows packaging produces **one unsigned MSIXBundle for Partner Center**, containing
+the native x64 and ARM64 packages. The `store-windows` Actions artifact carries
+`hermod-windows.msixbundle` to the automatic Store submission job; neither MSIX nor
+MSIXBundle files are attached to GitHub Releases. For manual recovery, download that
+Actions artifact and upload the bundle to the submission's **Packages** page.
+No certificate, PowerShell installer or additional signing is needed. Microsoft signs
+the packages after certification. See Microsoft's
 [package upload guide](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/msix/upload-app-packages)
 and [Store signing guidance](https://learn.microsoft.com/en-us/windows/msix/package/sign-msix-package-guide).
 
@@ -156,17 +158,58 @@ The runner installs Microsoft's WebView2 Runtime if needed.
 After both native jobs succeed, `windows_bundle` downloads their intermediate
 `windows-msix-x64` / `windows-msix-arm64` artifacts. `bundle-msix.ps1` runs MakeAppx
 `bundle` with an explicit version and validates both embedded packages, their Store
-identity, display names, versions and architecture coverage. Only the combined bundle
-matches the Release artifact allowlist; the individual MSIX files remain CI intermediates.
-The publish job validates the downloaded bundle again. Windows chooses the appropriate
+identity, display names, versions and architecture coverage. Both the individual MSIX
+files and the combined bundle remain internal Actions artifacts for Store delivery.
+The Store submission script validates the downloaded bundle again. Windows chooses the appropriate
 architecture; the executables themselves are still compiled separately.
 Continue publishing bundles for subsequent releases once a bundle is distributed,
 as explained in [Microsoft's bundling guide](https://learn.microsoft.com/en-us/windows/msix/package/bundling-overview).
 
-After publication, users install the Store-signed app (Store ID above); links become
-usable only after Microsoft makes the listing available. Old `Hermod.Transfer.Test`
+Users install the published Store-signed app (Store ID above). Old `Hermod.Transfer.Test`
 installations have a different identity: export important inbox files before migration
 or uninstalling. No automatic migration between these Windows package identities is claimed.
+
+### Automatic Microsoft Store updates
+
+The app is already published. A `v*` tag runs all checks and packaging, publishes the
+four Linux/Android Release files, then runs `store` using the **same run's**
+`store-windows` artifact. Branch pushes and manual builds never submit to Store.
+Store submission failure marks the workflow failed; the Linux/Android GitHub Release
+already created by that run remains available.
+
+Configure these repository Actions secrets:
+
+| Secret | Value |
+| --- | --- |
+| `AZURE_AD_TENANT_ID` | Partner Center-associated Entra tenant ID |
+| `AZURE_AD_APPLICATION_CLIENT_ID` | Registered Entra application's client ID |
+| `AZURE_AD_APPLICATION_SECRET` | Client secret value |
+| `SELLER_ID` | Partner Center seller ID |
+| `MS_STORE_APP_ID` | Store product ID, `9PMPWN3HMR3M` for this package |
+
+The Entra application needs the Partner Center Manager role. See Microsoft's
+[Actions setup](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/github-actions).
+The workflow pins the official setup action to its v1.1 commit and the Store CLI to
+v0.4.3. Submission runs on a disposable Windows runner, using Windows Credential
+Manager; Linux headless keyring setup is not required. Credentials are passed through
+environment variables to argument arrays, and full submission JSON/SAS URLs are omitted
+from logs. The runner and its credential store are discarded after the job; do not run
+the submission script on a persistent or self-hosted runner.
+
+`hermod-app/scripts/submit-store.py` validates the bundle, product identity and version
+before upload. Every update must increase the application version (and mapped Store
+version). Existing drafts or reviews stop submission before `publish`, because the
+CLI would otherwise replace the existing draft. Complete or resolve that submission
+in Partner Center before retrying; don't edit the same submission while Actions runs.
+
+The script updates packages and commits them for processing, retaining existing
+listings, pricing and publication mode. The job summary records the submission ID
+and initial accepted state. Success means Store accepted the submission, not that
+certification or publication has finished; Microsoft completes those asynchronously.
+An upload/commit failure leaves any resulting draft available for inspection.
+The Store job has a 40-minute timeout and permits one active run without cancelling it.
+Offline tests exercise failure handling without accessing Store or using real secrets.
+See [CLI commands](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/commands).
 
 ## Fixed Android signing: one-time setup
 
@@ -288,8 +331,8 @@ The workflows have separate responsibilities:
 | Event | Workflow | Result |
 | --- | --- | --- |
 | Push to `master` or another branch; pull request | `CI` (`ci.yml`) | Linux quality checks only |
-| Push a `v*` tag | `Build and release` (`build-release.yml`) | Quality checks, all platform packages, then Release |
-| Manually run `Build and release` on a branch or tag | `Build and release` | Quality checks and downloadable Actions artifacts; no Release |
+| Push a `v*` tag | `Build and release` (`build-release.yml`) | Checks, all packages, Linux/Android Release, then Windows Store submission |
+| Manually run `Build and release` on a branch or tag | `Build and release` | Checks and Actions artifacts; no Release or Store submission |
 
 The release workflow calls `ci.yml` through `workflow_call` at the same commit,
 using GitHub's [reusable workflow mechanism](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows).
@@ -303,14 +346,14 @@ Tags and manual runs build the following packages after the checks pass:
 | --- | --- |
 | `windows-2025` | x64 GUI MSIX (tested intermediate) |
 | `windows-11-arm` | ARM64 GUI MSIX (tested intermediate) |
-| `windows-2025` (`windows_bundle`) | One x64 + ARM64 MSIXBundle (Store upload) |
+| `windows-2025` (`windows_bundle`) | Internal x64 + ARM64 MSIXBundle for Store submission |
 | `ubuntu-22.04` | x64 AppImage and musl CLI |
 | `ubuntu-22.04-arm` | ARM64 musl CLI |
 | `ubuntu-22.04` + Android SDK | ARM64 Tauri APK |
 
 Only version-tag pushes publish. Every required job must succeed first. `check-release-files.py`
-requires an exact five-file allowlist: one Store MSIXBundle, three Linux programs
-and one Android APK. No certificates, installation scripts, checksums, ZIPs, debs, debug symbols, build logs, private keys
+requires an exact four-file allowlist: three Linux programs and one Android APK.
+No Windows MSIX/MSIXBundle files, certificates, installation scripts, checksums, ZIPs, debs, debug symbols, build logs, private keys
 or canceled-platform programs are uploaded to Release. Internal Actions artifact
 containers are a GitHub transport mechanism, not ZIP release assets.
 
@@ -324,4 +367,4 @@ git push origin v0.4.4
 
 Do not move an already published tag to hide a failed build. Fix it in a new commit
 and publish a new version as appropriate. Workflow dispatch can validate packaging
-without creating a GitHub Release.
+without creating a GitHub Release or submitting to Microsoft Store.

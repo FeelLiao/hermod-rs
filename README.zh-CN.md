@@ -19,13 +19,13 @@ Hermod 是使用 Rust 编写的加密 P2P **IPv4 局域网 / IPv6** 文件传输
 
 | 设备 | 下载文件 |
 | --- | --- |
-| Windows 10 2004+ / Windows 11，x64 / ARM64 | `hermod-windows.msixbundle`（包含两种架构，仅供商店提交） |
+| Windows 10 2004+ / Windows 11，x64 / ARM64 | [Microsoft Store 中的 HermodTransfer](https://apps.microsoft.com/detail/9PMPWN3HMR3M) |
 | Linux 桌面 x64 | `hermod-linux-x64.AppImage` |
 | Linux 命令行 x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
 | Android 14 及以上、ARM64 | `hermod-android-arm64.apk` |
 
-不再构建 macOS、Linux ARM64 GUI、Windows CLI 和 Android CLI。Release 只上传 5 个程序或包，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
-Windows MSIXBundle 是包含 x64 和 ARM64 的未签名商店提交包；普通用户请在产品上线后通过微软商店安装 **HermodTransfer**，商店会选择对应架构。
+不再构建 macOS、Linux ARM64 GUI、Windows CLI 和 Android CLI。Release 只上传 Linux 和 Android 的 4 个程序或包，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
+Windows MSIX/MSIXBundle 仅用于商店提交，不放入 GitHub Release。用户通过微软商店安装 **HermodTransfer**，商店会选择对应架构。
 GitHub 自动提供的源码下载链接属于平台功能。
 
 ## 连接前先确认网络
@@ -68,10 +68,10 @@ Android 使用系统文件选择器和目录授权，不申请全盘访问。传
 
 ## 安装和升级
 
-**Windows**：商店审核上线后，从 Microsoft Store 安装 **HermodTransfer**，发布者为 **FeelLiao**，
-Store ID 为 **9PMPWN3HMR3M**。维护者只需把 GitHub 的 `hermod-windows.msixbundle` 上传到 Partner Center
-的 **程序包 / Packages** 页面，其中已包含 x64 和 ARM64；审核通过后由微软签名并选择对应架构。GitHub 上的未签名包无法直接双击安装，
-不再附带测试证书或安装脚本。旧 `Hermod.Transfer.Test` 版本迁移前，请先导出收件箱文件；
+**Windows**：从 [Microsoft Store](https://apps.microsoft.com/detail/9PMPWN3HMR3M) 安装已上架的 **HermodTransfer**，发布者为 **FeelLiao**，
+Store ID 为 **9PMPWN3HMR3M**。以后推送版本标签，全部检查和打包、GitHub Release 成功后，Actions 会自动提交
+包含 x64 和 ARM64 的商店包；微软完成审核后按现有发布设置分发更新。Windows 程序包仅保留为 Actions 内部产物并提交商店，不附加到 GitHub Release。
+旧 `Hermod.Transfer.Test` 版本迁移前，请先导出收件箱文件；
 商店版使用不同包身份。详见[商店提交说明](APP_BUILD.md#microsoft-store-packages)。
 
 **Linux**：以 Ubuntu 22.04 及兼容更新桌面为基线：

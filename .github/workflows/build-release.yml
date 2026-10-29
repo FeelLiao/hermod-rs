@@ -160,7 +160,7 @@ jobs:
         run: ./hermod-app/scripts/bundle-msix.ps1 -PackageDirectory packages
       - uses: actions/upload-artifact@v4
         with:
-          name: release-windows
+          name: store-windows
           path: dist/hermod-windows.msixbundle
           if-no-files-found: error
 
@@ -243,7 +243,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish all verified programs
+    name: Publish Linux and Android release
     needs: [verify, linux, windows_bundle, android]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-22.04
@@ -258,7 +258,6 @@ jobs:
           merge-multiple: true
       - run: |
           python3 scripts/check-release-files.py artifacts
-          python3 hermod-app/scripts/verify-msix.py artifacts/hermod-windows.msixbundle --bundle
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
@@ -266,6 +265,34 @@ jobs:
           generate_release_notes: true
           body: |
             Both peers need the same IPv4 LAN or reachable IPv6, plus signaling access. See README.md / README.zh-CN.md for setup and migration.
-            Windows: one unsigned MSIXBundle containing x64 and ARM64 for Microsoft Store submission (HermodTransfer, identity FeelLiao.HermodTransfer, Store ID 9PMPWN3HMR3M). Upload hermod-windows.msixbundle to Partner Center. This is not a direct-install package; install the Store-signed app after publication. No certificate or install script is required.
+            Windows: install HermodTransfer from Microsoft Store (publisher FeelLiao, Store ID 9PMPWN3HMR3M). Windows updates are submitted automatically after this release succeeds.
             Linux: x64 AppImage GUI; x64 / ARM64 static musl CLI.
             Android: ARM64 APK, Android 14 or newer (API 34), target API 37. Export inbox files before uninstalling an older temporary-key build.
+
+  store:
+    name: Submit Windows update to Microsoft Store
+    needs: [release, windows_bundle]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: windows-2025
+    timeout-minutes: 40
+    concurrency:
+      group: microsoft-store-submission
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: store-windows
+          path: store-package
+      - name: Install pinned Microsoft Store CLI
+        uses: microsoft/microsoft-store-apppublisher@15abd1c50fcc164b19cb240fb04ef3c49bf715a2 # v1.1
+        with:
+          version: v0.4.3
+      - name: Validate and submit the Store bundle
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+          MS_STORE_APP_ID: ${{ secrets.MS_STORE_APP_ID }}
+        run: python3 hermod-app/scripts/submit-store.py store-package/hermod-windows.msixbundle

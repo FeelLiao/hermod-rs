@@ -70,8 +70,9 @@ Linux builds x64 AppImage plus x64/ARM64 musl CLI; ARM64 skips GUI dependencies 
 Native Linux x64 AppImage smoke tests check real window creation. Windows CI validates Store identity,
 the reserved display name HermodTransfer in both package and application fields,
 version and en-US/zh-CN resources, then signs a temporary copy for native installation/launch.
-Both tested architectures are combined into one unsigned MSIXBundle; only the bundle is
-released for Partner Center. Bundle validation checks both embedded packages and their architecture coverage.
+Both tested architectures are combined into one unsigned MSIXBundle in the internal
+`store-windows` Actions artifact. MSIX/MSIXBundle files are never GitHub Release assets.
+Bundle validation checks both embedded packages and their architecture coverage.
 No Windows signing secrets, certificates
 or user installation scripts are used. Android CI only builds and signs the ARM64 APK, then checks its
 signature, SDK versions, ABI and alignment. Android emulator, instrumentation and
@@ -79,4 +80,8 @@ Android UI tests are not run. API/toolchain versions are pinned in APP_BUILD.md 
 `ci.yml` checks branch pushes and PRs and exposes the same checks via `workflow_call`.
 `build-release.yml` runs for version-tag pushes and manual dispatch, reuses CI at the same
 commit, and gates all packaging on it. Only version-tag pushes publish, after all jobs
-succeed and an exact Release file allowlist is enforced. Manual runs only build artifacts.
+succeed and an exact four-file Release allowlist is enforced (three Linux programs and one APK).
+After Release succeeds, tag runs submit the Windows bundle on a disposable Windows runner through the pinned official Store CLI,
+using `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`, `AZURE_AD_APPLICATION_SECRET`,
+`SELLER_ID` and `MS_STORE_APP_ID`. Validate identity/version and preserve existing Store drafts;
+never print credentials or full submission JSON/SAS URLs. Manual runs only build artifacts.

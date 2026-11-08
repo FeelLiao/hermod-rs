@@ -485,7 +485,7 @@ mod tests {
                 file.chars().all(|c| !c.is_control()),
                 "control char in {file:?}"
             );
-            assert!(file.as_bytes().len() <= 200 + 6, "too long: {file:?}");
+            assert!(file.len() <= 200 + 6, "too long: {file:?}");
             // 3. 确定性：目录未变化时，同一输入给同一输出
             assert_eq!(
                 safe_destination_path(&dir, name).unwrap(),

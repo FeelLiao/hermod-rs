@@ -380,7 +380,7 @@ mod tests {
             for _ in 0..len {
                 let byte = (next() % 95) as u8 + 0x20;
                 data.push(byte);
-                if byte == 0x0a as u8 {
+                if byte == 0x0a {
                     data.push(b'\r');
                 }
             }

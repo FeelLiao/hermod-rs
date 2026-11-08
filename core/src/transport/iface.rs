@@ -1,19 +1,15 @@
 //! 传输层接口（契约）。
 //!
-//! 上层只依赖本模块的 [Transport] / [TransportConnection]；
-//! 换传输协议 = 换实现，不动上层。当前有两个并列实现：
-//!
-//! - [crate::transport::quic]：QUIC + TLS 1.3 + BBR（可选）；
-//! - [crate::transport::wireguard]：用户态 WireGuard + smoltcp TCP（可选回退）。
-//!
-//! 两个实现互不依赖，只共享本模块的 trait 与 [TransportKind]。
+//! 上层只依赖本模块的 [`Transport`] / [`TransportConnection`]；当前实现是
+//! [crate::transport::quic]（QUIC + TLS 1.3 + 可插拔拥塞控制）。
+//! [`TransportKind`] 的 wire 码是**跨版本兼容指针**：各实现自定义 opaque 端点
+//! 字节，头部的小 kind 字节让对端知道选哪个实现（也是未来新增传输的扩展点）。
 //!
 //! ## 端点信息为什么是 opaque 字节
 //!
-//! 不同传输协议要公布的端点完全不同（WireGuard 公布公钥+UDP端口+IPv6候选，
-//! QUIC 公布证书指纹+UDP端口+IPv6候选）。因此接口只把端点当作**传输层自定义的
-//! opaque 字节**：上层负责搬运（AEAD 加密）与加密，但**不解析**。
-//! 端点字节的格式、版本、凭证指纹校验都由各自实现负责。
+//! 不同传输协议要公布的端点完全不同（QUIC 公布证书指纹+UDP端口+IPv6候选）。
+//! 因此接口只把端点当作**传输层自定义的 opaque 字节**：上层负责搬运（AEAD 加密）
+//! 与加密，但**不解析**。端点字节的格式、版本、凭证指纹校验都由各自实现负责。
 
 use crate::crypto::cpace::Role;
 use core::future::Future;
@@ -29,7 +25,7 @@ pub trait TransportStream: AsyncRead + AsyncWrite + Unpin + Send {}
 
 impl<T> TransportStream for T where T: AsyncRead + AsyncWrite + Unpin + Send {}
 
-/// 传输层网络统计快照（目前 QUIC 提供；WireGuard 返回 None）。
+/// 传输层网络统计快照（由实现上报；不支持的实现返回 None）。
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NetworkStats {
     /// 已发到 UDP 的字节数（含 QUIC 头、ACK、重传）。
@@ -73,13 +69,12 @@ impl NetworkStatsHandle {
 
 /// 数据面传输协议选择。
 ///
-/// WireGuard 是发送端默认；QUIC 可用 `--transport quic` 显式选择。
+/// 目前只有 QUIC；wire 码 1 曾属于已移除的 WireGuard 实现（历史上用过），
+/// 保留在线协议里以便向旧对端给出明确的"请升级"错误，而不是静默失败。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransportKind {
-    /// 用户态 WireGuard + 进程内 TCP（发送默认）。
+    /// QUIC（TLS 1.3 + 可插拔拥塞控制，默认 BBR）——当前唯一实现。
     #[default]
-    WireGuard,
-    /// QUIC（TLS 1.3 + 可插拔拥塞控制，默认 BBR）。
     Quic,
 }
 
@@ -87,7 +82,6 @@ impl TransportKind {
     /// CLI/日志用的字符串值。
     pub fn as_str(self) -> &'static str {
         match self {
-            TransportKind::WireGuard => "wireguard",
             TransportKind::Quic => "quic",
         }
     }
@@ -95,7 +89,6 @@ impl TransportKind {
     /// 加密端点头里的线上编码（稳定值，不要随枚举顺序变化）。
     pub fn to_wire(self) -> u8 {
         match self {
-            TransportKind::WireGuard => 1,
             TransportKind::Quic => 2,
         }
     }
@@ -103,7 +96,6 @@ impl TransportKind {
     /// 从端点头解析线上编码。
     pub fn from_wire(value: u8) -> Option<Self> {
         match value {
-            1 => Some(TransportKind::WireGuard),
             2 => Some(TransportKind::Quic),
             _ => None,
         }
@@ -112,7 +104,6 @@ impl TransportKind {
     /// 解析字符串；非法输入返回 `None`。
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "wireguard" | "wg" => Some(TransportKind::WireGuard),
             "quic" => Some(TransportKind::Quic),
             _ => None,
         }
@@ -196,8 +187,7 @@ pub trait Transport {
 /// 已建立的传输连接：在传输层内做双向字节流收发。
 ///
 /// 载荷协议（传输内 HTTP/1.1）直接跑在 [listen](TransportConnection::listen) /
-/// [dial](TransportConnection::dial) 返回的字节流上，不感知底层是 QUIC 还是
-/// WireGuard。
+/// [dial](TransportConnection::dial) 返回的字节流上，不感知底层实现。
 pub trait TransportConnection {
     /// 连接层错误。
     type Error: std::error::Error + Send + Sync + 'static;
@@ -205,10 +195,10 @@ pub trait TransportConnection {
     /// 传输内字节流（可直接喂给 HTTP 的 AsyncRead/AsyncWrite）。
     type Stream: AsyncRead + AsyncWrite + Unpin + Send;
 
-    /// 本端公布的 HTTP 端口（WireGuard 用它监听；QUIC 无端口，返回 0）。
+    /// 本端公布的 HTTP 端口（进程内 TCP 实现用它监听；QUIC 无端口，返回 0）。
     fn http_port(&self) -> u16;
 
-    /// 对端公布的 HTTP 端口（WireGuard 用它拨号；QUIC 无端口，返回 0）。
+    /// 对端公布的 HTTP 端口（进程内 TCP 实现用它拨号；QUIC 无端口，返回 0）。
     fn peer_http_port(&self) -> u16;
 
     /// tx：在传输内监听，等待对端连接并返回字节流。
@@ -225,7 +215,7 @@ pub trait TransportConnection {
     /// `orchestrate::*` 返回后应调用本方法，否则进程退出可能丢掉最后的裁决/尾数据。
     fn shutdown(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 
-    /// 可选的网络层统计（QUIC 提供；WireGuard 暂不提供）。
+    /// 可选的网络层统计（由实现决定是否提供）。
     ///
     /// 用于发送端显示实际 UDP 发送速率，而不是本地写入进度。
     fn network_stats(&self) -> Option<NetworkStatsHandle> {
@@ -236,7 +226,7 @@ pub trait TransportConnection {
 /// 与具体传输协议无关的中止句柄。
 ///
 /// 传输实现把「立即中止」的动作包成闭包；上层（CLI 的 Ctrl+C 处理器）只持有
-/// 这个句柄，不需要知道底层是 WireGuard 的 RST 还是 QUIC 的 CONNECTION_CLOSE。
+/// 这个句柄，不需要知道底层是 RST 还是 QUIC 的 CONNECTION_CLOSE。
 #[derive(Clone)]
 pub struct AbortHandle(Arc<dyn Fn() + Send + Sync>);
 
@@ -366,17 +356,17 @@ mod tests {
     }
 
     #[test]
-    fn default_transport_is_wireguard() {
-        assert_eq!(TransportKind::default(), TransportKind::WireGuard);
+    fn default_transport_is_quic_and_legacy_wire_code_is_unknown() {
+        assert_eq!(TransportKind::default(), TransportKind::Quic);
         assert_eq!(TransportKind::parse("quic"), Some(TransportKind::Quic));
-        assert_eq!(
-            TransportKind::parse("wireguard"),
-            Some(TransportKind::WireGuard)
-        );
+        assert_eq!(TransportKind::parse("wireguard"), None);
         assert_eq!(TransportKind::parse("nope"), None);
-        for kind in [TransportKind::WireGuard, TransportKind::Quic] {
-            assert_eq!(TransportKind::from_wire(kind.to_wire()), Some(kind));
-        }
+        assert_eq!(
+            TransportKind::from_wire(TransportKind::Quic.to_wire()),
+            Some(TransportKind::Quic)
+        );
+        // 线上码 1 曾属于已移除的 WireGuard 实现；必须解析失败（上层据此提示升级）
+        assert_eq!(TransportKind::from_wire(1), None);
         assert_eq!(TransportKind::from_wire(0), None);
         assert_eq!(TransportKind::from_wire(3), None);
     }

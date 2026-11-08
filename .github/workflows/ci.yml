@@ -45,11 +45,6 @@ jobs:
           dart format --output=none --set-exit-if-changed lib test
           flutter analyze
           flutter test
-      - name: Local IPv6 test interface
-        run: |
-          sudo ip link add hermodtest type dummy
-          sudo ip link set hermodtest up
-          sudo ip -6 address add fd00:1234::1/64 dev hermodtest nodad
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings

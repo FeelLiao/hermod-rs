@@ -1,6 +1,6 @@
 //! QUIC 自己的端点清单（endpoint bundle）。
 //!
-//! 与 WireGuard 的 `EndpointBundle` 完全无关：只有 QUIC 需要的字段。
+//! QUIC 自己的端点清单格式（传输实现间互不依赖，只有本实现需要的字段）。
 //! 明文字节由 session 用 CPace 密钥 AEAD 加密后交换；对端解析后：
 //!
 //! 1. 校验 `version`；

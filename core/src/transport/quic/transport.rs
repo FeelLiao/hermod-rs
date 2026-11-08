@@ -2,8 +2,8 @@
 //!
 //! ## 为什么用 QUIC
 //!
-//! 旧数据面在 WireGuard 里跑 smoltcp TCP；丢包时 CUBIC 会把窗口打塌，重传还要
-//! 等 RTO。QUIC 自带 RFC 9002 的 ACK 驱动丢包检测 + PTO、包级 pacing、PMTUD
+//! 对比经典 loss-based TCP 拥塞控制（如 CUBIC 在丢包时窗口打塌、重传等 RTO）：
+//! QUIC 自带 RFC 9002 的 ACK 驱动丢包检测 + PTO、包级 pacing、PMTUD
 //! 和可插拔拥塞控制（这里默认 BBR），在高 BDP/有丢包的链路上更不容易掉速。
 //!
 //! 连接方向：tx（Sender）是 QUIC client、主动出站；rx（Receiver）是 QUIC server、
@@ -15,7 +15,7 @@
 //!
 //! ## 独立性
 //!
-//! 本模块不引用 `transport::wireguard` 的任何类型：endpoint 格式见
+//! 传输实现之间类型完全解耦：endpoint 格式见
 //! [crate::transport::quic::bundle]，IPv6 候选见 [crate::transport::quic::addr]，
 //! IPv4 候选与双栈 socket 见 [crate::transport::network]，
 //! 证书/握手见 [crate::transport::quic::auth]。
@@ -296,7 +296,7 @@ impl Transport for QuicTransport {
         );
 
         // 角色映射：
-        // - tx（Sender）= QUIC client，主动向 rx 的所有候选发 Initial，和 WireGuard
+        // - tx（Sender）= QUIC client，主动向 rx 的所有候选发 Initial，与其它实现
         //   一样由发送端先出站，避免发送端防火墙丢弃首个入站 UDP；
         // - rx（Receiver）= QUIC server，只监听。
         // 但 HTTP 流的发起方向仍与 trait 语义一致：tx listen = accept_bi（接受
@@ -316,7 +316,7 @@ impl Transport for QuicTransport {
             }
             Role::Receiver => {
                 // rx 是 server；先向 tx 的候选发几个 dummy UDP 包，打开 rx 侧
-                // 有状态防火墙的返回路径（WireGuard 的「双方同时发」等价物）。
+                // 有状态防火墙的返回路径（与「双方同时发」 打洞同思路）。
                 for _ in 0..3 {
                     for addr in &peer_addrs {
                         let _ = socket.send_to(

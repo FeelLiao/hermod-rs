@@ -5,7 +5,7 @@ rendezvous (signaling), data-plane transports, in-tunnel HTTP, session
 negotiation and the final send/receive orchestration. Both front ends — the
 `cli` binary (`hermod`) and the Windows GUI through `flutter-bridge` — are thin
 shells that call into this crate; neither implements transfer state, trust,
-hashing, inbox storage, timeouts, QUIC or WireGuard (decision D17 in the
+hashing, inbox storage, timeouts or QUIC internals (decision D17 in the
 original design docs).
 
 This README explains how the crate is organized and why. Module-level `//!`
@@ -21,7 +21,7 @@ neighbours:
 │ orchestrate   tx: serve_file/send_file/send_text               │  "the transfer"
 │               rx: receive  → temp file → SHA-256 → atomic move │
 ├────────────────────────────────────────────────────────────────┤
-│ transport     WireGuard (user-space + smoltcp TCP)             │  "a reliable,
+│ transport     QUIC (TLS 1.3, pluggable CC, BBR default)         │  "a reliable,
 │               QUIC (TLS 1.3, pluggable CC)                     │   authenticated
 │               http/     HTTP/1.1 shared by both, in-tunnel     │   byte stream"
 ├────────────────────────────────────────────────────────────────┤
@@ -48,7 +48,7 @@ core/src/
 ├── lib.rs            # crate docs, re-exports, the only entry users need
 ├── crypto/           # primitives ONLY; no network code here
 │   ├── cpace.rs      #   CPace PAKE over P-256 (RFC 9380/9496), Go-compatible
-│   ├── kdf.rs        #   HKDF: K → WireGuard PSK, in-tunnel HTTP token
+│   ├── kdf.rs        #   HKDF: K → channel-bound PSK, in-tunnel HTTP token
 │   ├── aead.rs       #   AES-256-GCM for endpoint bundles (nonce‖ct‖tag)
 │   └── wordlist.rs   #   EFF short wordlist; transfer code gen/parse
 ├── signal/           # rendezvous layer (WebSocket to the signaling server)
@@ -59,7 +59,6 @@ core/src/
 │   ├── iface.rs      # ★ the contract: Transport / TransportConnection traits
 │   ├── mod.rs        #   AnyTransport/AnyConnection runtime dispatch
 │   ├── network.rs    #   address enumeration / candidate filtering (shared)
-│   ├── wireguard/    #   implementation: boringtun + smoltcp in-process TCP
 │   ├── quic/         #   implementation: quinn + rustls, self-signed pins
 │   └── http/         #   HTTP/1.1 over any transport stream (server + client)
 ├── session.rs        # one hop: transfer code → established connection
@@ -210,13 +209,13 @@ any network access; both front ends call exactly this code path.
 
 Folder layout follows standard Rust 2018: `src/lib.rs` plus `mod` trees; a
 module with sub-files either uses `name.rs` + `name/` directory (XML-era
-style, as in `transport.rs` + `transport/wireguard.rs`) or `name/mod.rs`
+style, as in `transport.rs` + `transport/quic.rs`) or `name/mod.rs`
 (deeper modules like `transport/quic`). Keep it that way — nesting mirrors the
 module hierarchy, and `cargo` tooling (doc, fmt, clippy) all assume it.
 
 ## Embedding
 
-See the example in `src/lib.rs`: two `WireGuardTransport`s can be established
+See the example in `src/lib.rs`: two `QuicTransport`s can be established
 end-to-end without any signaling server, given a `K` and a channel id — useful
 for tests and for any future app that already shares a secret out-of-band.
 

@@ -80,7 +80,7 @@ pub struct ConnectionSettings {
 impl Default for ConnectionSettings {
     fn default() -> Self {
         Self {
-            transport: "wireguard".into(),
+            transport: "quic".into(),
             mtu: Mtu::Auto,
             congestion: Congestion::Auto,
             limit_mbps: "0".into(),
@@ -92,10 +92,10 @@ impl ConnectionSettings {
         let transport = if self.transport == "auto" && receiving {
             None
         } else {
-            Some(
-                TransportKind::parse(&self.transport)
-                    .ok_or("Choose wireguard or quic (auto is only available when receiving)")?,
-            )
+            Some(TransportKind::parse(&self.transport).ok_or(
+                "Choose quic (auto is only available when receiving; \
+                 the WireGuard transport was removed — ask the peer to upgrade)",
+            )?)
         };
         let options = SessionOptions {
             transport,
@@ -119,7 +119,6 @@ impl ConnectionSettings {
 impl SessionOptions {
     pub fn validate_for(&self, kind: TransportKind) -> Result<(), String> {
         let valid_mtu = match kind {
-            TransportKind::WireGuard => 576..=65488,
             TransportKind::Quic => 1200..=1452,
         };
         if self.mtu.is_some_and(|v| !valid_mtu.contains(&v)) {
@@ -130,10 +129,6 @@ impl SessionOptions {
             ));
         }
         let supported = match kind {
-            TransportKind::WireGuard => matches!(
-                self.congestion,
-                Congestion::Auto | Congestion::Cubic | Congestion::Reno
-            ),
             TransportKind::Quic => matches!(
                 self.congestion,
                 Congestion::Auto | Congestion::Bbr | Congestion::Cubic | Congestion::Newreno
@@ -157,19 +152,25 @@ mod tests {
         let mut settings = ConnectionSettings::default();
         assert_eq!(
             settings.session_options(false).unwrap().transport,
-            Some(TransportKind::WireGuard)
+            Some(TransportKind::Quic)
         );
-        settings.congestion = Congestion::Bbr;
+        // 发送端不接受 auto
+        settings.transport = "auto".into();
         assert!(settings.session_options(false).is_err());
+        // 接收端 auto 有效
+        assert!(settings.session_options(true).is_ok());
+        // 已移除的 wireguard → 明确拒绝（提示升级对端或改设置）
+        settings.transport = "wireguard".into();
+        let error = settings.session_options(true).unwrap_err();
+        assert!(error.contains("removed") || error.contains("quic"));
+        // QUIC 的 MTU/拥塞合法性仍然按协议校验
         settings.transport = "quic".into();
+        settings.congestion = Congestion::Reno;
+        assert!(settings.session_options(false).is_err());
+        settings.congestion = Congestion::Bbr;
         assert!(settings.session_options(false).is_ok());
         settings.mtu = Mtu::Value(1100);
         assert!(settings.session_options(false).is_err());
-        settings.transport = "auto".into();
-        assert!(settings.session_options(false).is_err());
-        let opts = settings.session_options(true).unwrap();
-        assert!(opts.validate_for(TransportKind::Quic).is_err());
-        assert!(opts.validate_for(TransportKind::WireGuard).is_err());
         for value in ["0", "-1", "65535", "NaN"] {
             assert!(value.parse::<Mtu>().is_err());
         }

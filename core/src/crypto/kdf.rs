@@ -1,17 +1,18 @@
 //! 会话密钥派生：从 CPace 输出的共享密钥 K 派生协议后续需要的密钥。
 //!
-//! 目前只有一个输出：WireGuard 预共享密钥（PSK）：
+//! 目前输出：WireGuard 预共享密钥（PSK）与 HTTP token：
 //!
 //! ```text
-//! psk = HKDF-SHA256(ikm = K, salt = channel_id, info = "hermod-wg-psk-v1")
+//! psk   = HKDF-SHA256(ikm = K, salt = channel_id, info = "hermod-wg-psk-v1")
+//! token = HKDF-SHA256(ikm = K, salt = channel_id, info = "hermod-http-token-v1")
 //! ```
 //!
 //! 对应设计文档 DEVELOPMENT.md §3.3（第 182 行）：
 //! - 两端各自本地派生，**PSK 从不过网**；
-//! - 它混入 WireGuard Noise 握手的 chaining key，拿不到传输码的一方即使偷到
-//!   静态密钥也无法完成握手；
-//! - 它是将来恢复"后量子 pillar"的接缝（D6/S1）：若把 K 的来源换成
-//!   `CPace ‖ X25519 ‖ ML-KEM` 的混合密钥，这里的 HKDF 派生协议保持不变。
+//! - `derive_wg_psk` 的名字来自历史上的 WireGuard 数据面；WireGuard 移除后
+//!   它保留为**通道绑定的 KDF 输出**（PSK 作为 trait 的通用会话密钥参数传入，
+//!   供传输实现自行取用，和将来恢复"后量子 pillar"（D6/S1）的接缝）：
+//!   当前 QUIC 实现基于 TLS 证书认证，暂不消费 PSK。
 
 use hkdf::Hkdf;
 use sha2::Sha256;

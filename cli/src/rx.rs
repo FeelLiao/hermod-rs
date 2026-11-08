@@ -26,7 +26,7 @@ pub async fn run(
     }
 
     verbosity::debug(format!("server_url={}", cfg.server_url));
-    let opts = args.network.options(&args.transport, true)?;
+    let opts = args.network.options(true)?;
     let mut rx = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         session::receiver_session_with(&cfg, &args.code, &opts),

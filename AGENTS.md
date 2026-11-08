@@ -35,7 +35,7 @@ fvm flutter test
 
 ## Architecture
 
-`core` contains cryptography, signaling with SPKI pinning, connection options, independent WireGuard and QUIC transports, transport-internal HTTP, session negotiation and tx/rx orchestration — the shared lower layer for CLI and GUI. The receiver defaults to Auto. GUI code must not implement transfer state, trust, hashing, inbox storage, timeouts, QUIC or WireGuard.
+`core` contains cryptography, signaling with SPKI pinning, connection options, the QUIC data plane, transport-internal HTTP, session negotiation and tx/rx orchestration — the shared lower layer for CLI and GUI. The receiver defaults to Auto. GUI code must not implement transfer state, trust, hashing, inbox storage, timeouts or QUIC internals.
 
 `hermod_flutter_bridge::app` owns settings, private verified inbox, sources, jobs and cancellation. `hermod_flutter_bridge::gui_api` is the only GUI business facade and never exposes private inbox paths.
 

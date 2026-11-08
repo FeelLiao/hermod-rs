@@ -212,7 +212,7 @@ impl Engine {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
-            ipv6: hermod_core::transport::wireguard::addr::enumerate_local_ipv6()
+            ipv6: hermod_core::transport::quic::addr::enumerate_local_ipv6()
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
@@ -535,7 +535,7 @@ mod tests {
         let settings = Settings {
             server: server.into(),
             connection: ConnectionSettings {
-                transport: "wireguard".into(),
+                transport: "quic".into(),
                 limit_mbps: "8".into(),
                 ..Default::default()
             },
@@ -551,11 +551,41 @@ mod tests {
         let engine = Engine::new(root.clone(), Config::default()).unwrap();
         let settings = engine.settings();
         assert_eq!(settings.version, 1);
-        assert_eq!(settings.connection.transport, "wireguard");
+        assert_eq!(settings.connection.transport, "quic");
         assert_eq!(settings.connection.limit_mbps, "8");
         assert_eq!(settings.server, server);
         assert_eq!(engine.bootstrap().trusted_servers.len(), 1);
         drop(engine);
+
+        // "不迁移"策略：旧版 transport:"wireguard" 在加载时必须显式报错，而不是悄悄换回 QUIC。
+        let hostile_root =
+            std::env::temp_dir().join(format!("hermod-legacy-wg-{}", storage::new_id()));
+        std::fs::create_dir_all(&hostile_root).unwrap();
+        let mut legacy_wg = serde_json::to_value(Settings {
+            server: server.into(),
+            connection: ConnectionSettings {
+                transport: "wireguard".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .unwrap();
+        legacy_wg.as_object_mut().unwrap().remove("version");
+        std::fs::write(
+            hostile_root.join("settings.json"),
+            serde_json::to_vec(&legacy_wg).unwrap(),
+        )
+        .unwrap();
+        let error = match Engine::new(hostile_root.clone(), Config::default()) {
+            Err(error) => error,
+            Ok(_) => panic!("legacy wireguard settings must be rejected"),
+        };
+        assert!(
+            error.contains("quic") || error.to_lowercase().contains("transport"),
+            "{error}"
+        );
+        drop(error);
+        std::fs::remove_dir_all(hostile_root).unwrap();
 
         let mut config = config::load_from(&root.join("config.yaml")).unwrap();
         assert_eq!(config.trusted_servers.len(), 1);

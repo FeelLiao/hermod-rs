@@ -36,6 +36,12 @@ adheres to [Semantic Versioning](https://semver.org/).
 ### Removed
 
 - Legacy Tauri, React, WebView, Fluent UI and Android plugin projects and their build dependencies.
+- The WireGuard data plane. QUIC is now the only transfer protocol; the CLI
+  `--transport` flag is gone, and saved settings carrying `transport:
+  "wireguard"` are rejected with an explicit upgrade message instead of being
+  migrated. Old peers that announce WireGuard endpoints are told to upgrade.
+  The `kdf::derive_wg_psk` output survives as the channel-bound session key
+  derivation (unused by QUIC authentication, kept for future pillars).
 
 ## [0.4.5] - 2026-10-29
 

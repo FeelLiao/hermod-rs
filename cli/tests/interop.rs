@@ -136,7 +136,7 @@ fn generated_word_count_rejects_invalid_codes() {
 }
 
 async fn run_all() {
-    for protocol in ["wireguard", "quic"] {
+    for protocol in ["quic"] {
         for mode in ["gui-to-cli", "cli-to-gui", "cli-to-cli"] {
             for source in ["text", "file", "stdin"] {
                 if source == "stdin" && mode == "gui-to-cli" {
@@ -183,14 +183,17 @@ async fn run_all() {
                         tokio::time::sleep(Duration::from_millis(20)).await;
                     };
                     assert_eq!(generated_word_count(&code), Some(5), "{code}");
-                    let mut changed = engine.settings();
-                    changed.connection.transport = if protocol == "wireguard" {
-                        "quic"
-                    } else {
-                        "wireguard"
-                    }
-                    .into();
-                    engine.save_settings(changed).unwrap();
+                    // 已移除的 wireguard 必须被校验拒绝（"不迁移"策略）
+                    let mut declined = engine.settings();
+                    declined.connection.transport = "wireguard".into();
+                    let error = engine.save_settings(declined).unwrap_err();
+                    assert!(
+                        error.contains("removed") || error.contains("quic"),
+                        "{error}"
+                    );
+                    let mut unchanged = engine.settings();
+                    unchanged.connection.limit_mbps = "0.9".into();
+                    engine.save_settings(unchanged).unwrap();
                     engine.set_destination(Some("next-folder".into())).unwrap();
                     assert_eq!(
                         engine.transfer_destination().as_deref(),
@@ -236,14 +239,7 @@ async fn run_all() {
                         } else {
                             Stdio::null()
                         })
-                        .args([
-                            "tx",
-                            "--transport",
-                            protocol,
-                            "--limit-mbps",
-                            "0.8",
-                            &input_arg,
-                        ])
+                        .args(["tx", "--limit-mbps", "0.8", &input_arg])
                         .spawn()
                         .unwrap();
                     if source == "stdin" {
@@ -308,8 +304,7 @@ async fn run_all() {
 
 #[tokio::test]
 async fn cli_and_gui_interoperate_both_directions_with_files_and_text() {
-    // Windows 默认线程栈只有 1 MiB，WireGuard/smoltcp 组合在主测试线程运行
-    // 会栈溢出；把整个测试体放到显式大栈工作线程中执行。
+    // Windows 默认线程栈较小而传输驱动较深；把整个测试体放到显式大栈工作线程中执行。
     let worker = std::thread::Builder::new()
         .name("interop-worker".into())
         .stack_size(64 * 1024 * 1024)

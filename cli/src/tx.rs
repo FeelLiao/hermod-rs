@@ -33,7 +33,7 @@ pub async fn run(
     // 0) 先确认 server 已信任，避免打印一个用不了的传输码
     hermod_core::session::expected_spki(&cfg).map_err(util::boxed)?;
 
-    let mut opts = args.network.options(&args.transport, false)?;
+    let mut opts = args.network.options(false)?;
 
     // 先准备输入并确定大小；打开的同一个文件句柄贯穿预告和发送。
     let (kind, name) = transfer::classify_input(&args.input, crate::tty::stdin_is_piped());
@@ -241,7 +241,7 @@ where
         Ok(Err(e)) => Err(Box::new(e)),
         Err(msg) => Err(format!(
             "{msg} ({} bytes written; for large files, check the peer; \
-             try --transport wireguard --mtu 1200 or --transport quic --mtu 1200 to rule out path MTU)",
+             try --mtu 1200 to rule out path MTU issues)",
             sent.load(Ordering::Relaxed)
         )
         .into()),

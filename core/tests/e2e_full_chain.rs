@@ -25,14 +25,9 @@ const TRANSFER_TIMEOUT: Duration = Duration::from_secs(90);
 const TEXT: &str = "验收层：一次完整链路。Hello, Hermod!\n";
 const FILE_BYTES: usize = 4096;
 
-fn quic_loopback(transport: TransportKind) -> Option<std::net::SocketAddr> {
-    if transport == TransportKind::Quic {
-        // 本机 IPv6 loopback：不打洞、不过防火墙，保证测试在任何环境确定成功
-        Some("[::1]:0".parse().unwrap())
-    } else {
-        // WireGuard 走默认双栈 + 本机候选枚举（与 end_to_end 单测同路径）
-        None
-    }
+fn quic_loopback() -> Option<std::net::SocketAddr> {
+    // 本机 IPv6 loopback：不打洞、不过防火墙，保证测试在任何环境确定成功
+    Some("[::1]:0".parse().unwrap())
 }
 
 /// 建立一对已配好的双方会话（发送端指定传输，接收端 auto 跟随），
@@ -48,13 +43,13 @@ async fn establish_pair(
 ) {
     let mut sender_opts = SessionOptions {
         transport: Some(transport),
-        udp_bind: quic_loopback(transport),
+        udp_bind: quic_loopback(),
         ..Default::default()
     };
     sender_opts.offer = offer.clone();
     let receiver_opts = SessionOptions {
         transport: None,
-        udp_bind: quic_loopback(transport),
+        udp_bind: quic_loopback(),
         ..Default::default()
     };
 
@@ -69,17 +64,9 @@ async fn establish_pair(
     .expect("session handshake deadline exceeded");
     let tx = tx_result.expect("sender session failed");
     let rx = rx_result.expect("receiver session failed");
-    // 接收端必须自动跟随发送端的传输
-    match transport {
-        TransportKind::WireGuard => {
-            assert!(matches!(tx.conn, AnyConnection::WireGuard(_)));
-            assert!(matches!(rx.conn, AnyConnection::WireGuard(_)));
-        }
-        TransportKind::Quic => {
-            assert!(matches!(tx.conn, AnyConnection::Quic(_)));
-            assert!(matches!(rx.conn, AnyConnection::Quic(_)));
-        }
-    }
+    // 接收端必须自动跟随发送端的传输（当前均为 QUIC）
+    assert!(matches!(tx.conn, AnyConnection::Quic(_)));
+    assert!(matches!(rx.conn, AnyConnection::Quic(_)));
     if let Some(offer) = offer {
         assert_eq!(rx.offer.as_ref(), Some(&offer), "收端应看见加密预告");
     }
@@ -284,7 +271,7 @@ async fn peer_cancel_quic() {
     common::cleanup_dir(&dir);
 }
 
-/// WireGuard 的 smoltcp 驱动路径在 Windows 默认小栈测试线程上会栈溢出
+/// 传输驱动的深层调用路径在 Windows 默认小栈测试线程上可能栈溢出
 /// （与 CLI 的 64 MiB 大栈线程同因，见 cli/src/main.rs）。验收层的整条
 /// 链路都放到显式大栈线程执行。
 #[allow(clippy::type_complexity)]
@@ -298,28 +285,26 @@ fn run_on_big_stack<T: Send + 'static>(work: Box<dyn FnOnce() -> T + Send>) -> T
 }
 
 #[test]
-fn full_chain_text_over_both_transports() {
+fn full_chain_text_over_quic() {
     run_on_big_stack(Box::new(|| {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         runtime.block_on(async {
-            run_text_chain(TransportKind::WireGuard).await;
             run_text_chain(TransportKind::Quic).await;
         });
     }));
 }
 
 #[test]
-fn full_chain_file_over_both_transports() {
+fn full_chain_file_over_quic() {
     run_on_big_stack(Box::new(|| {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         runtime.block_on(async {
-            run_file_chain(TransportKind::WireGuard).await;
             run_file_chain(TransportKind::Quic).await;
         });
     }));

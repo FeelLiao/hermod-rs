@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! 会合（signal）→ 密钥协商（crypto::cpace）→ 加密交换端点清单（transport bundle）
-//!   → 建立传输（transport::wireguard 或 transport::quic）→ 传输内 HTTP（transport::http）
+//!   → 建立传输（transport::quic）→ 传输内 HTTP（transport::http）
 //!   → 传输编排（orchestrate）：tx 发文件 / rx 收文件并裁决
 //! ```
 //!
@@ -19,10 +19,8 @@
 //!   的 TLS 客户端、`allocate`/`join`/`wait_ready`/`send_blob`/`recv_blob`
 //!   以及两端的 CPace 握手编排。
 //! - [`transport`]：传输层。先看 [`transport::iface`] 的 [`Transport`]/
-//!   [`TransportConnection`] 契约（上层只依赖它）；两个并列实现：
-//!   [`transport::quic`]（可选，QUIC + TLS 1.3 + BBR）与
-//!   [`transport::wireguard`]（发送默认，用户态 WireGuard + smoltcp 进程内 TCP + CUBIC）。
-//!   两者互不依赖；
+//!   [`TransportConnection`] 契约（上层只依赖它）；当前实现是
+//!   [`transport::quic`]（QUIC + TLS 1.3 + 可插拔拥塞控制，默认 BBR）；
 //!   [`transport::http`] 是共享的传输内 HTTP/1.1。
 //! - [`session`]：会话编排——从**传输码**到已建立的传输连接：
 //!   [`session::sender_session`]（tx）/ [`session::receiver_session`]（rx）。
@@ -48,15 +46,15 @@
 //! # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
 //! use hermod_core::crypto::cpace::Role;
 //! use hermod_core::transport::iface::Transport;
-//! use hermod_core::transport::wireguard::transport::WireGuardTransport;
+//! use hermod_core::transport::quic::transport::QuicTransport;
 //!
 //! // 1) 双方各自 prepare，得到要经加密 bundle 交换的端点字节
-//! let mut tx = WireGuardTransport::new();
-//! let mut rx = WireGuardTransport::new();
+//! let mut tx = QuicTransport::new();
+//! let mut rx = QuicTransport::new();
 //! let tx_ep = tx.prepare().await?;
 //! let rx_ep = rx.prepare().await?;
 //!
-//! // 2) 用 CPace 的 K 派生 PSK（channel_id 来自传输码）
+//! // 2) 用 CPace 的 K 派生通道绑定密钥（channel_id 来自传输码）
 //! let k = [0u8; 32]; // 实际由 CPace finish 得到
 //! let psk = hermod_core::crypto::kdf::derive_wg_psk(&k, 42);
 //!
@@ -66,7 +64,7 @@
 //! # Ok(()) }
 //! ```
 //!
-//! 注意：真实的 PSK 必须来自 CPace 握手（[`crypto::cpace`]）后的
+//! 注意：真实的通道绑定密钥必须来自 CPace 握手（[`crypto::cpace`]）后的
 //! [`crypto::kdf::derive_wg_psk`]，上面 `k = [0u8; 32]` 只是占位。
 
 pub mod bandwidth;
@@ -84,7 +82,7 @@ pub mod transport;
 /// 传输层接口与运行时分发（便捷再导出）。
 ///
 /// 上层通常只依赖 [`Transport`] / [`TransportConnection`]；终端用户通过
-/// [`TransportKind`] 选择 [`AnyTransport`]（发送端默认 WireGuard，接收端可自动跟随）。
+/// [`TransportKind`] 选择 [`AnyTransport`]（当前唯一实现是 QUIC；接收端可自动跟随）。
 pub use transport::{
     AbortHandle, AnyConnection, AnyTransport, CongestionControl, NetworkStats, NetworkStatsHandle,
     Transport, TransportConnection, TransportError, TransportKind,

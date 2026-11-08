@@ -3,6 +3,9 @@
 - 状态：草案（未实现）
 - 日期：2026-11-08
 - 范围：`core`、信令服务器（hermod-go）协议扩展；CLI/GUI 仅列衔接点，本轮不实现
+- 备注：本文写作时数据面还有 WireGuard；现已移除（QUIC-only）。文中提到
+  WireGuard/`TransportKind::Quic` 与 "另一实现" 的段落请按 QUIC-only 现状阅读，
+  流程本身不受影响。
 - 关联：`AGENTS.md` 架构约定（逻辑只住 core）、`core/src/session.rs`（现有会话编排）
 
 ---

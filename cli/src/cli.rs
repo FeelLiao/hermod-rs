@@ -6,8 +6,10 @@ use hermod_core::options::{Congestion, ConnectionSettings, Mtu};
 #[command(
     name = "hermod",
     version,
-    about = "Private IPv4 LAN / IPv6 peer-to-peer file and text transfer",
-    after_help = "Migration: use --mtu instead of --wg-mtu/--quic-mtu; --congestion instead of --quic-cc. Binding is automatic; --listen and the unimplemented serve command have been removed."
+    about = "Private LAN / peer-to-peer QUIC file and text transfer",
+    after_help = "Migration: use --mtu instead of --wg-mtu/--quic-mtu; --congestion instead of --quic-cc. \
+The WireGuard data plane and the --transport flag have been removed; transfers run over QUIC. \
+Binding is automatic; --listen and the unimplemented serve command have been removed."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -36,13 +38,13 @@ pub struct NetworkArgs {
     #[arg(
         long,
         default_value = "auto",
-        help = "MTU in bytes or auto; WireGuard inner IP, QUIC UDP payload cap"
+        help = "MTU in bytes or auto; QUIC UDP payload cap"
     )]
     pub mtu: Mtu,
     #[arg(
         long,
         default_value = "auto",
-        help = "auto/cubic for either transport; reno for WireGuard; bbr/newreno for QUIC"
+        help = "auto (BBR) / cubic / bbr / newreno congestion control for QUIC"
     )]
     pub congestion: Congestion,
     #[arg(
@@ -53,13 +55,13 @@ pub struct NetworkArgs {
     pub limit_mbps: hermod_core::bandwidth::BandwidthLimit,
 }
 impl NetworkArgs {
-    pub fn options(
-        &self,
-        transport: &str,
-        receiving: bool,
-    ) -> Result<hermod_core::session::SessionOptions, String> {
+    pub fn options(&self, receiving: bool) -> Result<hermod_core::session::SessionOptions, String> {
         ConnectionSettings {
-            transport: transport.into(),
+            transport: if receiving {
+                "auto".into()
+            } else {
+                "quic".into()
+            },
             mtu: self.mtu,
             congestion: self.congestion,
             limit_mbps: self.limit_mbps.to_string(),
@@ -75,8 +77,6 @@ pub struct TxArgs {
     pub server: Option<String>,
     #[arg(short, long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=32), help = "Words in the transfer code")]
     pub words: u8,
-    #[arg(long, default_value = "wireguard", value_parser = ["wireguard", "quic"], help = "Data-plane transport")]
-    pub transport: String,
     #[command(flatten)]
     pub network: NetworkArgs,
 }
@@ -88,8 +88,6 @@ pub struct RxArgs {
     pub destination: Option<String>,
     #[arg(short, long, help = "Signaling server URL")]
     pub server: Option<String>,
-    #[arg(long, default_value = "auto", value_parser = ["auto", "wireguard", "quic"], help = "auto follows the sender")]
-    pub transport: String,
     #[command(flatten)]
     pub network: NetworkArgs,
 }
@@ -111,15 +109,25 @@ mod tests {
         else {
             panic!()
         };
-        assert_eq!(tx.transport, "wireguard");
-        assert_eq!(tx.network.options(&tx.transport, false).unwrap().mtu, None);
+        assert_eq!(
+            tx.network.options(false).unwrap().transport,
+            Some(hermod_core::transport::TransportKind::Quic)
+        );
         let Command::Rx(rx) = Cli::try_parse_from(["hermod", "rx", "1-a-b-c"])
             .unwrap()
             .cmd
         else {
             panic!()
         };
-        assert_eq!(rx.transport, "auto");
+        // 接收端 auto：transport None（跟随发送端），发送端恒为 QUIC
+        assert_eq!(rx.network.options(true).unwrap().transport, None);
+        assert_eq!(
+            rx.network.options(false).unwrap().transport,
+            Some(hermod_core::transport::TransportKind::Quic)
+        );
+        // 已经移除的 --transport 不再存在
+        assert!(Cli::try_parse_from(["hermod", "tx", "file.bin", "--transport", "quic"]).is_err());
+        assert!(Cli::try_parse_from(["hermod", "rx", "1-a-b-c", "--transport", "auto"]).is_err());
         for old in ["--wg-mtu", "--quic-mtu", "--quic-cc", "--listen"] {
             assert!(Cli::try_parse_from(["hermod", "tx", "file.bin", old, "1200"]).is_err());
         }
@@ -128,12 +136,16 @@ mod tests {
     #[test]
     fn invalid_combinations_fail_before_network_access() {
         let Command::Tx(tx) =
-            Cli::try_parse_from(["hermod", "tx", "file.bin", "--congestion", "bbr"])
+            Cli::try_parse_from(["hermod", "tx", "file.bin", "--congestion", "reno"])
                 .unwrap()
                 .cmd
         else {
             panic!()
         };
-        assert!(tx.network.options(&tx.transport, false).is_err());
+        // Reno 不属于 QUIC 支持集（历史上属于已移除的 WireGuard）
+        assert!(
+            tx.network.options(false).is_err(),
+            "reno must be rejected for QUIC"
+        );
     }
 }

@@ -5,7 +5,7 @@
 //! ```text
 //! 传输码 → 连 server（SPKI pinning）→ allocate/join → wait_ready
 //!   → CPace 得 K → derive_wg_psk(K, channel_id)
-//!   → tx 选传输（默认 WireGuard）→ prepare → 加端点头 → AEAD 交换 blob3
+//!   → tx 选传输（当前统一 QUIC）→ prepare → 加端点头 → AEAD 交换 blob3
 //!   → rx 解密 blob3 → 从端点头识别传输 → prepare → AEAD 回 blob4
 //!   → 双方 establish 得到 AnyConnection
 //! ```
@@ -19,7 +19,7 @@
 //! ```text
 //! [0..2)  "HE"
 //! [2]     header version (1)
-//! [3]     transport wire code (1=wireguard, 2=quic)
+//! [3]     transport wire code（2=quic；1 是已移除的 WireGuard 旧码，对端需升级）
 //! [4..]   transport-specific opaque endpoint bytes
 //! ```
 //!
@@ -62,6 +62,13 @@ pub enum SessionError {
     Untrusted { url: String },
     #[error("配置里的 SPKI 指纹非法: {0}")]
     BadFingerprint(String),
+    /// 端点头里的传输类型是本端不再提供的（包括已移除的 WireGuard wire 码 1，
+    /// 意味着对端还是旧版本客户端）。
+    #[error(
+        "the peer announced a legacy transport (wire code {wire}); \
+         the WireGuard data plane was removed — ask the peer to upgrade"
+    )]
+    LegacyPeerTransport { wire: u8 },
     #[error("bad endpoint header: {0}")]
     BadEndpointHeader(String),
     #[error("transport mismatch: local={local}, peer={peer}")]
@@ -82,15 +89,15 @@ pub struct SessionOptions {
     pub offer: Option<crate::transfer::TransferOffer>,
     /// 载荷限速，同时用于控制 QUIC 排队窗口。
     pub bandwidth_limit: crate::bandwidth::BandwidthLimit,
-    /// 当前协议的 MTU：WireGuard 内层 IP（自动 1400），QUIC UDP 载荷上限（自动 1452）。
+    /// 当前协议的 MTU：QUIC UDP 载荷上限（自动 1452）。
     pub mtu: Option<usize>,
     /// UDP 绑定地址（默认 `[::]:0`）。
     pub udp_bind: Option<std::net::SocketAddr>,
     /// 传输协议：
-    /// - tx：`Some(kind)` 指定；`None` 等同于 WireGuard。
+    /// - tx：`Some(kind)` 指定；`None` 等同于当前默认（QUIC）。
     /// - rx：`None` = 自动跟随对端；`Some(kind)` = 强制并校验。
     pub transport: Option<TransportKind>,
-    /// 统一拥塞控制；auto 在 WireGuard 下为 CUBIC，在 QUIC 下为 BBR。
+    /// 统一拥塞控制；auto 在 QUIC 下为 BBR。
     pub congestion: crate::options::Congestion,
 }
 
@@ -109,10 +116,10 @@ impl Default for SessionOptions {
 }
 
 impl SessionOptions {
-    /// 发送端默认：WireGuard。
+    /// 发送端默认：QUIC（当前唯一数据面实现）。
     pub fn sender_default() -> Self {
         Self {
-            transport: Some(TransportKind::WireGuard),
+            transport: Some(TransportKind::Quic),
             ..Self::default()
         }
     }
@@ -125,7 +132,7 @@ impl SessionOptions {
 
 /// tx 会话（已建立，`listen` 后发文件）。
 pub struct TxSession {
-    /// 已建立的传输连接（WireGuard 或 QUIC）。
+    /// 已建立的传输连接（当前为 QUIC）。
     pub conn: AnyConnection,
     /// 传输内 HTTP 的一次性 token（tx 用它拼 `GET /f/<token>`）。
     pub token: [u8; 16],
@@ -135,7 +142,7 @@ pub struct TxSession {
 pub struct RxSession {
     /// 对端的加密预告；旧发送端为 None，后续从 HTTP 头补齐。
     pub offer: Option<crate::transfer::TransferOffer>,
-    /// 已建立的传输连接（WireGuard 或 QUIC）。
+    /// 已建立的传输连接（当前为 QUIC）。
     pub conn: AnyConnection,
     /// 传输内 HTTP 的一次性 token（rx 用同一个 token 拨号）。
     pub token: [u8; 16],
@@ -186,7 +193,7 @@ async fn open(config: &Config) -> Result<WsStream, SessionError> {
     Ok(ws)
 }
 
-/// tx：从传输码开始，建立到 rx 的传输连接（默认 WireGuard）。
+/// tx：从传输码开始，建立到 rx 的传输连接（默认 QUIC）。
 pub async fn sender_session(config: &Config, code: &str) -> Result<TxSession, SessionError> {
     sender_session_with(config, code, &SessionOptions::sender_default()).await
 }
@@ -207,7 +214,7 @@ pub async fn sender_session_with_ready(
     opts: &SessionOptions,
     on_ready: impl FnOnce() + Send,
 ) -> Result<TxSession, SessionError> {
-    opts.validate_for(opts.transport.unwrap_or(TransportKind::WireGuard))
+    opts.validate_for(opts.transport.unwrap_or(TransportKind::Quic))
         .map_err(SessionError::Options)?;
     if let Some(offer) = &opts.offer {
         offer.validate().map_err(SessionError::Options)?;
@@ -320,10 +327,11 @@ fn parse_endpoint(bytes: &[u8]) -> Result<(TransportKind, &[u8]), SessionError> 
             bytes[2]
         )));
     }
-    let kind = TransportKind::from_wire(bytes[3]).ok_or_else(|| {
-        SessionError::BadEndpointHeader(format!("unknown transport {}", bytes[3]))
-    })?;
-    Ok((kind, &bytes[ENDPOINT_HEADER_LEN..]))
+    match TransportKind::from_wire(bytes[3]) {
+        Some(kind) => Ok((kind, &bytes[ENDPOINT_HEADER_LEN..])),
+        // 线上码 1 曾属于已移除的 WireGuard —— 大概率对端还是旧版本客户端
+        None => Err(SessionError::LegacyPeerTransport { wire: bytes[3] }),
+    }
 }
 
 /// 两种端点当前都是 JSON 对象；旧解析器会忽略未知字段，HE v1 保持不变。
@@ -378,7 +386,7 @@ async fn exchange_and_establish(
 
     match role {
         Role::Sender => {
-            let kind = opts.transport.unwrap_or(TransportKind::WireGuard);
+            let kind = opts.transport.unwrap_or(TransportKind::Quic);
             let mut transport = build_transport(opts, kind, &observed, fingerprint)?;
             let my_endpoint = transport.prepare().await?;
             let my_endpoint = attach_offer(&my_endpoint, opts.offer.as_ref())?;
@@ -466,7 +474,7 @@ mod tests {
     /// [`wrap_endpoint`]，和线上格式一致，而不是直接测裸 aead。
     #[test]
     fn endpoint_blob_is_channel_bound() {
-        let payload = wrap_endpoint(TransportKind::WireGuard, br#"{"version":1,"udp_port":1}"#);
+        let payload = wrap_endpoint(TransportKind::Quic, br#"{"version":1,"udp_port":1}"#);
         let k = [0xab_u8; 32];
         let blob_channel_1 = crate::crypto::aead::seal(&k, &1u16.to_be_bytes(), &payload).unwrap();
         // 换频道打开 → 认证失败
@@ -483,12 +491,12 @@ mod tests {
         assert!(crate::crypto::aead::open(&k, &1u16.to_be_bytes(), &tampered).is_err());
     }
 
-    /// 发送端默认 WireGuard；接收端/裸 default 都是 auto。
+    /// 发送端默认 QUIC；接收端/裸 default 都是 auto。
     #[test]
-    fn default_transport_is_wireguard_and_receiver_is_auto() {
+    fn default_transport_is_quic_and_receiver_is_auto() {
         assert_eq!(
             SessionOptions::sender_default().transport,
-            Some(TransportKind::WireGuard)
+            Some(TransportKind::Quic)
         );
         assert_eq!(SessionOptions::default().transport, None);
         assert_eq!(SessionOptions::receiver_default().transport, None);
@@ -501,13 +509,11 @@ mod tests {
     /// 端点头能正确往返。
     #[test]
     fn endpoint_header_roundtrip() {
-        for kind in [TransportKind::WireGuard, TransportKind::Quic] {
-            let payload = b"opaque-endpoint";
-            let wrapped = wrap_endpoint(kind, payload);
-            let (got_kind, got_payload) = parse_endpoint(&wrapped).unwrap();
-            assert_eq!(got_kind, kind);
-            assert_eq!(got_payload, payload);
-        }
+        let payload = b"opaque-endpoint";
+        let wrapped = wrap_endpoint(TransportKind::Quic, payload);
+        let (got_kind, got_payload) = parse_endpoint(&wrapped).unwrap();
+        assert_eq!(got_kind, TransportKind::Quic);
+        assert_eq!(got_payload, payload);
     }
 
     /// 端点头损坏/版本/类型非法 → 明确报错。
@@ -525,9 +531,10 @@ mod tests {
             parse_endpoint(&[b'H', b'E', 2, 2, b'p']),
             Err(SessionError::BadEndpointHeader(_))
         ));
+        // 旧版 WireGuard wire 码 1 → 专门的 LegacyPeerTransport（提示对端升级）
         assert!(matches!(
-            parse_endpoint(&[b'H', b'E', 1, 0xff, b'p']),
-            Err(SessionError::BadEndpointHeader(_))
+            parse_endpoint(&[b'H', b'E', 1, 1, b'p']),
+            Err(SessionError::LegacyPeerTransport { wire: 1 })
         ));
     }
 
@@ -574,15 +581,11 @@ mod tests {
         assert_eq!(url, "wss://relay.example.com:4376");
     }
 
-    /// 传输协议选择：CLI 字符串 → 枚举。
+    /// 传输协议选择：CLI 字符串 → 枚举（当前仅 QUIC）。
     #[test]
     fn transport_kind_roundtrip() {
-        for (s, kind) in [
-            ("wireguard", TransportKind::WireGuard),
-            ("quic", TransportKind::Quic),
-        ] {
-            assert_eq!(TransportKind::parse(s), Some(kind));
-            assert_eq!(kind.as_str(), s);
-        }
+        assert_eq!(TransportKind::parse("quic"), Some(TransportKind::Quic));
+        assert_eq!(TransportKind::Quic.as_str(), "quic");
+        assert_eq!(TransportKind::parse("wireguard"), None);
     }
 }

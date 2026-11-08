@@ -263,7 +263,6 @@ async fn run(
                 s.network = tx.conn.network_stats();
                 s.transport = Some(
                     match tx.conn {
-                        hermod_core::transport::AnyConnection::WireGuard(_) => "wireguard",
                         hermod_core::transport::AnyConnection::Quic(_) => "quic",
                     }
                     .into(),
@@ -310,7 +309,6 @@ async fn run(
                 s.network = rx.conn.network_stats();
                 s.transport = Some(
                     match rx.conn {
-                        hermod_core::transport::AnyConnection::WireGuard(_) => "wireguard",
                         hermod_core::transport::AnyConnection::Quic(_) => "quic",
                     }
                     .into(),
@@ -411,7 +409,7 @@ mod tests {
     fn desktop_jobs_transfer_a_file_and_cancel_while_waiting() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         runtime.block_on(async {
-          for kind in [hermod_core::transport::TransportKind::WireGuard, hermod_core::transport::TransportKind::Quic] {
+          for kind in [hermod_core::transport::TransportKind::Quic] {
             tokio::time::timeout(Duration::from_secs(15), async {
                 let listener = tokio::net::TcpListener::bind("[::1]:0").await.unwrap();
                 let mut cfg = Config { server_url: format!("ws://{}", listener.local_addr().unwrap()), ..Config::default() };

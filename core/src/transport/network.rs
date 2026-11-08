@@ -113,7 +113,7 @@ pub fn peer_addresses(
     Ok(addresses)
 }
 
-/// 统一 WireGuard 端点表示，避免同一 IPv4 地址以两种形式参与漫游。
+/// 统一端点表示，避免同一 IPv4 地址以两种形式参与漫游（IPv4/IPv6 隧道双族）。
 pub fn canonical(address: SocketAddr) -> SocketAddr {
     match address {
         SocketAddr::V6(v6) if v6.ip().to_ipv4_mapped().is_some() => {

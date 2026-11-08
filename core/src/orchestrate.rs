@@ -334,86 +334,92 @@ mod tests {
     use crate::crypto::cpace::Role;
     use crate::crypto::kdf::derive_wg_psk;
     use crate::transfer::{self, Kind};
-    use crate::transport::WgConnection;
     use crate::transport::iface::Transport;
-    use crate::transport::wireguard::transport::WireGuardTransport;
+    use crate::transport::{QuicConnection, QuicTransport, TransportKind};
+    use std::net::{Ipv6Addr, SocketAddrV6};
 
-    /// IPv4-only 绑定验证两个独立协议、空文件和 HTTP 元数据先于载荷到达。
+    /// QUIC 绑定验证空文件和 HTTP 元数据先于载荷到达。
     #[tokio::test]
-    async fn ipv4_transfers_and_metadata_on_both_protocols() {
-        use crate::transport::{AnyTransport, TransportKind};
+    async fn transfers_with_metadata_before_payload() {
+        use crate::transport::AnyTransport;
+        use std::net::{Ipv6Addr, SocketAddrV6};
         tokio::time::timeout(std::time::Duration::from_secs(60), async {
-            for kind in [TransportKind::Quic, TransportKind::WireGuard] {
-                for size in [0, 128 * 1024] {
-                    let mut tx = AnyTransport::new(kind);
-                    let mut rx = AnyTransport::new(kind);
-                    tx.set_udp_bind(Some("127.0.0.1:0".parse().unwrap()));
-                    rx.set_udp_bind(Some("127.0.0.1:0".parse().unwrap()));
-                    tx.set_credential_fingerprint([9; 32]);
-                    rx.set_credential_fingerprint([9; 32]);
-                    let tx_ep = tx.prepare().await.unwrap();
-                    let rx_ep = rx.prepare().await.unwrap();
-                    let mut tx = tx.establish(Role::Sender, &[8; 32], &rx_ep).await.unwrap();
-                    let mut rx = rx
-                        .establish(Role::Receiver, &[8; 32], &tx_ep)
-                        .await
-                        .unwrap();
-                    let bytes = vec![42; size];
-                    let expected = transfer::TransferOffer {
-                        kind: Kind::File,
-                        name: "ipv4.bin".into(),
-                        size: size as u64,
-                    };
-                    let announced = std::sync::atomic::AtomicBool::new(false);
-                    let mut metadata = |offer: &transfer::TransferOffer| {
-                        assert_eq!(offer, &expected);
-                        announced.store(true, std::sync::atomic::Ordering::Relaxed);
-                    };
-                    let mut progress = |_| {
-                        assert!(announced.load(std::sync::atomic::Ordering::Relaxed));
-                    };
-                    let mut dest = Vec::new();
-                    let send = ServeOptions {
-                        token: [4; 16],
-                        kind: Kind::File,
-                        name: expected.name.clone(),
-                        size: size as u64,
-                        body: Box::new(std::io::Cursor::new(bytes.clone())),
-                        progress: None,
-                    };
-                    let receive = async {
-                        let stream = rx.dial().await.unwrap();
-                        fetch_with_options(
-                            stream,
-                            &[4; 16],
-                            &mut dest,
-                            ReceiveOptions {
-                                expected: Some(&expected),
-                                metadata: Some(&mut metadata),
-                                progress: Some(&mut progress),
-                                ..Default::default()
-                            },
-                        )
-                        .await
-                        .unwrap()
-                    };
-                    let (sent, received) = tokio::join!(serve_file(&mut tx, send), receive);
-                    assert!(sent.unwrap().verified && received.verified);
-                    assert_eq!(dest, bytes);
+            for size in [0, 128 * 1024] {
+                let bind: std::net::SocketAddr =
+                    SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0).into();
+                let mut tx = AnyTransport::new(TransportKind::Quic);
+                let mut rx = AnyTransport::new(TransportKind::Quic);
+                tx.set_udp_bind(Some(bind));
+                rx.set_udp_bind(Some(bind));
+                tx.set_credential_fingerprint([9; 32]);
+                rx.set_credential_fingerprint([9; 32]);
+                let tx_ep = tx.prepare().await.unwrap();
+                let rx_ep = rx.prepare().await.unwrap();
+                let mut tx = tx.establish(Role::Sender, &[8; 32], &rx_ep).await.unwrap();
+                let mut rx = rx
+                    .establish(Role::Receiver, &[8; 32], &tx_ep)
+                    .await
+                    .unwrap();
+                let bytes = vec![42; size];
+                let expected = transfer::TransferOffer {
+                    kind: Kind::File,
+                    name: "ipv4.bin".into(),
+                    size: size as u64,
+                };
+                let announced = std::sync::atomic::AtomicBool::new(false);
+                let mut metadata = |offer: &transfer::TransferOffer| {
+                    assert_eq!(offer, &expected);
+                    announced.store(true, std::sync::atomic::Ordering::Relaxed);
+                };
+                let mut progress = |_| {
                     assert!(announced.load(std::sync::atomic::Ordering::Relaxed));
-                    tx.shutdown().await.unwrap();
-                    rx.shutdown().await.unwrap();
-                }
+                };
+                let mut dest = Vec::new();
+                let send = ServeOptions {
+                    token: [4; 16],
+                    kind: Kind::File,
+                    name: expected.name.clone(),
+                    size: size as u64,
+                    body: Box::new(std::io::Cursor::new(bytes.clone())),
+                    progress: None,
+                };
+                let receive = async {
+                    let stream = rx.dial().await.unwrap();
+                    fetch_with_options(
+                        stream,
+                        &[4; 16],
+                        &mut dest,
+                        ReceiveOptions {
+                            expected: Some(&expected),
+                            metadata: Some(&mut metadata),
+                            progress: Some(&mut progress),
+                            ..Default::default()
+                        },
+                    )
+                    .await
+                    .unwrap()
+                };
+                let (sent, received) = tokio::join!(serve_file(&mut tx, send), receive);
+                assert!(sent.unwrap().verified && received.verified);
+                assert_eq!(dest, bytes);
+                assert!(announced.load(std::sync::atomic::Ordering::Relaxed));
+                tx.shutdown().await.unwrap();
+                rx.shutdown().await.unwrap();
             }
         })
         .await
         .unwrap();
     }
 
-    /// 建一对已建立、可 listen/dial 的连接。
-    async fn connected_pair() -> (WgConnection, WgConnection) {
-        let mut tx = WireGuardTransport::new();
-        let mut rx = WireGuardTransport::new();
+    /// 建一对已建立、可 listen/dial 的连接（QUIC 回环）。
+    async fn connected_pair() -> (QuicConnection, QuicConnection) {
+        let mut tx = QuicTransport::new();
+        let mut rx = QuicTransport::new();
+        let bind: std::net::SocketAddr = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0).into();
+        tx.set_udp_bind(Some(bind));
+        rx.set_udp_bind(Some(bind));
+        tx.set_credential_fingerprint([0x66; 32]);
+        rx.set_credential_fingerprint([0x66; 32]);
         let tx_ep = tx.prepare().await.unwrap();
         let rx_ep = rx.prepare().await.unwrap();
         let psk = derive_wg_psk(&[0x44u8; 32], 7);
@@ -422,8 +428,8 @@ mod tests {
         (tx_conn, rx_conn)
     }
 
-    /// 终极 e2e：两个 WireGuardTransport + 传输内 HTTP，完整搬运一个文件并裁决。
-    /// 覆盖 WireGuard 握手 → smoltcp TCP → HTTP → SHA-256 全链路。
+    /// 终极 e2e：两个 QuicTransport + 传输内 HTTP，完整搬运一个文件并裁决。
+    /// 覆盖 QUIC 握手 → 双向流 → HTTP → SHA-256 全链路。
     #[tokio::test]
     async fn end_to_end_file_transfer() {
         let (mut tx_conn, mut rx_conn) = connected_pair().await;
@@ -457,7 +463,7 @@ mod tests {
         assert_eq!(serve_out.sha256, sha, "tx 边发边算的摘要");
     }
 
-    /// 真实文件 e2e：send_file → receive，落盘内容/SHA-256 一致。
+    /// 真实文件 e2e（QUIC）：send_file → receive，落盘内容/SHA-256 一致。
     #[tokio::test]
     async fn end_to_end_real_file_transfer() {
         let (mut tx_conn, mut rx_conn) = connected_pair().await;

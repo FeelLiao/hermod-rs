@@ -9,7 +9,7 @@ Hermod 是使用 Rust 编写的加密 P2P **IPv4 局域网 / IPv6** 文件传输
 - **Windows GUI**：Flutter Material 3 + Rust Core 子进程，通过 Microsoft Store 的 x64/ARM64 MSIXBundle 发布。
 - **Android**：Flutter runner 已保留用于后续平台接入，目前不发布 Android 安装包。
 - **Linux 命令行**：musl 静态可执行文件，适合终端和脚本。
-- GUI 默认 **QUIC 发送、Auto 接收、不限速**；CLI 默认 WireGuard 发送，也可选择 QUIC。
+- 唯一数据面协议为 **QUIC**（TLS 1.3，默认 BBR）；GUI 与 CLI 一致，接收端自动跟随。
 - 支持文件、文本、取消、进度、限速、服务器指纹信任与 SHA-256 校验。
 - 传输在用户态完成，不需要配置 VPN、创建 TUN 网卡或使用管理员权限。
 
@@ -29,7 +29,7 @@ GitHub 自动提供的源码下载链接属于平台功能。
 ## 连接前先确认网络
 
 **双方处于同一 IPv4 局域网，或具有可达的 IPv6，并允许对端 UDP 通信。**
-QUIC 和 WireGuard 均支持私有 / 链路本地 IPv4 地址及纯 IPv4 网络。配对仍需连接所选信令服务器；
+QUIC 支持私有 / 链路本地 IPv4 地址及纯 IPv4 网络。配对仍需连接所选信令服务器；
 本版不提供离线发现、互联网 IPv4 NAT 打洞或文件中转。
 有 IPv6 地址不代表路由器、防火墙一定放行。默认信令地址是
 `wss://oracle.stariverfeel.eu.org:4376`，已内置其 SPKI 指纹。传输码只在服务器成功分配频道后显示。
@@ -83,17 +83,17 @@ chmod +x hermod-linux-x64-musl
 ```bash
 hermod tx 'Hello from Hermod'
 printf 'Read from stdin\n' | hermod tx -
-hermod tx ./archive.zip --transport quic --mtu 1280 --congestion bbr
-hermod rx CODE --transport wireguard --limit-mbps 8
+hermod tx ./archive.zip --mtu 1280 --congestion bbr
+hermod rx CODE --limit-mbps 8
 hermod --help
 hermod tx --help
 ```
 
-CLI 默认不限速，`0` 表示不限速；发送默认 WireGuard，接收默认 Auto。双方保持程序打开，直到摘要验证完成。
+CLI 默认不限速，`0` 表示不限速；发送走 QUIC，接收默认 Auto。双方保持程序打开，直到摘要验证完成。
 
 | 参数 | 作用 |
 | --- | --- |
-| `--transport wireguard\|quic` | 发送协议；接收还支持 `auto` 跟随发送端 |
+
 | `--mtu auto\|数值` | 控制本次实际使用协议的 MTU |
 | `--congestion auto\|cubic\|reno\|bbr\|newreno` | 只接受实际协议支持的算法 |
 | `--limit-mbps 数值` | 十进制 Mbps 载荷速率，发送和接收限制取较小值 |
@@ -102,7 +102,7 @@ CLI 默认不限速，`0` 表示不限速；发送默认 WireGuard，接收默�
 | `--destination 路径` | 接收目录 |
 | `--verbose 级别`、`--quiet` | 全局日志级别和减少状态提示 |
 
-**MTU**：WireGuard 表示内层 IP MTU，auto 为 1400，允许 576–65488。QUIC 表示 UDP 载荷上限，
+**MTU**：QUIC 表示 UDP 载荷上限，
 允许 1200–1452；auto 从 1200 开始探测，最高 1452；显式设置后不会探测超过该值。WireGuard 的
 较大 MTU 不保证更快，还需为外层 IPv6、UDP 和 WireGuard 头部预留空间。
 

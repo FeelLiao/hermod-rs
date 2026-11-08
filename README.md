@@ -9,7 +9,7 @@ travel between your devices; the signaling server only helps them connect.
 - **Windows GUI:** Flutter Material 3 with a Rust Core process, distributed through Microsoft Store as x64/ARM64 MSIXBundle.
 - **Android:** Flutter runner exists for ongoing platform integration; no Android release package is currently published.
 - **Linux CLI:** static musl binaries for terminals and automation.
-- **Two protocols:** GUI sends with QUIC by default; CLI sends with WireGuard. Receivers automatically follow the sender.
+- **One data-plane protocol:** QUIC (TLS 1.3, BBR by default) for both GUI and CLI; receivers follow automatically.
 - Files, text, cancellation, progress, adjustable bandwidth, server fingerprint pinning and SHA-256 verification.
 - Runs in userspace: no VPN configuration, TUN interface or administrator privileges for transfers.
 
@@ -28,7 +28,7 @@ There are no macOS, Linux GUI, Windows CLI, or Android release builds. Release a
 ## Before connecting
 
 **Use the same IPv4 LAN or reachable IPv6, and allow peer UDP traffic.** Both
-QUIC and WireGuard support private/link-local IPv4 LAN addresses, including IPv4-only
+QUIC supports private/link-local IPv4 LAN addresses, including IPv4-only
 networks. Pairing still requires the selected signaling server; offline discovery,
 Internet IPv4 NAT traversal and file relays are not provided. A network address
 by itself does not guarantee that your router or firewall permits peer traffic.
@@ -94,18 +94,18 @@ Or install the binary as `hermod` and use:
 ```bash
 hermod tx 'Hello from Hermod'
 printf 'Read from stdin\n' | hermod tx -
-hermod tx ./archive.zip --transport quic --mtu 1280 --congestion bbr
-hermod rx CODE --transport wireguard --limit-mbps 8
+hermod tx ./archive.zip --mtu 1280 --congestion bbr
+hermod rx CODE --limit-mbps 8
 hermod --help
 hermod tx --help
 ```
 
-CLI has no default bandwidth cap (`0` means unlimited). Sending defaults to WireGuard;
+CLI has no default bandwidth cap (`0` means unlimited). Sending runs over QUIC;
 receiving defaults to `auto`. Keep both peers open until the digest verdict completes.
 
 | Option | Meaning |
 | --- | --- |
-| `--transport wireguard\|quic` | Sender protocol; receiver also accepts `auto` |
+
 | `--mtu auto\|NUMBER` | One MTU setting for the selected protocol |
 | `--congestion auto\|cubic\|reno\|bbr\|newreno` | Only algorithms supported by the selected protocol are accepted |
 | `--limit-mbps NUMBER` | Decimal megabits/s of payload, 0 unlimited; lower sender/receiver cap wins |

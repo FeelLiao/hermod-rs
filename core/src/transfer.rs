@@ -414,4 +414,84 @@ mod tests {
             PathBuf::from("/tmp/x/a.pdf.hermod_tmp")
         );
     }
+
+    /// 对端可控文件名的"性质测试"（确定性伪随机语料，不引新依赖）：
+    /// 无论输入是什么，结论必须落在目标目录内、无路径分隔符/控制字符、
+    /// 字节长度封顶，且同一输入在目录无变化时结果确定。
+    #[test]
+    fn hostile_name_corpus_never_escapes_or_panics() {
+        let dir = temp_dir("corpus");
+        let expected_dir = dir.canonicalize().unwrap();
+        // 已知攻击向量：跨越目录、Windows 反斜杠、保留设备名、控制字符、注入
+        let mut samples: Vec<String> = vec![
+            "../../../etc/passwd",
+            r"..\..\..\Windows\system32\config\SAM",
+            "a/b/c/../../whoami.txt",
+            "CON",
+            "NUL.zip",
+            "lpt9",
+            "aux.",
+            ".hidden",
+            ". . .",
+            " ",
+            "\t\x07",
+            "a\r\nb",
+            "name\"quoted",
+            "中文名<>*|?.pdf",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        samples.push("x".repeat(4096));
+        // 再来 500 个确定性的伪随机关联样本
+        let mut state: u32 = 0x4a_6c_3f_11;
+        let mut next = move || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            state
+        };
+        for _ in 0..500 {
+            let len = (next() % 60) as usize;
+            let mut name = String::with_capacity(len);
+            for _ in 0..len {
+                let choice = next() % 4;
+                match choice {
+                    0 => name.push(char::from((next() % 95) as u8 + 0x20)),
+                    1 => name.push_str("../"),
+                    2 => name.push_str(r"..\"),
+                    _ => name.push_str(&format!("part{}.", next() % 9)),
+                }
+            }
+            samples.push(name);
+        }
+        for name in &samples {
+            let path = safe_destination_path(&dir, name).unwrap();
+            let file = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            // 1. 位置不变量：永远是 dir 的直接子项
+            assert_eq!(
+                path.parent().map(|p| p.canonicalize().unwrap()),
+                Some(expected_dir.clone())
+            );
+            // 2. 名字不变量：无分隔符、无控制字符、非空、字节长度封顶
+            assert!(!file.is_empty(), "input {name:?} produced an empty name");
+            assert!(
+                !file.contains(['/', '\\']),
+                "separator in {file:?} for {name:?}"
+            );
+            assert!(
+                file.chars().all(|c| !c.is_control()),
+                "control char in {file:?}"
+            );
+            assert!(file.as_bytes().len() <= 200 + 6, "too long: {file:?}");
+            // 3. 确定性：目录未变化时，同一输入给同一输出
+            assert_eq!(
+                safe_destination_path(&dir, name).unwrap(),
+                path,
+                "nondeterministic for {name:?}"
+            );
+        }
+    }
 }

@@ -461,6 +461,28 @@ mod tests {
         }
     }
 
+    /// 别的频道里截获的加密端点 blob 不能在本频道打开（AAD = 频道号大端）：
+    /// 频道绑定 + 密钥通道双重核对，防止跨频道重放。走的是会话层的
+    /// [`wrap_endpoint`]，和线上格式一致，而不是直接测裸 aead。
+    #[test]
+    fn endpoint_blob_is_channel_bound() {
+        let payload = wrap_endpoint(TransportKind::WireGuard, br#"{"version":1,"udp_port":1}"#);
+        let k = [0xab_u8; 32];
+        let blob_channel_1 = crate::crypto::aead::seal(&k, &1u16.to_be_bytes(), &payload).unwrap();
+        // 换频道打开 → 认证失败
+        assert!(crate::crypto::aead::open(&k, &2u16.to_be_bytes(), &blob_channel_1).is_err());
+        // 同频道不同密钥 → 认证失败（每个会话密钥唯一）
+        assert!(
+            crate::crypto::aead::open(&[0xcd_u8; 32], &1u16.to_be_bytes(), &blob_channel_1)
+                .is_err()
+        );
+        // 篡改 blob 任何字节 → 认证失败
+        let mut tampered = blob_channel_1.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert!(crate::crypto::aead::open(&k, &1u16.to_be_bytes(), &tampered).is_err());
+    }
+
     /// 发送端默认 WireGuard；接收端/裸 default 都是 auto。
     #[test]
     fn default_transport_is_wireguard_and_receiver_is_auto() {

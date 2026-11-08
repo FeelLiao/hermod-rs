@@ -41,11 +41,12 @@ impl BandwidthLimit {
     }
 
     /// 限速时将 QUIC 应用队列控制在约 250ms；不限速仍保留大窗口。
+    /// 注意：上限参数可能小，必须先抬下限再钳上限，避免 clamp(min > max) panic。
     pub(crate) fn window(self, unlimited: u64) -> u64 {
         if self.0 == 0 {
             unlimited
         } else {
-            (self.0 / 4).clamp(256 * 1024, unlimited)
+            (self.0 / 4).max(256 * 1024).min(unlimited)
         }
     }
 }
@@ -110,5 +111,22 @@ mod tests {
             pacer.wait(pacer.chunk_len()).await;
         }
         assert!(start.elapsed() >= Duration::from_millis(100));
+    }
+
+    /// 队列窗口：0 = 完全跟随调用方给的 unlimited；受限时先抬下限（256 KiB）
+    /// 再钳上限，即使上限比下限小也不得 panic（clamp 语义陷阱）。
+    #[test]
+    fn window_clamps_between_floor_and_caller_ceiling() {
+        let slow: BandwidthLimit = "0.002".parse().unwrap(); // 256 B/s
+        let fast: BandwidthLimit = "8".parse().unwrap(); // 1 MiB/s
+        let huge: BandwidthLimit = "1000".parse().unwrap(); // 125 MiB/s
+        assert_eq!(BandwidthLimit::UNLIMITED.window(64 * 1024), 64 * 1024);
+        assert_eq!(slow.window(1 << 30), 256 * 1024);
+        assert_eq!(fast.window(1 << 30), 256 * 1024);
+        assert_eq!(huge.window(1 << 30), 125_000_000 / 4);
+        // 上限参数小于下限：必须返回上限而不是 panic
+        assert_eq!(slow.window(100_000), 100_000);
+        // 速度低于下限衍生值（250 KiB < 256 KiB）时先抬下限，再满足不超上限
+        assert_eq!(fast.window(300_000), 256 * 1024);
     }
 }

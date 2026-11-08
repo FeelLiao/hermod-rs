@@ -310,4 +310,65 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, HttpError::Malformed(_)));
     }
+
+    /// 对端可控的文件名进入服务流程时，http_meta 的守卫必须在**整链**生效：
+    /// 带 CR/LF 的名字在写响应头之前就被拒绝（header 注入测试的服务端视角）。
+    #[tokio::test]
+    async fn hostile_served_name_is_rejected_by_guard() {
+        let options = ServeOptions {
+            token: [9u8; 16],
+            kind: Kind::File,
+            name: "evil\r\nInjected: 1".into(),
+            size: 3,
+            body: Box::new(std::io::Cursor::new(b"abc".to_vec())),
+            progress: None,
+        };
+        let (mut client_io, server_io) = tokio::io::duplex(4096);
+        let server = tokio::spawn(serve(server_io, options));
+        // 发一个指向真实 token 的合法请求，让服务端走完守卫分支
+        use tokio::io::AsyncWriteExt;
+        client_io
+            .write_all(b"GET /f/09090909090909090909090909090909 HTTP/1.1\r\nHost: h\r\n\r\n")
+            .await
+            .unwrap();
+        let outcome = server.await.unwrap().unwrap_err();
+        assert!(matches!(
+            outcome,
+            HttpError::Meta(crate::http_meta::MetaError::InvalidFilename)
+        ));
+    }
+
+    /// POST /done 缺 Content-Length → 明确 Malformed，而不是把空体当裁决。
+    #[tokio::test]
+    async fn done_without_body_length_is_malformed() {
+        let options = ServeOptions {
+            token: [1u8; 16],
+            kind: Kind::File,
+            name: "a".into(),
+            size: 1,
+            body: Box::new(std::io::Cursor::new(b"x".to_vec())),
+            progress: None,
+        };
+        let (client_io, server_io) = tokio::io::duplex(4096);
+        let server = tokio::spawn(serve(server_io, options));
+        // 排空读端，避免服务端写响应头时因写端关闭产生 BrokenPipe 噪音
+        let (mut reader, writer) = tokio::io::split(client_io);
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buf = [0u8; 512];
+            while reader.read(&mut buf).await.is_ok_and(|n| n > 0) {}
+        });
+        {
+            use tokio::io::AsyncWriteExt;
+            let mut w = writer;
+            w.write_all(b"GET /f/01010101010101010101010101010101 HTTP/1.1\r\nHost: h\r\n\r\n")
+                .await
+                .unwrap();
+            w.write_all(b"POST /done HTTP/1.1\r\nHost: h\r\nX-Trick: 1\r\n\r\n")
+                .await
+                .unwrap();
+        }
+        let outcome = server.await.unwrap().unwrap_err();
+        assert!(matches!(outcome, HttpError::Malformed(_)));
+    }
 }

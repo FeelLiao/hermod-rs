@@ -340,4 +340,53 @@ mod tests {
         let mut reader = BufReader::new(&data[..]);
         assert!(Request::read(&mut reader).await.is_err());
     }
+
+    /// 头条数超限（MAX_HEADER_LINES）→ 报错；每行都很短，锁定的是条数语义
+    /// 而不是字节数（防止用大量小头绕过大小限制）。
+    #[tokio::test]
+    async fn too_many_header_lines_error() {
+        let mut data = b"GET /f/00 HTTP/1.1\r\n".to_vec();
+        for _ in 0..(MAX_HEADER_LINES + 1) {
+            data.extend_from_slice(b"X-Small: x\r\n");
+        }
+        data.extend_from_slice(b"\r\n");
+        let mut reader = BufReader::new(&data[..]);
+        let error = Request::read(&mut reader).await.unwrap_err();
+        assert!(error.to_string().contains("too many headers"));
+    }
+
+    /// 空 header 名 / 冒号出现在值里都必须仍算合法行；但纯垃圾行必须报错
+    /// （malformed header 分支单独锁定，roundtrip 覆盖不到）。
+    #[tokio::test]
+    async fn header_without_colon_is_malformed() {
+        let data = b"GET /f/00 HTTP/1.1\r\nnocolon-here\r\n\r\n";
+        let mut reader = BufReader::new(&data[..]);
+        assert!(Request::read(&mut reader).await.is_err());
+    }
+
+    /// 上游毫无人性时不得 panic：重复的行类型/巨大方法名/空请求行。
+    #[tokio::test]
+    async fn request_parser_never_panics_on_hostile_input() {
+        // 确定性 LCG，与 http_meta 的 fuzz 同风格
+        let mut state: u32 = 0x9911_7723;
+        let mut next = move || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            state
+        };
+        for _ in 0..5_000 {
+            // 拼一条随机"请求"：可打印 ASCII + 换行，喂给 read()，断言不 panic
+            let len = (next() % 400) as usize;
+            let mut data = Vec::with_capacity(len + 4);
+            for _ in 0..len {
+                let byte = (next() % 95) as u8 + 0x20;
+                data.push(byte);
+                if byte == 0x0a as u8 {
+                    data.push(b'\r');
+                }
+            }
+            data.extend_from_slice(b"\r\n\r\n");
+            let mut reader = BufReader::new(&data[..]);
+            let _ = Request::read(&mut reader).await;
+        }
+    }
 }

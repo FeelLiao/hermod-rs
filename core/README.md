@@ -70,6 +70,16 @@ core/src/
 ├── config.rs         # Go-compatible YAML schema, trusted-server pins
 ├── options.rs        # shared CLI/GUI connection settings → SessionOptions
 └── log.rs            # tracing macros; the HOST installs the subscriber
+
+Extras that Cargo knows about:
+
+```
+core/
+├── tests/            # public-API acceptance layer, driven by an in-process relay
+│   ├── common/       #   one-shot local signaling relay + test Config helpers
+│   └── e2e_full_chain.rs
+└── examples/         # manual probes; ipv6_load_probe backs latency-check.sh
+```
 ```
 
 Naming conventions to keep in mind:
@@ -191,7 +201,12 @@ any network access; both front ends call exactly this code path.
   require a private IPv4 or IPv6 test interface (see root CI).
 - **End-to-end**: `orchestrate` tests drive WG+QUIC pairs through real SDU
   pipelines; `cli/tests/interop.rs` runs the actual binary against the GUI
-  engine over a local relay.
+  engine over a local relay, and `core/tests/e2e_full_chain.rs` is the
+  acceptance layer that opens the crate's public API the way external hosts
+  do — full session + transfer + cancel over an in-process relay.
+  `cargo bench` benchmarks were deliberately not adopted: correctness gates
+  (fmt/test/clippy/doc/deny) are the automated bars, while performance work
+  uses the manual probes (`quic_throughput` ignored test, `latency-check.sh`).
 
 Folder layout follows standard Rust 2018: `src/lib.rs` plus `mod` trees; a
 module with sub-files either uses `name.rs` + `name/` directory (XML-era

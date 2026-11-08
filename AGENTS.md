@@ -25,6 +25,8 @@ Required quality gates:
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
+cargo deny check            # supply-chain policy, enforced by cargo-deny-action in CI
 cd flutter
 fvm dart format --output=none --set-exit-if-changed lib test
 fvm flutter analyze
@@ -43,7 +45,7 @@ fvm flutter test
 
 ## Tests and releases
 
-Crypto tests use independent RFC vectors. Transport tests exercise handshake, HTTP, streams, digest verdict and cancellation. A private IPv4 or IPv6 test address is required for complete integration tests.
+Crypto tests use independent RFC vectors. Transport tests exercise handshake, HTTP, streams, digest verdict and cancellation. A private IPv4 or IPv6 test address is required for complete integration tests. `core/tests/e2e_full_chain.rs` is the public-API acceptance layer driven by an in-process relay; `core/examples/ipv6_load_probe.rs` backs the manual latency probe script (`scripts/latency-check.sh`).
 
 Windows CI builds native x64 and ARM64 Flutter applications and Rust bridges, packages one unsigned MSIX per architecture and combines them into `hermod-windows.msixbundle`. Validate Store identity `FeelLiao.HermodTransfer`, publisher, reserved display name `HermodTransfer`, version, en-US/zh-CN resources, both executable architectures and absence of signatures or secrets. Microsoft Store signs uploaded packages.
 

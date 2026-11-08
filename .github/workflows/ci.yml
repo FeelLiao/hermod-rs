@@ -57,3 +57,5 @@ jobs:
         env:
           RUSTDOCFLAGS: '-D warnings'
         run: cargo doc --no-deps --locked
+      - name: Supply chain policy (licenses and advisories)
+        uses: EmbarkStudios/cargo-deny-action@v2

@@ -1,0 +1,45 @@
+# hermod 供应链策略。由 CI 的 cargo-deny-action 执行（cargo deny check）。
+# 手动运行：cargo install cargo-deny && cargo deny check
+
+# 为发布矩阵覆盖的全部目标Triple 做依赖解析。
+[graph]
+targets = [
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "aarch64-pc-windows-msvc" },
+    { triple = "x86_64-unknown-linux-musl" },
+    { triple = "aarch64-unknown-linux-musl" },
+]
+
+[licenses]
+version = 2
+# 白名单按当前依赖树维护。新依赖引入新许可证时，在此追加并在提交注
+# 意里说明是哪个 crate 引入的。
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "OpenSSL",
+    "CDLA-Permissive-2.0",
+    "CC0-1.0",
+]
+confidence-threshold = 0.9
+
+[advisories]
+version = 2
+# 构建依赖的 CVE 必须干净；确认为误报或暂不可升级时在此逐条豁免并注明原因。
+ignore = []
+
+[bans]
+# 依赖树内版本分裂先打扰后失败，以免隐性扩散。
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

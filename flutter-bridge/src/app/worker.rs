@@ -2,7 +2,6 @@
 
 use hermod_core::transport::{AbortHandle, NetworkStatsHandle, TransportConnection};
 use hermod_core::{
-    bandwidth::BandwidthLimit,
     config::Config,
     orchestrate,
     session::{self, SessionOptions},
@@ -207,7 +206,6 @@ async fn run(
     state: Arc<Mutex<Snapshot>>,
     abort: Arc<Mutex<Option<AbortHandle>>>,
 ) -> Result<(), String> {
-    let limit: BandwidthLimit = options.bandwidth_limit;
     match action {
         Action::Send(source) => {
             let mut file: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
@@ -268,17 +266,15 @@ async fn run(
                     .into(),
                 );
             }
-            let outcome = orchestrate::serve_file_with_limit(
+            let outcome = orchestrate::serve_file(
                 &mut tx.conn,
-                hermod_core::transport::http::server::ServeOptions {
-                    token: tx.token,
+                hermod_core::orchestrate::ServeOptions {
                     kind: source.kind,
                     name: source.name,
                     size,
                     body: file,
                     progress: Some(Box::new(progress(state.clone()))),
                 },
-                limit,
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -315,17 +311,11 @@ async fn run(
                 );
             }
             let mut on_progress = progress(state.clone());
-            let mut on_metadata = |offer: &hermod_core::transfer::TransferOffer| {
-                state.lock().unwrap().total = Some(offer.size);
-            };
-            let receipt = orchestrate::receive_with_options(
+            let receipt = orchestrate::receive(
                 &mut rx.conn,
-                &rx.token,
                 &directory,
                 orchestrate::ReceiveOptions {
-                    limit,
-                    expected: rx.offer.as_ref(),
-                    metadata: Some(&mut on_metadata),
+                    offer: rx.offer.as_ref(),
                     progress: Some(&mut on_progress),
                 },
             )
@@ -440,7 +430,7 @@ mod tests {
                 let data = vec![0x53; 32_000];
                 std::fs::write(&file, &data).unwrap();
                 let options = SessionOptions { transport:Some(kind), udp_bind: None,
-                    bandwidth_limit: "0.8".parse().unwrap(), ..SessionOptions::default() };
+                    ..SessionOptions::default() };
                 let tx = Job::start(cfg.clone(), options.clone(), Action::Send(source(&file)), 3, Box::new(|| {}));
                 let code = loop {
                     let s = tx.snapshot();

@@ -49,7 +49,7 @@ pub async fn run(
     let pb2 = pb.clone();
     let got2 = received.clone();
     let mut speed = progress::Speed::new();
-    let mut on_progress = move |n: u64| {
+    let on_progress = move |n: u64| {
         let rate = speed.update(n);
         pb2.set_position(n);
         pb2.set_message(format!(
@@ -60,7 +60,9 @@ pub async fn run(
         got2.store(n, Ordering::Relaxed);
         let _ = tick_tx.try_send(());
     };
-    let mut on_metadata = |offer: &hermod_core::transfer::TransferOffer| {
+    let mut on_progress = on_progress;
+    // 协议 v2：元数据来自端点交换里的 offer（进度条总长已知）
+    if let Some(offer) = &rx.offer {
         pb.set_length(offer.size);
         pb.set_style(
             indicatif::ProgressStyle::with_template(
@@ -68,18 +70,12 @@ pub async fn run(
             )
             .unwrap(),
         );
-    };
-    if let Some(offer) = &rx.offer {
-        on_metadata(offer);
     }
-    let fut = orchestrate::receive_with_options(
+    let fut = orchestrate::receive(
         &mut rx.conn,
-        &rx.token,
         Path::new(&dest),
         orchestrate::ReceiveOptions {
-            limit: args.network.limit_mbps,
-            expected: rx.offer.as_ref(),
-            metadata: Some(&mut on_metadata),
+            offer: rx.offer.as_ref(),
             progress: Some(&mut on_progress),
         },
     );

@@ -68,9 +68,38 @@ pub struct TransferOffer {
     pub size: u64,
 }
 
+/// 文件名长度上限（字节）。防止畸形元数据撑爆接收端路径。
+pub const MAX_FILENAME_LEN: usize = 255;
+
+/// 文件名卫生校验错误（协议 v2 前是 HTTP 头约定的一部分，现归入载荷元数据）。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NameError {
+    #[error("filename is empty")]
+    Empty,
+    #[error("filename exceeds {MAX_FILENAME_LEN} bytes")]
+    TooLong,
+    #[error("filename contains CR/LF or double-quote")]
+    Invalid,
+}
+
+/// 文件名卫生校验：拒绝空名、超长、CR/LF 与双引号
+/// （对端可控的元数据；防下载端文件名注入/破坏）。
+pub fn validate_filename(filename: &str) -> Result<(), NameError> {
+    if filename.is_empty() {
+        return Err(NameError::Empty);
+    }
+    if filename.len() > MAX_FILENAME_LEN {
+        return Err(NameError::TooLong);
+    }
+    if filename.chars().any(|c| matches!(c, '\r' | '\n' | '"')) {
+        return Err(NameError::Invalid);
+    }
+    Ok(())
+}
+
 impl TransferOffer {
     pub fn validate(&self) -> Result<(), String> {
-        crate::http_meta::content_disposition(&self.name).map_err(|e| e.to_string())?;
+        validate_filename(&self.name).map_err(|e| e.to_string())?;
         if self.size > i64::MAX as u64 {
             return Err("File size exceeds the supported range".into());
         }

@@ -16,7 +16,6 @@
 //! └── quic/               # 实现：QUIC endpoint / TLS 钉扎 / 可插拔 CC
 //! ```
 
-pub mod http;
 pub mod iface;
 pub mod network;
 pub mod quic;
@@ -85,13 +84,6 @@ impl AnyTransport {
                     _ => CongestionControl::Bbr,
                 });
             }
-        }
-    }
-
-    /// 限速时缩小 QUIC 应用队列，载荷节流由共享 HTTP 层执行。
-    pub fn set_bandwidth_limit(&mut self, limit: crate::bandwidth::BandwidthLimit) {
-        match self {
-            Self::Quic(t) => t.set_bandwidth_limit(limit),
         }
     }
 }

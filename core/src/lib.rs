@@ -3,12 +3,12 @@
 //! 本 crate 是所有逻辑的唯一归属地，GUI / 脚本 / 其它前端可以直接嵌入，
 //! 不必依赖 CLI（DEVELOPMENT.md §3.1，决策 D17）。CLI 只是它的薄封装。
 //!
-//! # 数据流总览（DEVELOPMENT.md §3.2）
+//! # 数据流总览（协议 v2）
 //!
 //! ```text
-//! 会合（signal）→ 密钥协商（crypto::cpace）→ 加密交换端点清单（transport bundle）
-//!   → 建立传输（transport::quic）→ 传输内 HTTP（transport::http）
-//!   → 传输编排（orchestrate）：tx 发文件 / rx 收文件并裁决
+//! 会合（signal）→ 密钥协商（crypto::cpace）→ 加密交换端点清单（含 TransferOffer）
+//!   → 建立传输（transport::quic）→ 直连流载荷（orchestrate）
+//!   → tx 发 N 字节 / rx 收满并回裁决
 //! ```
 //!
 //! # 公开模块
@@ -20,25 +20,19 @@
 //!   以及两端的 CPace 握手编排。
 //! - [`transport`]：传输层。先看 [`transport::iface`] 的 [`Transport`]/
 //!   [`TransportConnection`] 契约（上层只依赖它）；当前实现是
-//!   [`transport::quic`]（QUIC + TLS 1.3 + 可插拔拥塞控制，默认 BBR）；
-//!   [`transport::http`] 是共享的传输内 HTTP/1.1。
+//!   [`transport::quic`]（QUIC + TLS 1.3 + 可插拔拥塞控制，默认 BBR）。
 //! - [`session`]：会话编排——从**传输码**到已建立的传输连接：
 //!   [`session::sender_session`]（tx）/ [`session::receiver_session`]（rx）。
 //!   它把「信令 → CPace → bundle 加密交换 → 传输 establish」串成一跳，并返回
-//!   传输内 HTTP 的一次性 `token`（两端从 K 派生，见
-//!   [`crypto::kdf::derive_http_token`]）。
+//!   一次性会话凭证（两端从 K 派生，见 [`crypto::kdf::derive_http_token`]）。
 //! - [`transfer`]：载荷元数据（`Kind`/文件名/大小/SHA-256）、输入分类、
-//!   目标路径安全校验、临时文件路径。
+//!   文件名卫生校验、目标路径安全校验、临时文件路径。
 //! - [`config`]：与 Go 版兼容的配置 schema（YAML 键、默认值、Server URL 规范化）。
-//! - [`http_meta`]：传输内 HTTP 的头部约定（`X-Hermod-Kind`、`Content-Disposition`、
-//!   帧格式、一次性 URL token）与抗畸形输入校验。
-//! - [`orchestrate`]：传输编排——把传输连接与传输内 HTTP 组合成完整的
-//!   tx/rx 主流程：
+//! - [`orchestrate`]：传输编排——把传输连接与直连流帧组合成完整的 tx/rx 主流程：
 //!   - [`orchestrate::send_file`] / [`orchestrate::send_text`]：tx 发文件/文本
 //!     （均带可选进度回调）；
-//!   - [`orchestrate::receive`]：rx 拉取到临时文件 → 校验 SHA-256 → 原子改名；
-//!   - [`orchestrate::serve_file`] / [`orchestrate::fetch_file`]：更底层的
-//!     「连接 + HTTP」组合（供自定义流程使用）。
+//!   - [`orchestrate::receive`]：rx 收满 offer 声明的字节数 → 校验 SHA-256 → 原子改名；
+//!   - [`orchestrate::serve_file`]：tx 侧「连接 + 帧」组合（供自定义流程使用）。
 //!
 //! # 典型用法（嵌入式）
 //!
@@ -67,10 +61,8 @@
 //! 注意：真实的通道绑定密钥必须来自 CPace 握手（[`crypto::cpace`]）后的
 //! [`crypto::kdf::derive_wg_psk`]，上面 `k = [0u8; 32]` 只是占位。
 
-pub mod bandwidth;
 pub mod config;
 pub mod crypto;
-pub mod http_meta;
 pub mod log;
 pub mod options;
 pub mod orchestrate;

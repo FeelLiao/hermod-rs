@@ -1,7 +1,7 @@
 # hermod-core
 
 `hermod-core` is the only home for Hermod's protocol logic: cryptography,
-rendezvous (signaling), data-plane transports, in-tunnel HTTP, session
+rendezvous (signaling), data-plane transports, the direct-stream payload protocol, session
 negotiation and the final send/receive orchestration. Both front ends — the
 `cli` binary (`hermod`) and the Windows GUI through `flutter-bridge` — are thin
 shells that call into this crate; neither implements transfer state, trust,
@@ -22,12 +22,12 @@ neighbours:
 │               rx: receive  → temp file → SHA-256 → atomic move │
 ├────────────────────────────────────────────────────────────────┤
 │ transport     QUIC (TLS 1.3, pluggable CC, BBR default)         │  "a reliable,
-│               QUIC (TLS 1.3, pluggable CC)                     │   authenticated
-│               http/     HTTP/1.1 shared by both, in-tunnel     │   byte stream"
+│               direct-stream payload framing                     │   authenticated
+│                                                                 │   byte stream"
 ├────────────────────────────────────────────────────────────────┤
 │ session       transfer code → signaling → CPace → established  │  "getting the
-│               connection + one-shot HTTP token                 │   peers together"
-├──────────────────────────────────────────────────────────────  ┤
+│               connection + per-session credential              │   peers together"
+├────────────────────────────────────────────────────────────────┤
 │ crypto + signal + transfer/config/options utilities            │  "primitives"
 └────────────────────────────────────────────────────────────────┘
 ```
@@ -48,7 +48,7 @@ core/src/
 ├── lib.rs            # crate docs, re-exports, the only entry users need
 ├── crypto/           # primitives ONLY; no network code here
 │   ├── cpace.rs      #   CPace PAKE over P-256 (RFC 9380/9496), Go-compatible
-│   ├── kdf.rs        #   HKDF: K → channel-bound PSK, in-tunnel HTTP token
+│   ├── kdf.rs        #   HKDF: K → channel-bound PSK + session token
 │   ├── aead.rs       #   AES-256-GCM for endpoint bundles (nonce‖ct‖tag)
 │   └── wordlist.rs   #   EFF short wordlist; transfer code gen/parse
 ├── signal/           # rendezvous layer (WebSocket to the signaling server)
@@ -60,12 +60,9 @@ core/src/
 │   ├── mod.rs        #   AnyTransport/AnyConnection runtime dispatch
 │   ├── network.rs    #   address enumeration / candidate filtering (shared)
 │   ├── quic/         #   implementation: quinn + rustls, self-signed pins
-│   └── http/         #   HTTP/1.1 over any transport stream (server + client)
 ├── session.rs        # one hop: transfer code → established connection
-├── orchestrate.rs    # full tx/rx actions on top of a connection
+├── orchestrate.rs    # tx/rx framing + verdict on top of a connection
 ├── transfer.rs       # payload semantics: Kind, paths, hashing, offers
-├── http_meta.rs      # header conventions + hostile-input guards
-├── bandwidth.rs      # pacer + limit negotiation (both ends take the stricter)
 ├── config.rs         # Go-compatible YAML schema, trusted-server pins
 ├── options.rs        # shared CLI/GUI connection settings → SessionOptions
 └── log.rs            # tracing macros; the HOST installs the subscriber
@@ -83,10 +80,10 @@ core/
 
 Naming conventions to keep in mind:
 
-- **tx / Sender** = the side that serves the file (listens in-tunnel).
-- **rx / Receiver** = the side that pulls it (dials in-tunnel).
+- **tx / Sender** = the side that serves the file (listens on the tunnel).
+- **rx / Receiver** = the side that opens the payload stream (dials).
   `Transport::establish(Role, psk, peer_endpoint)` encodes this split, and the
-  in-tunnel HTTP respects it (`tx` runs the server, `rx` the client).
+  the payload framing respects it (`tx` listens, `rx` dials).
 - The crate *package* is `hermod-core`; the workspace *directory* is `core`.
 
 ## Layer contracts
@@ -112,8 +109,8 @@ trait TransportConnection {             // established, ready to carry bytes
 ```
 
 Key design decision: endpoint bytes are **opaque to the upper layers**. Each
-implementation defines its own bundle format (WG: key + UDP port + address
-candidates; QUIC: cert fingerprint + port + candidates); the session layer
+implementation defines its own bundle format (QUIC: cert fingerprint + port
++ address candidates); the session layer
 only encrypts, carries and unwraps them. Adding a transport means adding an
 `AnyTransport`/`AnyConnection` arm, a `TransportKind` wire code, and per-protocol
 validation in `options.rs` — `session.rs` and `orchestrate.rs` do not change.
@@ -129,7 +126,7 @@ connected `TxSession`/`RxSession`:
    address (adopted as an IPv6 hint only);
 3. CPace handshake → shared `K` (wrong code = different `g` = dead session);
 4. derive locally, never over the wire:
-   `token = HKDF(K, cid, "hermod-http-token-v1")`,
+   `token  = HKDF(K, cid, "hermod-http-token-v1")  → per-session credential fingerprint`,
    `psk = HKDF(K, cid, "hermod-wg-psk-v1")`,
    `fingerprint = SHA-256(token)`;
 5. exchange AEAD-encrypted endpoint bundles (`blob3`/`blob4`), each wrapped
@@ -141,16 +138,16 @@ The receiver-side `transfer_offer` (kind/name/size) piggybacks on the endpoint
 JSON as an optional field, so old peers simply ignore it while new peers learn
 the file size before the first payload byte.
 
-### transport/http and orchestrate.rs — "the transfer"
+### orchestrate.rs — "the transfer" (direct-stream framing, protocol v2)
 
-One HTTP conversation, keep-alive on a single stream:
+One frame conversation on a single QUIC bidirectional stream (metadata comes
 
 ```
-rx: GET /f/<token>            tx: 200 + X-Hermod-Kind, Content-Disposition,
-                                  X-Hermod-Receive-Limit, Content-Length
-                                  → streamed body, hashing on the fly
-rx: writes .hermod_tmp (O_EXCL, 0600), hashes locally
-rx: POST /done {"sha256":…,"size":N}   → tx accepts or rejects (verified)
+rx: writes GO                       tx: streams exactly N payload bytes
+                                    hashing on the fly
+rx: reads N bytes into .hermod_tmp (O_EXCL, 0600), hashes locally
+rx: writes verdict [status|sha256|size]  → tx accepts or rejects (verified)
+rx: rename temp → safe_destination_path (dir-stripped, de-duplicated)
 rx: rename temp → safe_destination_path (dir-stripped, de-duplicated)
 ```
 
@@ -171,8 +168,8 @@ friendly "peer cancelled the transfer" without string matching.
   a bounded in-memory ring.
 - **Errors** are typed per layer (`SessionError`, `OrchestrateError`,
   `TransportError`, `BundleError`, `CpaceError`, …). Never `unwrap()` on peer
-  input: `http_meta.rs` exists precisely because hostile headers/paths arrive
-  from the other end.
+  input: `transfer::validate_filename` + path-safety guards exist because
+  hostile names/paths arrive from the other end.
 - **Workspace safety**: `unsafe_code = "forbid"` applies workspace-wide; this
   crate contains no unsafe.
 
@@ -195,7 +192,7 @@ any network access; both front ends call exactly this code path.
   from the Go suite) — byte-compatibility with the Go implementation is the
   acceptance criterion, see `crypto/` tests.
 - **Wire formats**: `signal::protocol` round-trips against JSON references.
-- **Transports**: handshake/HTTP/streams/digest/cancel tests run both
+- **Transports**: handshake/frame/streams/digest/cancel tests run QUIC
   implementations against local loops; full candidate paths additionally
   require a private IPv4 or IPv6 test interface (see root CI).
 - **End-to-end**: `orchestrate` tests drive WG+QUIC pairs through real SDU

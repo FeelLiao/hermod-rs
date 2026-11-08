@@ -142,7 +142,6 @@ pub struct QuicTransport {
     credential_fingerprint: [u8; 32],
     bind: Option<SocketAddr>,
     server_hint: Option<Ipv6Addr>,
-    bandwidth_limit: crate::bandwidth::BandwidthLimit,
     congestion: CongestionControl,
     initial_mtu: u16,
     mtu_limit: u16,
@@ -157,7 +156,6 @@ impl QuicTransport {
             credential_fingerprint: [0u8; 32],
             bind: None,
             server_hint: None,
-            bandwidth_limit: crate::bandwidth::BandwidthLimit::UNLIMITED,
             congestion: CongestionControl::Bbr,
             initial_mtu: DEFAULT_MTU,
             mtu_limit: MAX_MTU,
@@ -172,11 +170,6 @@ impl QuicTransport {
     /// 注入信令服务器观测到的本端出口 IPv6 地址（仅作候选提示）。
     pub fn set_server_hint(&mut self, hint: Option<Ipv6Addr>) {
         self.server_hint = hint;
-    }
-
-    /// 限速时控制应用层排队窗口。
-    pub fn set_bandwidth_limit(&mut self, limit: crate::bandwidth::BandwidthLimit) {
-        self.bandwidth_limit = limit;
     }
 
     /// 设置拥塞控制。
@@ -275,12 +268,7 @@ impl Transport for QuicTransport {
             socket.local_addr()?,
         )?;
 
-        let transport = transport_config_with_limit(
-            self.congestion,
-            self.initial_mtu,
-            self.mtu_limit,
-            self.bandwidth_limit,
-        );
+        let transport = transport_config(self.congestion, self.initial_mtu, self.mtu_limit);
         // 同时向对端声明接收上限，避免只有接收端配置 MTU 时发送端仍使用更大的报文。
         let mut endpoint_config = quinn::EndpointConfig::default();
         endpoint_config
@@ -705,11 +693,10 @@ async fn accept_task(
 }
 
 /// 构造高吞吐 QUIC transport 配置：BBR + 大窗口 + PMTUD + 低 ACK 延迟。
-fn transport_config_with_limit(
+fn transport_config(
     congestion: CongestionControl,
     initial_mtu: u16,
     mtu_limit: u16,
-    limit: crate::bandwidth::BandwidthLimit,
 ) -> Arc<quinn::TransportConfig> {
     let mut config = quinn::TransportConfig::default();
     config.max_idle_timeout(Some(
@@ -717,7 +704,7 @@ fn transport_config_with_limit(
             .try_into()
             .expect("30s idle timeout fits in QUIC VarInt"),
     ));
-    let window = limit.window(IO_WINDOW);
+    let window = IO_WINDOW;
     config.stream_receive_window(VarInt::from_u32(window as u32));
     config.receive_window(VarInt::from_u32(window as u32));
     config.send_window(window);

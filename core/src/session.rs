@@ -38,8 +38,8 @@ use sha2::{Digest, Sha256};
 
 /// 端点头 magic。
 const ENDPOINT_MAGIC: [u8; 2] = *b"HE";
-/// 端点头版本。
-const ENDPOINT_VERSION: u8 = 1;
+/// 端点头版本。（v1 = 含 WireGuard 的历史协议；v2 = QUIC-only 直连流载荷。）
+const ENDPOINT_VERSION: u8 = 2;
 /// 端点头长度（magic + version + transport）。
 const ENDPOINT_HEADER_LEN: usize = 4;
 
@@ -87,8 +87,7 @@ fn sha256_32(data: &[u8]) -> [u8; 32] {
 pub struct SessionOptions {
     /// 发送前预告；旧端忽略这个可选 JSON 扩展。
     pub offer: Option<crate::transfer::TransferOffer>,
-    /// 载荷限速，同时用于控制 QUIC 排队窗口。
-    pub bandwidth_limit: crate::bandwidth::BandwidthLimit,
+
     /// 当前协议的 MTU：QUIC UDP 载荷上限（自动 1452）。
     pub mtu: Option<usize>,
     /// UDP 绑定地址（默认 `[::]:0`）。
@@ -105,7 +104,6 @@ impl Default for SessionOptions {
     fn default() -> Self {
         Self {
             offer: None,
-            bandwidth_limit: crate::bandwidth::BandwidthLimit::UNLIMITED,
             mtu: None,
             udp_bind: None,
             // 默认 auto：接收端跟随发送端；发送端用 sender_default()。
@@ -293,7 +291,6 @@ fn build_transport(
     let mut transport = AnyTransport::new(kind);
     transport.set_udp_bind(opts.udp_bind);
     transport.configure(opts.mtu, opts.congestion);
-    transport.set_bandwidth_limit(opts.bandwidth_limit);
     // server 观测地址作为 server-reflexive 提示（仅 IPv6 生效）
     transport.set_server_hint(observed.public_ipv6.parse().ok());
     transport.set_credential_fingerprint(fingerprint);
@@ -527,13 +524,15 @@ mod tests {
             parse_endpoint(&[b'X', b'X', 1, 2, b'p']),
             Err(SessionError::BadEndpointHeader(_))
         ));
+        // v2 + wire 2 是合法头（QUIC）；版本字节不对 / wire 码不对都要明确报错
+        assert!(parse_endpoint(&[b'H', b'E', 2, 2, b'p']).is_ok());
         assert!(matches!(
-            parse_endpoint(&[b'H', b'E', 2, 2, b'p']),
-            Err(SessionError::BadEndpointHeader(_))
+            parse_endpoint(&[b'H', b'E', 1, 2, b'p']),
+            Err(SessionError::BadEndpointHeader(h)) if h.contains("version")
         ));
         // 旧版 WireGuard wire 码 1 → 专门的 LegacyPeerTransport（提示对端升级）
         assert!(matches!(
-            parse_endpoint(&[b'H', b'E', 1, 1, b'p']),
+            parse_endpoint(&[b'H', b'E', 2, 1, b'p']),
             Err(SessionError::LegacyPeerTransport { wire: 1 })
         ));
     }

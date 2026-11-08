@@ -8,7 +8,6 @@ mod common;
 
 use common::{start_relay, temp_dir};
 use hermod_core::{
-    bandwidth::BandwidthLimit,
     config::Config,
     crypto::wordlist,
     orchestrate::{self, OrchestrateError, ReceiveOptions},
@@ -90,23 +89,16 @@ async fn run_text_chain(transport: TransportKind) {
         TRANSFER_TIMEOUT,
         futures_util::future::join(
             async {
-                orchestrate::send_text_with_limit(
-                    &mut tx.conn,
-                    tx.token,
-                    TEXT,
-                    None,
-                    BandwidthLimit::UNLIMITED,
-                )
-                .await
-                .unwrap()
+                orchestrate::send_text(&mut tx.conn, TEXT, None)
+                    .await
+                    .unwrap()
             },
             async {
-                orchestrate::receive_with_options(
+                orchestrate::receive(
                     &mut rx.conn,
-                    &rx.token,
                     &dir,
                     ReceiveOptions {
-                        expected: rx.offer.as_ref(),
+                        offer: rx.offer.as_ref(),
                         ..Default::default()
                     },
                 )
@@ -154,23 +146,16 @@ async fn run_file_chain(transport: TransportKind) {
         TRANSFER_TIMEOUT,
         futures_util::future::join(
             async {
-                orchestrate::send_file_with_limit(
-                    &mut tx.conn,
-                    tx.token,
-                    &source,
-                    None,
-                    BandwidthLimit::UNLIMITED,
-                )
-                .await
-                .unwrap()
+                orchestrate::send_file(&mut tx.conn, &source, None)
+                    .await
+                    .unwrap()
             },
             async {
-                orchestrate::receive_with_options(
+                orchestrate::receive(
                     &mut rx.conn,
-                    &rx.token,
                     &dest_dir,
                     ReceiveOptions {
-                        expected: rx.offer.as_ref(),
+                        offer: rx.offer.as_ref(),
                         ..Default::default()
                     },
                 )
@@ -211,7 +196,8 @@ async fn peer_cancel_quic() {
         name: "cancel.bin".into(),
         size: data.len() as u64,
     };
-    let (mut tx, mut rx) = establish_pair(&config, &code, TransportKind::Quic, Some(offer)).await;
+    let (mut tx, mut rx) =
+        establish_pair(&config, &code, TransportKind::Quic, Some(offer.clone())).await;
 
     let started = std::sync::Arc::new(tokio::sync::Notify::new());
     let progress_started = started.clone();
@@ -225,27 +211,23 @@ async fn peer_cancel_quic() {
         TRANSFER_TIMEOUT,
         futures_util::future::join(
             async {
-                orchestrate::send_file_with_limit(
+                orchestrate::send_file(
                     &mut tx.conn,
-                    tx.token,
                     &source,
                     Some(Box::new(move |n| {
                         if n > 0 {
                             started.notify_one();
                         }
                     })),
-                    BandwidthLimit::UNLIMITED,
                 )
                 .await
             },
             async {
-                orchestrate::receive_with_options(
+                orchestrate::receive(
                     &mut rx.conn,
-                    &rx.token,
                     &dir.join("out"),
                     ReceiveOptions {
-                        limit: BandwidthLimit::UNLIMITED,
-                        expected: None,
+                        offer: Some(&offer),
                         ..Default::default()
                     },
                 )

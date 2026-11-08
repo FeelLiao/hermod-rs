@@ -42,6 +42,16 @@ adheres to [Semantic Versioning](https://semver.org/).
   migrated. Old peers that announce WireGuard endpoints are told to upgrade.
   The `kdf::derive_wg_psk` output survives as the channel-bound session key
   derivation (unused by QUIC authentication, kept for future pillars).
+- The in-tunnel HTTP/1.1 payload framing and the bandwidth-limit pipeline
+  (`transport/http`, `http_meta`, `bandwidth`). Payload protocol v2 runs on
+  the QUIC stream directly: the receiver opens the stream, sends a 1-byte GO
+  marker, reads exactly the announced number of bytes while hashing, and
+  answers with `[status|sha256|size]`; the sender trusts only that verdict.
+  Metadata (kind/name/size) comes exclusively from the `TransferOffer`
+  announced during the endpoint exchange, and the endpoint header version is
+  bumped to 2 — every legacy client is rejected at session setup. The
+  receiver-side limit budget and the CLI `--limit-mbps` flag are gone;
+  pacing is the job of the congestion controller (BBR) and QUIC flow control.
 
 ## [0.4.5] - 2026-10-29
 

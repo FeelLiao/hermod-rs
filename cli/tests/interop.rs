@@ -152,7 +152,6 @@ async fn run_all() {
                 let engine = Engine::new(root.join("app"), cfg).unwrap();
                 let mut settings = engine.settings();
                 settings.connection.transport = protocol.into();
-                settings.connection.limit_mbps = "0.8".into();
                 settings.words = 5;
                 engine.save_settings(settings).unwrap();
                 engine
@@ -192,7 +191,6 @@ async fn run_all() {
                         "{error}"
                     );
                     let mut unchanged = engine.settings();
-                    unchanged.connection.limit_mbps = "0.9".into();
                     engine.save_settings(unchanged).unwrap();
                     engine.set_destination(Some("next-folder".into())).unwrap();
                     assert_eq!(
@@ -239,7 +237,7 @@ async fn run_all() {
                         } else {
                             Stdio::null()
                         })
-                        .args(["tx", "--limit-mbps", "0.8", &input_arg])
+                        .args(["tx", &input_arg])
                         .spawn()
                         .unwrap();
                     if source == "stdin" {

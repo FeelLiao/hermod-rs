@@ -50,7 +50,6 @@ impl Default for Settings {
             version: 2,
             connection: ConnectionSettings {
                 transport: "quic".into(),
-                limit_mbps: "0".into(),
                 ..Default::default()
             },
             receive_transport: "auto".into(),
@@ -536,7 +535,6 @@ mod tests {
             server: server.into(),
             connection: ConnectionSettings {
                 transport: "quic".into(),
-                limit_mbps: "8".into(),
                 ..Default::default()
             },
             ..Default::default()
@@ -552,7 +550,6 @@ mod tests {
         let settings = engine.settings();
         assert_eq!(settings.version, 1);
         assert_eq!(settings.connection.transport, "quic");
-        assert_eq!(settings.connection.limit_mbps, "8");
         assert_eq!(settings.server, server);
         assert_eq!(engine.bootstrap().trusted_servers.len(), 1);
         drop(engine);
@@ -606,7 +603,6 @@ mod tests {
         let engine = Engine::new(root.clone(), Config::default()).unwrap();
         assert!(Engine::new(root.clone(), Config::default()).is_err());
         let mut settings = engine.settings();
-        assert_eq!(settings.connection.limit_mbps, "0");
         assert_eq!(settings.connection.transport, "quic");
         assert_eq!(settings.language, "system");
         // 旧设置没有语言字段时仍可加载，并默认跟随系统。
@@ -617,7 +613,6 @@ mod tests {
             "system"
         );
         settings.language = "zh-CN".into();
-        settings.connection.limit_mbps = "6.5".into();
         settings.words = 5;
         settings.quiet = true;
         engine.save_settings(settings.clone()).unwrap();
@@ -630,7 +625,6 @@ mod tests {
         let mut settings = engine.settings();
         settings.destination = Some("/unapproved".into());
         assert!(engine.save_settings(settings).is_err());
-        assert_eq!(engine.settings().connection.limit_mbps, "6.5");
         drop(engine);
         let engine = Engine::new(root.clone(), Config::default()).unwrap();
         assert_eq!(engine.settings().words, 5);

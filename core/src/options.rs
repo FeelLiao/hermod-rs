@@ -1,5 +1,5 @@
 //! CLI 与 GUI 共用的连接选项；按实际协议校验，禁止静默忽略。
-use crate::{bandwidth::BandwidthLimit, session::SessionOptions, transport::TransportKind};
+use crate::{session::SessionOptions, transport::TransportKind};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
@@ -75,7 +75,6 @@ pub struct ConnectionSettings {
     pub transport: String,
     pub mtu: Mtu,
     pub congestion: Congestion,
-    pub limit_mbps: String,
 }
 impl Default for ConnectionSettings {
     fn default() -> Self {
@@ -83,7 +82,6 @@ impl Default for ConnectionSettings {
             transport: "quic".into(),
             mtu: Mtu::Auto,
             congestion: Congestion::Auto,
-            limit_mbps: "0".into(),
         }
     }
 }
@@ -104,10 +102,6 @@ impl ConnectionSettings {
                 Mtu::Value(v) => Some(usize::from(v)),
             },
             congestion: self.congestion,
-            bandwidth_limit: self
-                .limit_mbps
-                .parse::<BandwidthLimit>()
-                .map_err(str::to_string)?,
             ..Default::default()
         };
         if let Some(kind) = transport {

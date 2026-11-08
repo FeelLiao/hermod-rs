@@ -56,7 +56,7 @@ impl ApiConnection {
                 Congestion::Newreno => "newreno",
             }
             .into(),
-            limit_mbps: connection.limit_mbps.clone(),
+            limit_mbps: "0".into(),
         }
     }
 
@@ -88,7 +88,6 @@ impl ApiConnection {
             transport: self.transport.clone(),
             mtu,
             congestion,
-            limit_mbps: self.limit_mbps.clone(),
         })
     }
 }

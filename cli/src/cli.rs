@@ -47,12 +47,6 @@ pub struct NetworkArgs {
         help = "auto (BBR) / cubic / bbr / newreno congestion control for QUIC"
     )]
     pub congestion: Congestion,
-    #[arg(
-        long,
-        default_value = "0",
-        help = "Payload limit in Mbps (0 = unlimited)"
-    )]
-    pub limit_mbps: hermod_core::bandwidth::BandwidthLimit,
 }
 impl NetworkArgs {
     pub fn options(&self, receiving: bool) -> Result<hermod_core::session::SessionOptions, String> {
@@ -64,7 +58,6 @@ impl NetworkArgs {
             },
             mtu: self.mtu,
             congestion: self.congestion,
-            limit_mbps: self.limit_mbps.to_string(),
         }
         .session_options(receiving)
     }

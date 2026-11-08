@@ -6,10 +6,10 @@ use hermod_core::TransportConnection;
 use hermod_core::config;
 use hermod_core::crypto::wordlist;
 use hermod_core::orchestrate;
+use hermod_core::orchestrate::ServeOptions;
 use hermod_core::session;
 use hermod_core::transfer::{self, Kind};
 use hermod_core::transport::NetworkStatsHandle;
-use hermod_core::transport::http::server::ServeOptions;
 use std::io::Seek;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -122,17 +122,15 @@ pub async fn run(
         let _ = tick_tx.try_send(());
     }) as Box<dyn FnMut(u64) + Send>);
     let out = run_with_idle(
-        orchestrate::serve_file_with_limit(
+        orchestrate::serve_file(
             &mut tx.conn,
             ServeOptions {
-                token: tx.token,
                 kind,
                 name: offer.name,
                 size,
                 body,
                 progress,
             },
-            args.network.limit_mbps,
         ),
         tick_rx,
         sent,

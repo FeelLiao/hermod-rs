@@ -1,16 +1,28 @@
 import { readFileSync } from 'node:fs';
-import { msixVersion } from '../hermod-app/scripts/msix-version.mjs';
-const workspace = readFileSync('Cargo.toml', 'utf8').match(/^version = "([^"]+)"/m)?.[1];
-const frontend = JSON.parse(readFileSync('hermod-app/package.json')).version;
-const native = JSON.parse(readFileSync('hermod-app/src-tauri/tauri.conf.json')).version;
-if (!workspace || workspace !== frontend || workspace !== native) throw new Error('Keep workspace, package.json and tauri.conf.json versions in sync.');
-if (!/^\d+\.\d+\.\d+$/.test(workspace)) throw new Error('Installer versions currently require major.minor.patch.');
-const tag = process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : undefined;
-if (tag && tag !== `v${workspace}`) throw new Error(`Tag ${tag} does not match version ${workspace}.`);
-console.log(`Release version: ${workspace}`);
-console.log(`Microsoft Store package version: ${msixVersion(workspace)}`);
 
-const android = JSON.parse(readFileSync('hermod-app/src-tauri/tauri.conf.json')).bundle.android;
+const workspace = readFileSync('Cargo.toml', 'utf8').match(/^version = "([^"]+)"/m)?.[1];
+const pubspec = readFileSync('flutter/pubspec.yaml', 'utf8');
+const flutter = pubspec.match(/^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)$/m);
+if (!workspace || !flutter || workspace !== flutter[1]) {
+  throw new Error('Keep Cargo workspace and Flutter pubspec versions in sync.');
+}
+if (!/^\d+\.\d+\.\d+$/.test(workspace)) {
+  throw new Error('Installer versions require major.minor.patch.');
+}
 const [major, minor, patch] = workspace.split('.').map(Number);
-if (android.minSdkVersion !== 34) throw new Error('Android minimum API must be 34.');
-if (android.versionCode !== major * 1000000 + minor * 10000 + patch * 100) throw new Error('Update Android versionCode with each release.');
+const expectedCode = major * 1000000 + minor * 10000 + patch * 100;
+if (Number(flutter[2]) !== expectedCode) {
+  throw new Error(`Flutter build number must be ${expectedCode}.`);
+}
+const gradle = readFileSync('flutter/android/app/build.gradle.kts', 'utf8');
+if (!/minSdk\s*=\s*34/.test(gradle)) {
+  throw new Error('Android minimum API must be 34.');
+}
+const tag = process.env.GITHUB_REF_TYPE === 'tag' ? process.env.GITHUB_REF_NAME : undefined;
+if (tag && tag !== `v${workspace}`) {
+  throw new Error(`Tag ${tag} does not match version ${workspace}.`);
+}
+const msix = `${major + 1}.${minor}.${patch}.0`;
+console.log(`Release version: ${workspace}`);
+console.log(`Flutter build number: ${expectedCode}`);
+console.log(`Microsoft Store package version: ${msix}`);

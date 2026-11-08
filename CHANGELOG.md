@@ -15,6 +15,27 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 - A manual read-only Store diagnostics workflow that reports submission references
   and status using the existing Actions secrets, without rebuilding packages.
+- Flutter Material 3 Windows GUI backed by a safe JSON-lines Rust Core process, native file pickers, and x64/ARM64 Store MSIX packaging.
+
+### Changed
+
+- Moved the GUI application layer (`app` engine and `gui_api` facade) from
+  `hermod-core` into `hermod-flutter-bridge`; Core is now strictly the shared
+  lower layer for CLI and GUI.
+- Replaced the JSON-lines child-process bridge with flutter_rust_bridge (v2)
+  FFI: the GUI loads `hermod_flutter_bridge.dll` directly, the generated glue
+  is the only unsafe code on the workspace, and `scripts/check-unsafe-free.py`
+  keeps handwritten unsafe out.
+- The CLI runs its async entrypoint on an explicit 64 MiB worker thread, and the
+  CLI/GUI interoperability test isolates `%APPDATA%` on Windows so child
+  processes read only the test configuration.
+- Split the workspace into `core`, `cli`, `flutter-bridge` and `flutter`
+  directories (previously prefixed `hermod-`); Cargo package names, the
+  `hermod` binary and Store artifacts keep their identities.
+
+### Removed
+
+- Legacy Tauri, React, WebView, Fluent UI and Android plugin projects and their build dependencies.
 
 ## [0.4.5] - 2026-10-29
 

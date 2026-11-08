@@ -1,1 +1,0 @@
-{"identifier":"main","description":"Local app UI. Files are selected and streamed by Rust commands, never exposed as unrestricted filesystem IPC.","windows":["main"],"permissions":["core:default"]}

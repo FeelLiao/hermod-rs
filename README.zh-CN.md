@@ -6,8 +6,8 @@
 Hermod 是使用 Rust 编写的加密 P2P **IPv4 局域网 / IPv6** 文件传输工具。文件在设备之间直传，
 信令服务器只帮助双方建立连接，不中转文件。
 
-- **电脑端**：Tauri 2 + React + 微软官方 Fluent UI React v9，采用 Fluent 2 设计。
-- **安卓端**：Tauri + Google 官方 Material Design 3 Web 控件，与桌面共用 React 页面和交互逻辑，支持动态配色、手机和平板。
+- **Windows GUI**：Flutter Material 3 + Rust Core 子进程，通过 Microsoft Store 的 x64/ARM64 MSIXBundle 发布。
+- **Android**：Flutter runner 已保留用于后续平台接入，目前不发布 Android 安装包。
 - **Linux 命令行**：musl 静态可执行文件，适合终端和脚本。
 - GUI 默认 **QUIC 发送、Auto 接收、不限速**；CLI 默认 WireGuard 发送，也可选择 QUIC。
 - 支持文件、文本、取消、进度、限速、服务器指纹信任与 SHA-256 校验。
@@ -20,11 +20,9 @@ Hermod 是使用 Rust 编写的加密 P2P **IPv4 局域网 / IPv6** 文件传输
 | 设备 | 下载文件 |
 | --- | --- |
 | Windows 10 2004+ / Windows 11，x64 / ARM64 | [Microsoft Store 中的 HermodTransfer](https://apps.microsoft.com/detail/9PMPWN3HMR3M) |
-| Linux 桌面 x64 | `hermod-linux-x64.AppImage` |
 | Linux 命令行 x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
-| Android 14 及以上、ARM64 | `hermod-android-arm64.apk` |
 
-不再构建 macOS、Linux ARM64 GUI、Windows CLI 和 Android CLI。Release 只上传 Linux 和 Android 的 4 个程序或包，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
+不再构建 macOS、Linux GUI、Windows CLI 或 Android 安装包。Release 只上传两个 Linux CLI 程序，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
 Windows MSIX/MSIXBundle 仅用于商店提交，不放入 GitHub Release。用户通过微软商店安装 **HermodTransfer**，商店会选择对应架构。
 GitHub 自动提供的源码下载链接属于平台功能。
 
@@ -47,14 +45,9 @@ WSL NAT 通常没有可用 IPv6。支持镜像网络的 Windows 11 / WSL 可在 
 2. 私下分享完整传输码；接收端在 **接收** 输入它并连接。
 3. 等待 **SHA-256 校验通过**，在 **收件箱 → 另存副本** 导出，也可提前选择默认导出目录。
 
-收件箱只展示校验完成的文件。导出失败、目录不可写或 Android 授权过期时，已验证副本仍保留。
-文本会保存为文本文件。取消和进程结束不会保留可续传任务；本版不提供断点续传。
+收件箱只展示校验完成的文件。导出失败或目录不可写时，已验证副本仍保留。文本会保存为文本文件。取消和进程结束不会保留可续传任务；本版不提供断点续传。传输状态由 Rust Core 持有，Flutter 仅负责界面。
 
-Android 使用系统文件选择器和目录授权，不申请全盘访问。传输由前台服务持有，界面旋转、重建不会
-重新发起传输；通知显示进度并提供取消。Android 17 需要局域网 / 附近设备权限，拒绝时会明确提示。
-通知权限用于显示传输通知，和文件权限无关。
-
-**语言**：电脑与安卓界面均支持简体中文和英文，默认跟随系统。可在 **设置 → 语言** 选择
+**语言**：Windows 界面支持简体中文和英文，默认跟随系统。可在 **设置 → 语言** 选择
 **简体中文 / English / 跟随系统**，点击 **保存设置** 后下次打开仍使用此选择。界面语言立即切换，
 技术日志和未识别的底层错误详情保留原文以便排查。
 
@@ -74,18 +67,7 @@ Store ID 为 **9PMPWN3HMR3M**。以后推送版本标签，全部检查和打包
 旧 `Hermod.Transfer.Test` 版本迁移前，请先导出收件箱文件；
 商店版使用不同包身份。详见[商店提交说明](APP_BUILD.md#microsoft-store-packages)。
 
-**Linux**：以 Ubuntu 22.04 及兼容更新桌面为基线：
-
-```bash
-chmod +x hermod-linux-x64.AppImage
-./hermod-linux-x64.AppImage
-# 没有 FUSE 时：
-APPIMAGE_EXTRACT_AND_RUN=1 ./hermod-linux-x64.AppImage
-```
-
-**Android**：允许下载应用安装 APK 后打开文件。仅发布 ARM64；最低 API 34，compileSdk/targetSdk 37。
-后续更新必须保留相同签名密钥。旧临时密钥版本无法直接覆盖时，**先导出收件箱中的重要文件，再卸载重装**。
-Windows 旧包身份或签名不同时同样先导出。卸载可能删除应用私有数据。
+Windows 更新必须保留相同的商店包身份。旧包身份或签名不同时，先导出收件箱中的重要文件再卸载；卸载可能删除应用私有数据。
 
 ## 命令行快速开始
 
@@ -143,17 +125,15 @@ QUIC 支持 BBR/CUBIC/NewReno。不兼容组合会报错，不会静默忽略。
 | `--listen 地址` / bind address | 自动监听 `[::]:0`，无需手动配置 |
 | 未实现的 `serve` | 已删除，信令服务需要单独部署兼容实现 |
 
-电脑端使用 Fluent 2，安卓使用 Material Design 3 Web。两端复用 `hermod-app` 中的 React 页面、交互逻辑与 Rust 业务层；Android 原生代码只适配系统文件授权、权限、配色和前台通知。
-已有桌面收件箱保留，旧界面的限速和主题偏好在首次启动时尽可能迁移。
+Windows 使用 Flutter Material 3。GUI 经 flutter_rust_bridge 以 FFI 加载 `hermod_flutter_bridge.dll`，其 `gui_api` 门面持有设置、任务和私有收件箱，传输能力全部依赖 `hermod-core`；私有收件箱路径不会进入 Flutter 层。
 
 ## 常见问题
 
 - **传输码连不上**：检查双方 IPv4 局域网 / IPv6 路由、信令服务器、UDP 防火墙、完整传输码及强制协议是否一致。
 - **发送时网页很卡**：降低 GUI 限速或 `--limit-mbps`；上行跑满会挤占其他请求，见[性能分析](NETWORK_PERFORMANCE.md)。
-- **导出失败**：收件箱副本仍在，重新选择可写目录后导出；Android 重新授权目录。
+- **导出失败**：收件箱副本仍在，重新选择可写目录后导出。
 - **Windows MSIXBundle 无法安装**：GitHub 文件仅供商店提交，尚未签名；请在审核上线后安装商店签名的版本。
 
-Android 在 Actions 中只编译、签名并检查 ARM64 APK，不运行安卓模拟器或界面测试。
 
 Actions 分为两个工作流：`CI` 负责分支推送和 PR 检查；`Build and release` 复用同一套检查，
 通过后才打包。推送 `master` 只检查，推送 `v*` 标签才发布 Release；手动运行只生成 Actions 构建产物，不发布。

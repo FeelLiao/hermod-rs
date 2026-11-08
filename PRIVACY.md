@@ -39,7 +39,7 @@
 连接数据可能发送到信令服务器所在国家或地区，文件会发送到接收方所在地区；应用不限制这些服务或设备的地理位置。
 
 如果你选择系统文件选择器中的云盘或云端文档，或将文件另存到云同步目录，相关提供方可能处理该文件。
-Microsoft Store、操作系统、WebView2、系统剪贴板或备份服务也可能按各自设置和政策处理运行、诊断或同步数据；
+Microsoft Store、操作系统、系统文件选择器、剪贴板或备份服务也可能按各自设置和政策处理运行、诊断或同步数据；
 这些服务的处理不等于应用向开发者上传文件。使用邮件咨询时，邮箱服务商会处理邮件。
 访问 GitHub 上的项目、政策或提交问题时，适用 [GitHub 隐私声明](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)。
 
@@ -60,7 +60,7 @@ Microsoft Store、操作系统、WebView2、系统剪贴板或备份服务也可
 
 ### 6. 权限、剪贴板和通知
 
-Windows 版本以普通桌面程序运行；其网络及完整信任能力用于 Rust/Tauri 程序、网络通信和你发起的文件操作。
+Windows 版本以 Flutter 桌面程序运行；其网络及完整信任能力用于 Flutter 与 Rust Core 进程、网络通信和你发起的文件操作。
 桌面 GUI 使用系统文件选择器；应用读写你选择的文件、导出位置及自身应用数据。
 点击“复制传输码”时，应用将该码写入系统剪贴板，不会持续读取剪贴板。剪贴板历史或跨设备同步由系统设置控制。
 
@@ -137,7 +137,7 @@ files reach the recipient's location. The app does not restrict their geographic
 
 Cloud drives or document providers selected through the system picker, and cloud-synced
 export folders, may process the corresponding files. Microsoft Store, operating systems,
-WebView2, system clipboard and backup services may separately process runtime,
+system file pickers, clipboard and backup services may separately process runtime,
 diagnostic or synchronized data under their own settings and policies; this is distinct
 from an app upload of files to the developer. Email providers process support mail.
 Visiting the project or policy on GitHub, or submitting an issue there, is subject to
@@ -164,7 +164,7 @@ Protect your device and transfer codes.
 ### 6. Permissions, clipboard and notifications
 
 On Windows, the app runs as a desktop program. Its network and full-trust capabilities
-support the Rust/Tauri process, communications and file operations you initiate.
+support the Flutter and Rust Core processes, communications and file operations you initiate.
 Desktop GUI operations use native pickers and access your selected files, export
 locations and the app's own data. Choosing “Copy code” writes the code to the system
 clipboard; the app does not continuously read it. Clipboard history and cross-device

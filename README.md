@@ -6,8 +6,8 @@
 Hermod is an encrypted, peer-to-peer **IPv4 LAN / IPv6** transfer tool written in Rust. Files
 travel between your devices; the signaling server only helps them connect.
 
-- **Desktop GUI:** Tauri 2, React and Microsoft's official Fluent UI React v9 (Fluent 2).
-- **Android GUI:** Tauri with Google’s official Material Design 3 Web components, dynamic colors and adaptive navigation.
+- **Windows GUI:** Flutter Material 3 with a Rust Core process, distributed through Microsoft Store as x64/ARM64 MSIXBundle.
+- **Android:** Flutter runner exists for ongoing platform integration; no Android release package is currently published.
 - **Linux CLI:** static musl binaries for terminals and automation.
 - **Two protocols:** GUI sends with QUIC by default; CLI sends with WireGuard. Receivers automatically follow the sender.
 - Files, text, cancellation, progress, adjustable bandwidth, server fingerprint pinning and SHA-256 verification.
@@ -21,15 +21,9 @@ Choose your device's CPU architecture, not the architecture of the sender.
 | Device | Files to download |
 | --- | --- |
 | Windows 10 2004+ / Windows 11, x64 / ARM64 | [HermodTransfer in Microsoft Store](https://apps.microsoft.com/detail/9PMPWN3HMR3M) |
-| Linux desktop x64 | `hermod-linux-x64.AppImage` |
 | Linux terminal x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
-| Android 14+ ARM64 | `hermod-android-arm64.apk` |
 
-There are no macOS, Linux ARM64 GUI, Windows CLI or Android CLI release builds. Release attachments
-contain only four Linux/Android packages/programs. Windows packages are submitted
-directly to Microsoft Store. No certificates or installation scripts are published.
-GitHub also provides automatic source archives. Android CI builds and signs the APK
-and checks the package; it does not run Android emulator or UI tests.
+There are no macOS, Linux GUI, Windows CLI, or Android release builds. Release attachments contain only the two Linux CLI programs. Windows packages are submitted directly to Microsoft Store. No certificates or installation scripts are published. GitHub also provides automatic source archives.
 
 ## Before connecting
 
@@ -52,14 +46,9 @@ an arbitrary IPv6 address does not provide Internet routing. See [network troubl
 2. Share the complete code privately. On the receiver, enter it under **Receive** and connect.
 3. Wait for **SHA-256 verified**. Open **Inbox → Save a copy**, or choose a default export folder in Settings.
 
-Verified files remain in a private inbox until deleted. Failed exports and expired
-Android folder permissions do not delete that copy. Text arrives as a text file.
-Cancellation or process termination discards unfinished transfers; there is no resume.
-Android uses system document permissions, never unrestricted storage access. Rust owns the transfer and a foreground service provides progress and cancellation; activity recreation does not restart it.
-On Android 17, grant Nearby devices/local network access for peer transfers. Notification
-permission enables the visible progress notification; denying it does not grant storage access.
+Verified files remain in a private inbox until deleted. Failed exports do not delete that copy. Text arrives as a text file. Cancellation or process termination discards unfinished transfers; there is no resume. Rust Core owns transfer state while Flutter remains presentation-only.
 
-**Language:** the desktop and Android GUI support English and Simplified Chinese.
+**Language:** the Windows GUI supports English and Simplified Chinese.
 The default follows your system language. Choose **Settings → Language → English /
 简体中文 / System**, then **Save settings** to remember it. Language changes apply
 immediately; original technical logs and unknown diagnostic details remain available.
@@ -89,19 +78,7 @@ See [Store submission details](APP_BUILD.md#microsoft-store-packages).
 
 **Linux:** Ubuntu 22.04 or newer compatible desktops are the build baseline:
 
-```bash
-chmod +x hermod-linux-x64.AppImage
-./hermod-linux-x64.AppImage
-# If FUSE is unavailable:
-APPIMAGE_EXTRACT_AND_RUN=1 ./hermod-linux-x64.AppImage
-```
-
-**Android:** allow APK installation from your download application, then open the APK.
-Only ARM64 is published. Minimum SDK is 34; compile/target SDK is 37. Keep the same
-signing keys when upgrading. For old releases signed with a temporary key, **export
-all inbox files before uninstalling** and installing v0.4.5. The same precaution
-applies to Windows packages with a different prior signing identity. Uninstalling can
-remove private application data.
+For Windows upgrades, keep the Store package identity unchanged. Uninstalling can remove private application data, so export inbox files before uninstalling a package installed under another identity.
 
 ## CLI quick start
 
@@ -166,10 +143,7 @@ GUI config and verified inbox are in the platform's application data directory.
 | `--listen ADDRESS` / bind address | Automatic dual-stack binding with IPv4 fallback; no public binding control |
 | `serve` placeholder | Removed; run a compatible signaling server separately |
 
-Desktop uses Fluent 2; Android uses Material Design 3 Web. Both use the same React
-pages, settings and transfer engine inside `hermod-app`. Only system file access,
-permissions and foreground notifications need Android native adapters. Old desktop bandwidth/theme preferences
-are migrated on first launch when possible; private verified inbox data is retained.
+Windows uses Flutter Material 3. The GUI loads `hermod_flutter_bridge.dll` over flutter_rust_bridge (FFI), whose `gui_api` facade owns settings, jobs and the private inbox while relying on `hermod-core` for all transport work; private inbox paths never cross into Flutter.
 
 ## Troubleshooting and development
 
@@ -177,8 +151,7 @@ are migrated on first launch when possible; private verified inbox data is retai
   UDP firewall rules, complete code and compatible forced protocols.
 - **Browsing slows while sending:** lower `--limit-mbps` / GUI bandwidth. A saturated
   upload can queue browsing requests; see [performance and latency](NETWORK_PERFORMANCE.md).
-- **Export failed:** keep the verified inbox copy, choose a writable folder again,
-  then retry Save a copy. Regrant Android folder access if necessary.
+- **Export failed:** keep the verified inbox copy, choose a writable folder again, then retry Save a copy.
 - **Windows MSIXBundle will not install:** the GitHub bundle is an unsigned Store submission
   packages. Install the Store-signed version after it has been approved and published.
 

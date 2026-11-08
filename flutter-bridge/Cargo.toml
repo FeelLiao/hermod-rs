@@ -1,0 +1,35 @@
+[package]
+name = "hermod-flutter-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+bytes = "1"
+futures-util = "0.3"
+getrandom = { version = "0.4", features = ["sys_rng"] }
+hermod-core = { path = "../core" }
+rand_core = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "fs"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# GUI 通过 FFI 直接加载本 crate（flutter_rust_bridge v2）；
+# 生成胶水代码含 unsafe，因此在 [lints] 一节单独放开禁止并靠 CI 评审约束。
+flutter_rust_bridge = "=2.13.0"
+
+[lib]
+# cdylib 供 Flutter 加载；rlib 供 hermod-cli 互通测试复用 Engine。
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+# 生成代码（frb_generated.rs）包含 unsafe FFI；在该 crate 内仍禁止手写 unsafe，
+# 约束由 CI 脚本检查而不再依赖编译期全局 lint。
+rust.unsafe_code = "allow"
+
+[lints.clippy]
+all = "deny"

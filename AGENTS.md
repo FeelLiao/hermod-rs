@@ -6,18 +6,18 @@ Guidance for LLM agents working on this repository.
 
 - `README.md` / `README.zh-CN.md`: users, platforms, protocol defaults and migration.
 - `CHANGELOG.md`: recent and historical changes.
-- `APP_BUILD.md`: toolchains, fixed signing, CI gates and release allowlist.
-- Module `//!` docs in `hermod-core/` and `hermod-app/src-tauri/src/app/`.
+- `APP_BUILD.md`: Flutter toolchains, Store identity, MSIX and CI gates.
+- Module `//!` docs in `core/` (protocol and transports) and `flutter-bridge/`
+  (`src/app/` application layer and `src/gui_api/` stable facade).
 
 ## Conventions
 
-- Code identifiers and technical logs are English; GUI text supports English and Simplified Chinese.
-  Use the shared catalog in `hermod-app/src/locales/zh-CN.json`; code comments are Chinese (zh-CN).
+- Code identifiers and technical logs are English; GUI text supports English and Simplified Chinese. Code comments are Chinese (zh-CN).
 - Commits use Conventional Commits: `<type>(<scope>): <summary>`.
-- Handwritten unsafe Rust is forbidden by workspace lints. Mobile file descriptors use the official Tauri fs plugin.
+- Handwritten unsafe Rust is forbidden by workspace lints.
 - Never regenerate release signing keys silently or publish private keys.
 - Preserve user inbox data. Cleanup removes incomplete files only after acquiring the storage lock.
-- Local verification is Linux-only for this release; other platform builds run in Actions.
+- Use FVM commands for Flutter: `fvm flutter ...` and `fvm dart ...`.
 
 Required quality gates:
 
@@ -25,65 +25,26 @@ Required quality gates:
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-npm ci --prefix hermod-app
-npm run build --prefix hermod-app
-npm test --prefix hermod-app
+cd flutter
+fvm dart format --output=none --set-exit-if-changed lib test
+fvm flutter analyze
+fvm flutter test
 ```
 
 ## Architecture
 
-`hermod-core` contains crypto, the WebSocket signaling client with SPKI pinning,
-shared connection options, independent WireGuard and QUIC transports, transport-internal
-HTTP/1.1, session negotiation and tx/rx orchestration. WireGuard uses boringtun and
-smoltcp TCP (CLI sender default, CUBIC); QUIC uses quinn/TLS 1.3 (GUI sender default, BBR).
-The receiver defaults to Auto. `AnyTransport` / `AnyConnection` dispatch at runtime;
-neither transport depends on the other. `--mtu` and `--congestion` are interpreted and
-validated for the selected protocol; no unsupported option is silently ignored.
-Automatic binding uses a dual-stack socket with IPv4 fallback; internal overrides remain for tests.
-Private/link-local IPv4 LAN and IPv6 candidates are exchanged through authenticated signaling.
-There is no offline discovery, Internet IPv4 NAT traversal or relay. CPace and internal
-SHA-256 integrity verification are retained. File offers are optional encrypted endpoint extensions.
-GUI defaults to unlimited bandwidth. Each client profile persists one selected server and SPKI pin.
+`core` contains cryptography, signaling with SPKI pinning, connection options, independent WireGuard and QUIC transports, transport-internal HTTP, session negotiation and tx/rx orchestration — the shared lower layer for CLI and GUI. The receiver defaults to Auto. GUI code must not implement transfer state, trust, hashing, inbox storage, timeouts, QUIC or WireGuard.
 
-`hermod_app_lib::app::Engine` owns persistent settings, private verified inbox, sources,
-job snapshots and cancellation. Every transfer copies settings before starting.
-`hermod-cli` is a clap shell. Tauri exposes narrowly scoped commands
-and native dialogs to shared React pages. The UI adapter selects official Fluent UI v9
-on desktop and official Material Web on Android. The Android plugin under hermod-app
-provides SAF, permissions, system color and a foreground service. Rust monitors jobs
-and exports independently of WebView timers.
-No frontend receives unrestricted private file paths. File streams are bounded;
-unknown-size sources are staged privately and verified receive data survives export failures.
+`hermod_flutter_bridge::app` owns settings, private verified inbox, sources, jobs and cancellation. `hermod_flutter_bridge::gui_api` is the only GUI business facade and never exposes private inbox paths.
+
+`flutter` is the Material 3 Windows/Android presentation project. On Windows it loads `hermod_flutter_bridge.dll` through flutter_rust_bridge (FFI); the bridge exposes `gui_api` and is the only crate where the generated grpc-style glue contains unsafe. Handwritten unsafe remains forbidden everywhere; `core` and `cli` keep the workspace `forbid(unsafe_code)` lint. Windows uses Flutter's supported Win32 embedder, native file pickers and Store MSIX packaging. Add Windows App SDK functionality selectively without replacing the Flutter host.
+
+`cli` is the terminal shell. No Tauri, React or WebView frontend remains.
 
 ## Tests and releases
 
-Crypto tests use independent RFC vectors (7748, 9380, 5869). Local transport tests
-exercise handshake, streams, HTTP and digest verdict on both protocols. CLI integration
-tests spawn actual command-line binaries and use the same application engine as both
-GUIs. A non-loopback private IPv4 or IPv6 address is needed; APP_BUILD.md shows an isolated namespace.
-The ignored QUIC throughput benchmark is opt-in:
-`cargo test -p hermod-core --release -- --ignored quic_throughput`.
-No public signaling service is required for the quality gate.
+Crypto tests use independent RFC vectors. Transport tests exercise handshake, HTTP, streams, digest verdict and cancellation. A private IPv4 or IPv6 test address is required for complete integration tests.
 
-Browser tests validate Fluent desktop UI, language selection and persistence through mocked IPC.
-Linux builds x64 AppImage plus x64/ARM64 musl CLI; ARM64 skips GUI dependencies and packaging.
-Native Linux x64 AppImage smoke tests check real window creation. Windows CI validates Store identity,
-the reserved display name HermodTransfer in both package and application fields,
-version and en-US/zh-CN resources, then signs a temporary copy for native installation/launch.
-Both tested architectures are combined into one unsigned MSIXBundle in the internal
-`store-windows` Actions artifact. MSIX/MSIXBundle files are never GitHub Release assets.
-Bundle validation checks both embedded packages and their architecture coverage.
-No Windows signing secrets, certificates
-or user installation scripts are used. Android CI only builds and signs the ARM64 APK, then checks its
-signature, SDK versions, ABI and alignment. Android emulator, instrumentation and
-Android UI tests are not run. API/toolchain versions are pinned in APP_BUILD.md and Gradle.
-`ci.yml` checks branch pushes and PRs and exposes the same checks via `workflow_call`.
-`build-release.yml` runs for version-tag pushes and manual dispatch, reuses CI at the same
-commit, and gates all packaging on it. Only version-tag pushes publish, after all jobs
-succeed and an exact four-file Release allowlist is enforced (three Linux programs and one APK).
-After Release succeeds, tag runs submit the Windows bundle on a disposable Windows runner through the pinned official Store CLI,
-using `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`, `AZURE_AD_APPLICATION_SECRET`,
-`SELLER_ID` and `MS_STORE_APP_ID`. Validate identity/version and preserve existing Store drafts;
-never print credentials or full submission JSON/SAS URLs. Manual release runs only build artifacts.
-`store-diagnostics.yml` is a separate manual, read-only Store query: report submission
-IDs and status without creating, updating, deleting, uploading or committing submissions.
+Windows CI builds native x64 and ARM64 Flutter applications and Rust bridges, packages one unsigned MSIX per architecture and combines them into `hermod-windows.msixbundle`. Validate Store identity `FeelLiao.HermodTransfer`, publisher, reserved display name `HermodTransfer`, version, en-US/zh-CN resources, both executable architectures and absence of signatures or secrets. Microsoft Store signs uploaded packages.
+
+Linux releases contain only x64/ARM64 static musl CLI binaries. MSIX/MSIXBundle files remain Store-only artifacts and are never GitHub Release assets. Store submission must not print credentials, full submission JSON or SAS URLs.

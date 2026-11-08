@@ -21,8 +21,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: hermod-app/package-lock.json
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.8'
+          channel: stable
+          cache: true
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -32,13 +35,16 @@ jobs:
       - name: Native dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config cmake perl clang libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y build-essential pkg-config cmake perl clang
       - run: node scripts/check-release-version.mjs
-      - run: python3 -m unittest discover -s hermod-app/scripts -p 'test_*.py'
-      - run: npm ci && npm run build
-        working-directory: hermod-app
-      - run: npx playwright install --with-deps chromium && npm test
-        working-directory: hermod-app
+      - run: python3 -m unittest flutter/scripts/test_store_submission.py
+      - name: Flutter quality gates
+        working-directory: flutter
+        run: |
+          flutter pub get
+          dart format --output=none --set-exit-if-changed lib test
+          flutter analyze
+          flutter test
       - name: Local IPv6 test interface
         run: |
           sudo ip link add hermodtest type dummy

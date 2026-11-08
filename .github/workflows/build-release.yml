@@ -26,21 +26,12 @@ jobs:
           - os: ubuntu-22.04
             arch: x64
             triple: x86_64
-            appimage_arch: amd64
-            gui: true
           - os: ubuntu-22.04-arm
             arch: arm64
             triple: aarch64
-            gui: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        if: matrix.gui
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: hermod-app/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.triple }}-unknown-linux-musl
@@ -50,25 +41,6 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config cmake perl clang musl-tools
-      - name: GUI dependencies
-        if: matrix.gui
-        run: sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 xvfb xdotool
-      - run: npm ci
-        if: matrix.gui
-        working-directory: hermod-app
-      - name: AppImage
-        if: matrix.gui
-        working-directory: hermod-app
-        env:
-          APPIMAGE_EXTRACT_AND_RUN: '1'
-        run: npm run tauri -- build --ci --bundles appimage -- --locked
-      - name: Stage and launch AppImage
-        if: matrix.gui
-        run: |
-          mkdir -p dist
-          version=$(node -p "require('./hermod-app/package.json').version")
-          cp "target/release/bundle/appimage/Hermod_${version}_${{ matrix.appimage_arch }}.AppImage" dist/hermod-linux-${{ matrix.arch }}.AppImage
-          hermod-app/scripts/smoke-appimage.sh dist/hermod-linux-${{ matrix.arch }}.AppImage
       - name: Static musl CLI
         run: |
           mkdir -p dist
@@ -99,42 +71,28 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: subosito/flutter-action@v2
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: hermod-app/package-lock.json
+          flutter-version: '3.44.8'
+          channel: stable
+          cache: true
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-${{ matrix.arch }}-v040
-      - run: npm ci
-        working-directory: hermod-app
-      - name: Build native GUI
-        working-directory: hermod-app
-        env:
-          RUSTFLAGS: '-C target-feature=+crt-static'
-        run: npm run tauri -- build --ci --target ${{ matrix.target }} --no-bundle -- --locked
-      - name: Package unsigned Microsoft Store MSIX
-        shell: pwsh
-        run: ./hermod-app/scripts/package-msix.ps1 -BinaryDirectory target/${{ matrix.target }}/release -Architecture ${{ matrix.arch }}
-      - name: Ensure Microsoft WebView2 Runtime
-        shell: pwsh
+      - name: Flutter analysis and tests
+        working-directory: flutter
         run: |
-          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
-          if (-not (Get-ItemPropertyValue -Path $key -Name pv -ErrorAction SilentlyContinue)) {
-            $installer = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
-            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
-            $signature = Get-AuthenticodeSignature $installer
-            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'WebView2 bootstrapper signature verification failed' }
-            $process = Start-Process $installer -ArgumentList '/silent','/install' -Wait -PassThru
-            if ($process.ExitCode -ne 0) { throw 'WebView2 installation failed' }
-          }
-      - name: Install and launch a temporary-signed copy of the Store MSIX
-        shell: powershell
-        run: ./hermod-app/scripts/smoke-windows.ps1
+          flutter pub get
+          flutter analyze
+          flutter test
+      - name: Build Flutter and package unsigned Microsoft Store MSIX
+        shell: pwsh
+        run: ./flutter/scripts/package-msix.ps1 -Architecture ${{ matrix.arch }} -OutputDirectory dist
+      - name: Validate Store package
+        run: python flutter/scripts/verify-msix.py dist/hermod-windows-${{ matrix.arch }}.msix ${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
           name: windows-msix-${{ matrix.arch }}
@@ -147,9 +105,6 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - uses: actions/download-artifact@v4
         with:
           pattern: windows-msix-*
@@ -157,94 +112,16 @@ jobs:
           merge-multiple: true
       - name: Bundle validated architectures for Microsoft Store
         shell: pwsh
-        run: ./hermod-app/scripts/bundle-msix.ps1 -PackageDirectory packages
+        run: ./flutter/scripts/bundle-msix.ps1 -PackageDirectory packages -OutputDirectory dist
       - uses: actions/upload-artifact@v4
         with:
           name: store-windows
           path: dist/hermod-windows.msixbundle
           if-no-files-found: error
 
-  android:
-    name: Android ARM64 APK
-    needs: verify
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check fixed Android signing secrets before building
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          missing=()
-          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
-            if [[ -z "${!name//[[:space:]]/}" ]]; then missing+=("$name"); fi
-          done
-          if (( ${#missing[@]} )); then
-            echo "::error::Missing repository Actions secrets: ${missing[*]}. Run hermod-app/scripts/init-signing-keys.sh once and configure Settings > Secrets and variables > Actions; see APP_BUILD.md."
-            exit 1
-          fi
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: hermod-app/package-lock.json
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: android-web-arm64-v040
-      - uses: gradle/actions/setup-gradle@v4
-      - name: SDK and native toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake perl clang
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses < <(yes) >/dev/null
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-37.0' 'build-tools;37.0.0' 'ndk;29.0.14206865'
-      - name: Prepare Tauri Android shell
-        working-directory: hermod-app
-        run: |
-          export NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
-          echo "NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
-          npm ci
-          npm run tauri -- android init --ci --skip-targets-install
-          node scripts/configure-android.mjs
-      - name: Fixed signed APK
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          : "${ANDROID_KEYSTORE_BASE64:?Missing fixed Android signing secrets; see APP_BUILD.md}"
-          : "${ANDROID_KEYSTORE_PASSWORD:?}" "${ANDROID_KEY_ALIAS:?}" "${ANDROID_KEY_PASSWORD:?}"
-          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/hermod-signing.jks"
-          trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$ANDROID_KEYSTORE_PATH"
-          (cd hermod-app && npm run tauri -- android build --ci --target aarch64 --apk --split-per-abi -- --locked)
-          mkdir -p dist
-          cp hermod-app/src-tauri/gen/android/app/build/outputs/apk/arm64/release/app-arm64-release.apk dist/hermod-android-arm64.apk
-          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose --print-certs dist/hermod-android-arm64.apk
-          "$ANDROID_HOME/build-tools/37.0.0/zipalign" -c -P 16 -v 4 dist/hermod-android-arm64.apk
-          "$ANDROID_HOME/build-tools/37.0.0/aapt" dump badging dist/hermod-android-arm64.apk > "$RUNNER_TEMP/apk-manifest.txt"
-          grep -q "sdkVersion:'34'" "$RUNNER_TEMP/apk-manifest.txt"
-          grep -q "targetSdkVersion:'37'" "$RUNNER_TEMP/apk-manifest.txt"
-          python3 hermod-app/scripts/verify-apk.py dist/hermod-android-arm64.apk
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-android-arm64
-          path: dist/hermod-android-arm64.apk
-          if-no-files-found: error
-
   release:
-    name: Publish Linux and Android release
-    needs: [verify, linux, windows_bundle, android]
+    name: Publish Linux CLI release
+    needs: [verify, linux, windows_bundle]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-22.04
     permissions:
@@ -266,8 +143,8 @@ jobs:
           body: |
             Both peers need the same IPv4 LAN or reachable IPv6, plus signaling access. See README.md / README.zh-CN.md for setup and migration.
             Windows: install HermodTransfer from Microsoft Store (publisher FeelLiao, Store ID 9PMPWN3HMR3M). Windows updates are submitted automatically after this release succeeds.
-            Linux: x64 AppImage GUI; x64 / ARM64 static musl CLI.
-            Android: ARM64 APK, Android 14 or newer (API 34), target API 37. Export inbox files before uninstalling an older temporary-key build.
+            Linux: x64 / ARM64 static musl CLI.
+            Windows: Flutter desktop GUI for x64 and ARM64, delivered as one Microsoft Store MSIXBundle.
 
   store:
     name: Submit Windows update to Microsoft Store
@@ -295,4 +172,4 @@ jobs:
           AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
           SELLER_ID: ${{ secrets.SELLER_ID }}
           MS_STORE_APP_ID: ${{ secrets.MS_STORE_APP_ID }}
-        run: python3 hermod-app/scripts/submit-store.py store-package/hermod-windows.msixbundle
+        run: python3 flutter/scripts/submit-store.py store-package/hermod-windows.msixbundle

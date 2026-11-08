@@ -6,31 +6,15 @@
 .DS_Store
 *.swp
 /hermod-go
-/docs
 
 # Nested Go reference repo (has its own git history/remote)
 
-# Tauri 和前端生成文件
+# 构建、签名和发布生成文件
 **/node_modules/
-/hermod-app/dist/
-/hermod-app/src-tauri/gen/android/.gradle/
-/hermod-app/src-tauri/gen/android/.idea/
-/hermod-app/src-tauri/gen/android/local.properties
-/hermod-app/src-tauri/gen/android/key.properties
-/hermod-app/src-tauri/gen/android/**/build/
 **/*.jks
 **/*.keystore
 **/*.pfx
-/hermod-app/test-results/
-/hermod-app/playwright-report/
-
-# Android 工程由锁定版本的 Tauri CLI 生成，原生插件源码单独跟踪。
-hermod-app/src-tauri/gen/
-hermod-app/plugins/documents/permissions/schemas/
-hermod-app/plugins/documents/android/.gradle/
-hermod-app/plugins/documents/android/build/
 /dist/
-hermod-app/plugins/documents/android/.tauri/
 /store-output/
 
 /signing-private/
@@ -38,3 +22,14 @@ hermod-app/plugins/documents/android/.tauri/
 **/*.pem
 
 **/__pycache__/
+
+# FVM / Flutter 生成文件
+.fvm/
+/flutter/.dart_tool/
+/flutter/build/
+/flutter/.flutter-plugins
+/flutter/.flutter-plugins-dependencies
+/flutter/android/.gradle/
+/flutter/android/local.properties
+/flutter/windows/flutter/ephemeral/
+/flutter/windows/hermod_flutter_bridge.dll

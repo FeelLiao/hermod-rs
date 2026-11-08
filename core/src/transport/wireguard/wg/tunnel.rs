@@ -107,7 +107,7 @@ impl WireGuardSession {
         }
     }
 
-    /// 访问复用缓冲的前 `len` 字节（配合 [`encapsulate_len`] 使用）。
+    /// 访问复用缓冲的前 `len` 字节（配合 [`Self::encapsulate_len`] 使用）。
     pub fn scratch(&self, len: usize) -> &[u8] {
         &self.scratch[..len]
     }

@@ -193,7 +193,8 @@ pub trait TransportConnection {
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// 传输内字节流（可直接喂给 HTTP 的 AsyncRead/AsyncWrite）。
-    type Stream: AsyncRead + AsyncWrite + Unpin + Send;
+    /// `'static`：多流模式会把流 spawn 进后台任务。
+    type Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static;
 
     /// 本端公布的 HTTP 端口（进程内 TCP 实现用它监听；QUIC 无端口，返回 0）。
     fn http_port(&self) -> u16;
@@ -220,6 +221,13 @@ pub trait TransportConnection {
     /// 用于发送端显示实际 UDP 发送速率，而不是本地写入进度。
     fn network_stats(&self) -> Option<NetworkStatsHandle> {
         None
+    }
+
+    /// 当前平滑 RTT 估计（实现没有估计时返回 `None`）。
+    ///
+    /// 链路档位（Auto）用它在线区分局域网与弱网，决定数据面并发档。
+    fn rtt(&mut self) -> impl Future<Output = Option<Duration>> + Send {
+        std::future::ready(None)
     }
 }
 

@@ -34,6 +34,9 @@ pub struct QuicEndpoint {
     pub cert_fingerprint: [u8; 32],
     /// 一次性凭证指纹：SHA-256(HTTP token)。
     pub credential_fingerprint: [u8; 32],
+    /// 发送端能力：载荷源可随机访问（可按切片 seek 发送，支持多流模式）。
+    #[serde(default)]
+    pub multi_stream: bool,
 }
 
 impl QuicEndpoint {
@@ -76,6 +79,7 @@ mod tests {
             ipv6_candidates: vec!["2001:db8::1".parse().unwrap(), "fd00::1".parse().unwrap()],
             cert_fingerprint: [0x11; 32],
             credential_fingerprint: [0x22; 32],
+            multi_stream: false,
         }
     }
 

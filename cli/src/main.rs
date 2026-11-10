@@ -3,6 +3,7 @@
 mod cli;
 mod progress;
 mod rx;
+mod serve;
 mod trust;
 mod tty;
 mod tx;
@@ -102,5 +103,7 @@ async fn run(
         cli::Command::Tx(a) => tx::run(a, abort_slot).await,
         cli::Command::Rx(a) => rx::run(a, abort_slot).await,
         cli::Command::Trust(a) => trust::run(a).await,
+        // serve 不用全局 abort 槽：服务器常驻，Ctrl+C 由 main 的全局处理器结束进程。
+        cli::Command::Serve(a) => serve::run(a).await,
     }
 }

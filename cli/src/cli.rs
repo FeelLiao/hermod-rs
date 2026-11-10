@@ -1,6 +1,9 @@
 //! CLI 仅解析交互参数；连接设置由核心库统一校验。
 use clap::{Args, Parser, Subcommand};
-use hermod_core::options::{Congestion, ConnectionSettings, Mtu};
+use hermod_core::options::{Congestion, ConnectionSettings, LinkProfile, Mtu};
+use hermod_core::server::{
+    DEFAULT_MAX_BLOBS_PER_CHANNEL, DEFAULT_MAX_CHANNELS_PER_IP, DEFAULT_MAX_CPACE_FAILURES,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -9,7 +12,8 @@ use hermod_core::options::{Congestion, ConnectionSettings, Mtu};
     about = "Private LAN / peer-to-peer QUIC file and text transfer",
     after_help = "Migration: use --mtu instead of --wg-mtu/--quic-mtu; --congestion instead of --quic-cc. \
 The WireGuard data plane and the --transport flag have been removed; transfers run over QUIC. \
-Binding is automatic; --listen and the unimplemented serve command have been removed."
+tx/rx bind automatically (--listen was removed). \
+`hermod serve` runs the signaling + NAT helper server."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -32,6 +36,8 @@ pub enum Command {
     Rx(RxArgs),
     #[command(about = "Fetch and pin a signaling server's SPKI fingerprint")]
     Trust(TrustArgs),
+    #[command(about = "Start the signaling and NAT helper service (drop-in for the Go server)")]
+    Serve(ServeArgs),
 }
 #[derive(Args, Debug)]
 pub struct NetworkArgs {
@@ -47,6 +53,13 @@ pub struct NetworkArgs {
         help = "auto (BBR) / cubic / bbr / newreno congestion control for QUIC"
     )]
     pub congestion: Congestion,
+    #[arg(
+        long,
+        default_value = "auto",
+        help = "auto / lan / compatible link profile: lan uses parallel \
+                slice streams and faster congestion startup (best on WiFi LANs)"
+    )]
+    pub profile: LinkProfile,
 }
 impl NetworkArgs {
     pub fn options(&self, receiving: bool) -> Result<hermod_core::session::SessionOptions, String> {
@@ -58,6 +71,7 @@ impl NetworkArgs {
             },
             mtu: self.mtu,
             congestion: self.congestion,
+            profile: self.profile,
         }
         .session_options(receiving)
     }
@@ -90,6 +104,54 @@ pub struct TrustArgs {
     pub server: String,
     #[arg(long, help = "Expected SPKI fingerprint (SHA-256 hex)")]
     pub fingerprint: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ServeArgs {
+    #[arg(
+        short,
+        long,
+        default_value = ":4376",
+        help = "Bind address (host:port); HERMOD_LISTEN overrides the default"
+    )]
+    pub listen: String,
+    #[arg(
+        short = 'T',
+        long,
+        default_value_t = 600,
+        help = "Idle timeout and channel TTL in seconds"
+    )]
+    pub ttl: u64,
+    #[arg(
+        long,
+        default_value_t = 5.0,
+        help = "Token bucket rate (requests/sec per IP prefix)"
+    )]
+    pub rate_limit: f64,
+    #[arg(
+        long,
+        default_value_t = 15.0,
+        help = "Token bucket burst capacity per IP prefix"
+    )]
+    pub rate_burst: f64,
+    #[arg(
+        long,
+        default_value_t = DEFAULT_MAX_BLOBS_PER_CHANNEL,
+        help = "Hard cap on relayed blobs per signaling channel"
+    )]
+    pub max_blobs_per_channel: usize,
+    #[arg(
+        long,
+        default_value_t = DEFAULT_MAX_CPACE_FAILURES,
+        help = "Max CPace handshake failures before a channel is invalidated"
+    )]
+    pub max_cpace_failures: usize,
+    #[arg(
+        long,
+        default_value_t = DEFAULT_MAX_CHANNELS_PER_IP,
+        help = "Max active channels per IP prefix (IPv4 /32, IPv6 /64)"
+    )]
+    pub max_channels_per_ip: usize,
 }
 #[cfg(test)]
 mod tests {
@@ -124,7 +186,23 @@ mod tests {
         for old in ["--wg-mtu", "--quic-mtu", "--quic-cc", "--listen"] {
             assert!(Cli::try_parse_from(["hermod", "tx", "file.bin", old, "1200"]).is_err());
         }
-        assert!(Cli::try_parse_from(["hermod", "serve"]).is_err());
+        // serve 回归为信令 server 子命令；tx 的第三个位置参数依旧不合法
+        assert!(Cli::try_parse_from(["hermod", "tx", "file.bin", "serve"]).is_err());
+    }
+
+    /// serve 的默认旗标对齐 Go 参考实现（:4376 / TTL 600 / 5 rps burst 15 / 10 blob）。
+    #[test]
+    fn serve_defaults_match_go_reference() {
+        let Command::Serve(serve) = Cli::try_parse_from(["hermod", "serve"]).unwrap().cmd else {
+            panic!()
+        };
+        assert_eq!(serve.listen, ":4376");
+        assert_eq!(serve.ttl, 600);
+        assert_eq!(serve.rate_limit, 5.0);
+        assert_eq!(serve.rate_burst, 15.0);
+        assert_eq!(serve.max_blobs_per_channel, 10);
+        assert_eq!(serve.max_cpace_failures, 3);
+        assert_eq!(serve.max_channels_per_ip, 100);
     }
     #[test]
     fn invalid_combinations_fail_before_network_access() {

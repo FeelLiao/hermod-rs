@@ -1,8 +1,8 @@
-//! 隔离网络实验用：本机 IPv6 QUIC 文件流（协议 v2 直连流帧）。
+//! 隔离网络实验用：本机 IPv6 QUIC 文件流（协议 v3 直连流帧）。
 //! 不使用信令服务器，不测公网可达性；固定凭证仅限本地实验。
 
 use hermod_core::crypto::cpace::Role;
-use hermod_core::orchestrate::{self, ServeOptions};
+use hermod_core::orchestrate::{self, PayloadSource, ReceiveOptions, ServeOptions};
 use hermod_core::transfer::{Kind, TransferOffer};
 use hermod_core::transport::{Transport, TransportConnection, quic::transport::QuicTransport};
 use std::time::{Duration, Instant};
@@ -26,32 +26,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         name: "probe.bin".into(),
         size,
     };
+    // 落盘到私有临时目录（netem 限速下磁盘不构成瓶颈；探测主要看网络时延）。
+    let dir = std::env::temp_dir().join(format!("hermod-probe-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir)?;
     let options = ServeOptions {
         kind: Kind::File,
         name: offer.name.clone(),
         size,
-        body: Box::new(std::io::Cursor::new(vec![0x5a; size as usize])),
+        source: PayloadSource::Stream(Box::new(std::io::Cursor::new(vec![0x5a; size as usize]))),
         progress: None,
     };
-    let mut sink = tokio::io::sink();
     let started = Instant::now();
-    let (sent, received) = tokio::time::timeout(Duration::from_secs(120), async {
+    let (sent, receipt) = tokio::time::timeout(Duration::from_secs(120), async {
         tokio::try_join!(
             orchestrate::serve_file(&mut tx, options),
-            orchestrate::fetch_with_options(
-                rx.dial().await.map_err(|e| {
-                    use hermod_core::orchestrate::OrchestrateError;
-                    OrchestrateError::Transport(e.to_string())
-                })?,
-                &offer,
-                &mut sink,
-                None,
-            )
+            orchestrate::receive(
+                &mut rx,
+                &dir,
+                ReceiveOptions {
+                    offer: Some(&offer),
+                    ..Default::default()
+                },
+            ),
         )
     })
     .await??;
-    let (sha, _) = received;
-    let verified = sent.verified && sha == sent.sha256;
+    let verified = sent.verified && receipt.sha256 == sent.sha256;
     assert!(verified);
     tx.shutdown().await?;
     rx.shutdown().await?;
@@ -61,5 +62,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         size as f64 * 8.0 / started.elapsed().as_secs_f64() / 1_000_000.0,
         sent.sha256
     );
+    let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }

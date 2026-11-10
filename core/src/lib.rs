@@ -66,6 +66,7 @@ pub mod crypto;
 pub mod log;
 pub mod options;
 pub mod orchestrate;
+pub mod server;
 pub mod session;
 pub mod signal;
 pub mod transfer;

@@ -102,12 +102,14 @@ class ApiConnection {
   final String transport;
   final String mtu;
   final String congestion;
+  final String profile;
   final String limitMbps;
 
   const ApiConnection({
     required this.transport,
     required this.mtu,
     required this.congestion,
+    required this.profile,
     required this.limitMbps,
   });
 
@@ -116,6 +118,7 @@ class ApiConnection {
       transport.hashCode ^
       mtu.hashCode ^
       congestion.hashCode ^
+      profile.hashCode ^
       limitMbps.hashCode;
 
   @override
@@ -126,6 +129,7 @@ class ApiConnection {
           transport == other.transport &&
           mtu == other.mtu &&
           congestion == other.congestion &&
+          profile == other.profile &&
           limitMbps == other.limitMbps;
 }
 

@@ -77,6 +77,8 @@ pub async fn run(
         orchestrate::ReceiveOptions {
             offer: rx.offer.as_ref(),
             progress: Some(&mut on_progress),
+            profile: opts.profile,
+            peer_multi_stream: rx.peer_multi_stream,
         },
     );
     let receipt = match progress::with_idle_timeout(fut, tick_rx, IDLE).await {

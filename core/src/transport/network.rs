@@ -3,6 +3,16 @@ use socket2::{Domain, Socket, Type};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 
+/// UDP 收发缓冲请求值（≥ 局域网 BDP；内核可能钳制，失败只告警不失败）。
+const UDP_BUFFER: usize = 16 * 1024 * 1024;
+
+/// 设置套接字缓冲；设置失败记告警（不阻断传输）。
+fn set_buffer(setter: impl FnOnce(usize) -> io::Result<()>, what: &str) {
+    if let Err(error) = setter(UDP_BUFFER) {
+        crate::log_warn!(target = what, error = %error, "UDP buffer size request failed");
+    }
+}
+
 pub fn local_ipv4() -> Vec<Ipv4Addr> {
     let mut addresses = Vec::new();
     for interface in if_addrs::get_if_addrs().unwrap_or_default() {
@@ -38,8 +48,8 @@ pub fn bind_udp(bind: Option<SocketAddr>) -> io::Result<std::net::UdpSocket> {
             socket.set_only_v6(!address.ip().is_unspecified())?;
         }
         socket.set_nonblocking(true)?;
-        let _ = socket.set_recv_buffer_size(8 * 1024 * 1024);
-        let _ = socket.set_send_buffer_size(8 * 1024 * 1024);
+        set_buffer(|n| socket.set_recv_buffer_size(n), "rcvbuf");
+        set_buffer(|n| socket.set_send_buffer_size(n), "sndbuf");
         socket.bind(&address.into())?;
         Ok(socket.into())
     }

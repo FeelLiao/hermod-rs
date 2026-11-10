@@ -265,6 +265,16 @@ impl Engine {
         name: String,
         size: Option<u64>,
     ) -> Result<Selection, String> {
+        self.select_inner(reader, name, size, None)
+    }
+
+    fn select_inner(
+        &self,
+        reader: Box<dyn Read + Send>,
+        name: String,
+        size: Option<u64>,
+        path: Option<PathBuf>,
+    ) -> Result<Selection, String> {
         let _operation = self
             .operation
             .try_lock()
@@ -286,6 +296,7 @@ impl Engine {
                 size,
                 cache: self.cache.join(storage::new_id()),
                 kind: hermod_core::transfer::Kind::File,
+                path,
             },
         ));
         Ok(selection)
@@ -296,13 +307,14 @@ impl Engine {
         if !metadata.is_file() {
             return Err("Select a regular file".into());
         }
-        self.select(
+        self.select_inner(
             Box::new(file),
             path.file_name()
                 .ok_or("Invalid filename")?
                 .to_string_lossy()
                 .into_owned(),
             Some(metadata.len()),
+            Some(path.to_path_buf()),
         )
     }
     pub fn start(
@@ -350,6 +362,7 @@ impl Engine {
                 name: "message.txt".into(),
                 kind: hermod_core::transfer::Kind::Text,
                 cache: self.cache.join(storage::new_id()),
+                path: None,
             })
         } else {
             let mut selected = self.source.lock().unwrap();

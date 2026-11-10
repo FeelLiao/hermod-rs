@@ -493,13 +493,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   ApiConnection dco_decode_api_connection(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 4)
-      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    if (arr.length != 5)
+      throw Exception('unexpected arr length: expect 5 but see ${arr.length}');
     return ApiConnection(
       transport: dco_decode_String(arr[0]),
       mtu: dco_decode_String(arr[1]),
       congestion: dco_decode_String(arr[2]),
-      limitMbps: dco_decode_String(arr[3]),
+      profile: dco_decode_String(arr[3]),
+      limitMbps: dco_decode_String(arr[4]),
     );
   }
 
@@ -757,11 +758,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_transport = sse_decode_String(deserializer);
     var var_mtu = sse_decode_String(deserializer);
     var var_congestion = sse_decode_String(deserializer);
+    var var_profile = sse_decode_String(deserializer);
     var var_limitMbps = sse_decode_String(deserializer);
     return ApiConnection(
       transport: var_transport,
       mtu: var_mtu,
       congestion: var_congestion,
+      profile: var_profile,
       limitMbps: var_limitMbps,
     );
   }
@@ -1063,6 +1066,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_String(self.transport, serializer);
     sse_encode_String(self.mtu, serializer);
     sse_encode_String(self.congestion, serializer);
+    sse_encode_String(self.profile, serializer);
     sse_encode_String(self.limitMbps, serializer);
   }
 

@@ -15,6 +15,7 @@ class _EditableSettingsPageState extends State<EditableSettingsPage> {
   bool loaded = false;
   String transport = 'quic';
   String receiveTransport = 'auto';
+  String profile = 'auto';
   String theme = 'system';
   String language = 'system';
   String verbose = 'none';
@@ -28,6 +29,7 @@ class _EditableSettingsPageState extends State<EditableSettingsPage> {
     final connection = settings['connection'] as Map<String, dynamic>;
     server.text = settings['server'] as String;
     transport = connection['transport'] as String? ?? 'quic';
+    profile = connection['profile'] as String? ?? 'auto';
     receiveTransport = settings['receive_transport'] as String? ?? 'auto';
     theme = settings['theme'] as String? ?? 'system';
     language = settings['language'] as String? ?? 'system';
@@ -48,6 +50,7 @@ class _EditableSettingsPageState extends State<EditableSettingsPage> {
       settings['connection'] as Map<String, dynamic>,
     );
     connection['transport'] = transport;
+    connection['profile'] = profile;
     settings
       ..['connection'] = connection
       ..['receive_transport'] = receiveTransport
@@ -124,6 +127,20 @@ class _EditableSettingsPageState extends State<EditableSettingsPage> {
                   ],
                   onChanged: (value) =>
                       setState(() => receiveTransport = value!),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField(
+                  initialValue: profile,
+                  decoration: const InputDecoration(
+                    labelText: '链路档位',
+                    helperText: 'WiFi 局域网选“局域网优先”可显著提升吞吐',
+                  ),
+                  items: const [
+                    DropdownMenuItem(value: 'auto', child: Text('自动（按链路质量）')),
+                    DropdownMenuItem(value: 'lan', child: Text('局域网优先（并行流）')),
+                    DropdownMenuItem(value: 'compatible', child: Text('兼容优先（最稳）')),
+                  ],
+                  onChanged: (value) => setState(() => profile = value!),
                 ),
                 const SizedBox(height: 12),
                 TextFormField(

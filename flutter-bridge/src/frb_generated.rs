@@ -481,11 +481,13 @@ impl SseDecode for crate::api::ApiConnection {
         let mut var_transport = <String>::sse_decode(deserializer);
         let mut var_mtu = <String>::sse_decode(deserializer);
         let mut var_congestion = <String>::sse_decode(deserializer);
+        let mut var_profile = <String>::sse_decode(deserializer);
         let mut var_limitMbps = <String>::sse_decode(deserializer);
         return crate::api::ApiConnection {
             transport: var_transport,
             mtu: var_mtu,
             congestion: var_congestion,
+            profile: var_profile,
             limit_mbps: var_limitMbps,
         };
     }
@@ -843,6 +845,7 @@ impl flutter_rust_bridge::IntoDart for crate::api::ApiConnection {
             self.transport.into_into_dart().into_dart(),
             self.mtu.into_into_dart().into_dart(),
             self.congestion.into_into_dart().into_dart(),
+            self.profile.into_into_dart().into_dart(),
             self.limit_mbps.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -1072,6 +1075,7 @@ impl SseEncode for crate::api::ApiConnection {
         <String>::sse_encode(self.transport, serializer);
         <String>::sse_encode(self.mtu, serializer);
         <String>::sse_encode(self.congestion, serializer);
+        <String>::sse_encode(self.profile, serializer);
         <String>::sse_encode(self.limit_mbps, serializer);
     }
 }

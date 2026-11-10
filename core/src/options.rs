@@ -55,6 +55,57 @@ pub enum Congestion {
     Reno,
     Newreno,
 }
+
+/// 链路档位：决定数据面并发（单流/多流切片）与拥塞启动参数。
+///
+/// - `Auto`：按探测到的 RTT 在线选择（局域网用激进参数，弱网保守）；
+/// - `Lan`：强制局域网档（多流并行 + 更低的初始 RTT）；
+/// - `Compatible`：强制兼容档（单流大块流水线，最保守）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LinkProfile {
+    #[default]
+    Auto,
+    Lan,
+    Compatible,
+}
+impl LinkProfile {
+    /// 字符串值："auto" | "lan" | "compatible"。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LinkProfile::Auto => "auto",
+            LinkProfile::Lan => "lan",
+            LinkProfile::Compatible => "compatible",
+        }
+    }
+}
+impl FromStr for LinkProfile {
+    type Err = String;
+    fn from_str(value: &str) -> Result<Self, String> {
+        match value {
+            "auto" => Ok(Self::Auto),
+            "lan" => Ok(Self::Lan),
+            "compatible" => Ok(Self::Compatible),
+            _ => Err("Profile must be auto, lan or compatible".into()),
+        }
+    }
+}
+impl TryFrom<String> for LinkProfile {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, String> {
+        value.parse()
+    }
+}
+impl From<LinkProfile> for String {
+    fn from(value: LinkProfile) -> Self {
+        value.as_str().into()
+    }
+}
+impl fmt::Display for LinkProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 impl FromStr for Congestion {
     type Err = String;
     fn from_str(value: &str) -> Result<Self, String> {
@@ -75,6 +126,8 @@ pub struct ConnectionSettings {
     pub transport: String,
     pub mtu: Mtu,
     pub congestion: Congestion,
+    /// 链路档位（数据面并发与拥塞启动参数）。
+    pub profile: LinkProfile,
 }
 impl Default for ConnectionSettings {
     fn default() -> Self {
@@ -82,6 +135,7 @@ impl Default for ConnectionSettings {
             transport: "quic".into(),
             mtu: Mtu::Auto,
             congestion: Congestion::Auto,
+            profile: LinkProfile::Auto,
         }
     }
 }
@@ -102,6 +156,7 @@ impl ConnectionSettings {
                 Mtu::Value(v) => Some(usize::from(v)),
             },
             congestion: self.congestion,
+            profile: self.profile,
             ..Default::default()
         };
         if let Some(kind) = transport {
@@ -163,6 +218,12 @@ mod tests {
         assert!(settings.session_options(false).is_err());
         settings.congestion = Congestion::Bbr;
         assert!(settings.session_options(false).is_ok());
+        // 链路档位随设置进入会话选项
+        settings.profile = LinkProfile::Lan;
+        assert_eq!(
+            settings.session_options(false).unwrap().profile,
+            LinkProfile::Lan
+        );
         settings.mtu = Mtu::Value(1100);
         assert!(settings.session_options(false).is_err());
         for value in ["0", "-1", "65535", "NaN"] {

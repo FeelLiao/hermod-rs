@@ -28,6 +28,7 @@ pub use quic::transport::{CongestionControl, QuicConnection, QuicError, QuicTran
 
 use crate::crypto::cpace::Role;
 use std::net::{Ipv6Addr, SocketAddr};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 /// 两个传输实现统一的错误类型。
@@ -73,7 +74,12 @@ impl AnyTransport {
     }
 
     /// 统一选项已由会话层校验，只配置当前协议。
-    pub fn configure(&mut self, mtu: Option<usize>, congestion: crate::options::Congestion) {
+    pub fn configure(
+        &mut self,
+        mtu: Option<usize>,
+        congestion: crate::options::Congestion,
+        profile: crate::options::LinkProfile,
+    ) {
         use crate::options::Congestion as C;
         match self {
             Self::Quic(t) => {
@@ -83,6 +89,7 @@ impl AnyTransport {
                     C::Newreno => CongestionControl::NewReno,
                     _ => CongestionControl::Bbr,
                 });
+                t.set_link_profile(profile);
             }
         }
     }
@@ -180,6 +187,12 @@ impl TransportConnection for AnyConnection {
     fn network_stats(&self) -> Option<NetworkStatsHandle> {
         match self {
             Self::Quic(c) => c.network_stats(),
+        }
+    }
+
+    async fn rtt(&mut self) -> Option<Duration> {
+        match self {
+            Self::Quic(c) => c.rtt().await,
         }
     }
 }

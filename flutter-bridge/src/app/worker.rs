@@ -19,6 +19,8 @@ pub struct Source {
     pub name: String,
     pub size: Option<u64>,
     pub cache: PathBuf,
+    /// 真实文件路径（文件选择器来源）；有路径就能按 seek 发送（多流切片）。
+    pub path: Option<PathBuf>,
 }
 
 pub enum Action {
@@ -208,35 +210,56 @@ async fn run(
 ) -> Result<(), String> {
     match action {
         Action::Send(source) => {
-            let mut file: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
-                Box::new(stream_reader(source.reader));
             let mut temporary = Temporary(None);
-            let size = if let Some(size) = source.size {
-                size
-            } else {
-                state.lock().unwrap().phase = TransferPhase::PreparingSource;
-                let path = source.cache;
-                temporary.0 = Some(path.clone());
-                let mut staged = tokio::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                let size = tokio::io::copy(&mut file, &mut staged)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                use tokio::io::AsyncSeekExt;
-                staged.rewind().await.map_err(|e| e.to_string())?;
-                file = Box::new(staged);
-                size
+            let size;
+            let payload_source: orchestrate::PayloadSource;
+            match (source.path.clone(), source.size) {
+                (Some(path), Some(known)) => {
+                    // 真实文件：路径直通（可 seek → 支持多流切片）。
+                    size = known;
+                    payload_source = orchestrate::PayloadSource::File(path);
+                }
+                (Some(path), None) => {
+                    // 有路径但未知大小：直接取元数据，避免整份暂存。
+                    let meta = tokio::fs::metadata(&path)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    size = meta.len();
+                    payload_source = orchestrate::PayloadSource::File(path);
+                }
+                (None, Some(known)) => {
+                    // 内存/文本源：顺序流发送（单流模式）。
+                    size = known;
+                    payload_source =
+                        orchestrate::PayloadSource::Stream(Box::new(stream_reader(source.reader)));
+                }
+                (None, None) => {
+                    // 未知大小的文档流：暂存私有缓存；暂存文件本身可 seek。
+                    state.lock().unwrap().phase = TransferPhase::PreparingSource;
+                    let path = source.cache;
+                    temporary.0 = Some(path.clone());
+                    let mut file = Box::new(stream_reader(source.reader));
+                    let mut staged = tokio::fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    size = tokio::io::copy(&mut file, &mut staged)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    payload_source = orchestrate::PayloadSource::File(path);
+                }
             };
             options.offer = Some(hermod_core::transfer::TransferOffer {
                 kind: source.kind,
                 name: source.name.clone(),
                 size,
             });
+            // 可 seek 的文件源经 bundle 声明，接收端才可能选择多流切片模式。
+            options.multi_stream_capable =
+                matches!(&payload_source, orchestrate::PayloadSource::File(_));
             state.lock().unwrap().total = Some(size);
             let (_, code) = hermod_core::crypto::wordlist::generate_transfer_code(
                 &mut rand_core::UnwrapErr(getrandom::SysRng),
@@ -272,7 +295,7 @@ async fn run(
                     kind: source.kind,
                     name: source.name,
                     size,
-                    body: file,
+                    source: payload_source,
                     progress: Some(Box::new(progress(state.clone()))),
                 },
             )
@@ -317,6 +340,8 @@ async fn run(
                 orchestrate::ReceiveOptions {
                     offer: rx.offer.as_ref(),
                     progress: Some(&mut on_progress),
+                    profile: options.profile,
+                    peer_multi_stream: rx.peer_multi_stream,
                 },
             )
             .await
@@ -335,17 +360,20 @@ async fn run(
     Ok(())
 }
 
-/// 阻塞文档流在专用线程读取；最多缓存两个 64 KiB 块，取消后关闭接收端。
+/// 阻塞文档流在专用线程读取；1 MiB 块 × 16 深预读（与发送端流水线对齐，
+/// 深度不足会把发送速率饿死在 ~128 KiB 在途），取消后关闭接收端。
 fn stream_reader(
     mut reader: Box<dyn std::io::Read + Send>,
 ) -> impl tokio::io::AsyncRead + Unpin + Send {
-    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<bytes::Bytes>>(2);
+    const CHUNK: usize = 1024 * 1024;
+    const QUEUE: usize = 16;
+    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<bytes::Bytes>>(QUEUE);
     tokio::task::spawn_blocking(move || {
         loop {
             if tx.is_closed() {
                 break;
             }
-            let mut chunk = vec![0; 64 * 1024];
+            let mut chunk = vec![0; CHUNK];
             match reader.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(count) => {
@@ -391,6 +419,7 @@ mod tests {
             name: "payload.bin".into(),
             size: None,
             cache: path.with_extension("staging"),
+            path: None,
         }
     }
 

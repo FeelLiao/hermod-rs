@@ -16,6 +16,8 @@ pub struct ApiConnection {
     pub transport: String,
     pub mtu: String,
     pub congestion: String,
+    /// 链路档位：auto / lan / compatible。
+    pub profile: String,
     pub limit_mbps: String,
 }
 
@@ -56,6 +58,7 @@ impl ApiConnection {
                 Congestion::Newreno => "newreno",
             }
             .into(),
+            profile: connection.profile.to_string(),
             limit_mbps: "0".into(),
         }
     }
@@ -84,10 +87,19 @@ impl ApiConnection {
                 });
             }
         };
+        let profile = self
+            .profile
+            .parse::<hermod_core::options::LinkProfile>()
+            .map_err(|_| GuiError {
+                code: crate::gui_api::GuiErrorCode::InvalidInput,
+                message: "Profile must be auto, lan or compatible".into(),
+                retryable: false,
+            })?;
         Ok(ConnectionSettings {
             transport: self.transport.clone(),
             mtu,
             congestion,
+            profile,
         })
     }
 }

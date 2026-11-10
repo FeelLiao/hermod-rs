@@ -190,7 +190,7 @@ async fn run_all() {
                         error.contains("removed") || error.contains("quic"),
                         "{error}"
                     );
-                    let mut unchanged = engine.settings();
+                    let unchanged = engine.settings();
                     engine.save_settings(unchanged).unwrap();
                     engine.set_destination(Some("next-folder".into())).unwrap();
                     assert_eq!(

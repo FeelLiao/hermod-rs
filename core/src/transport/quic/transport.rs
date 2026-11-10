@@ -57,8 +57,12 @@ const CLOSE_CANCEL: u32 = 1;
 const KEEPALIVE: Duration = Duration::from_secs(10);
 /// 初始 RTT（比 quinn 默认 333 ms 更贴近常见网络）。
 const INITIAL_RTT: Duration = Duration::from_millis(100);
+/// 局域网档的初始 RTT：实际 RTT 通常 < 5 ms，过高的估计会拖慢 BBR 启动爬坡。
+const LAN_INITIAL_RTT: Duration = Duration::from_millis(25);
 /// 单条流的接收窗口 / 连接总接收窗口 / 发送窗口。
 const IO_WINDOW: u64 = 64 * 1024 * 1024;
+/// 双向流并发上限：多流切片模式的流数（≤ 257）必须被 server 侧允许。
+const MAX_CONCURRENT_BIDI: u32 = 1024;
 /// QUIC 初始 UDP payload 下限（RFC 9000 要求至少 1200）。
 const DEFAULT_MTU: u16 = 1200;
 /// 以太网内常见 IPv6 UDP payload 上限（1500 - 40 - 8）。
@@ -143,6 +147,8 @@ pub struct QuicTransport {
     bind: Option<SocketAddr>,
     server_hint: Option<Ipv6Addr>,
     congestion: CongestionControl,
+    /// 链路档位：决定初始 RTT 等启动参数。
+    profile: crate::options::LinkProfile,
     initial_mtu: u16,
     mtu_limit: u16,
 }
@@ -157,6 +163,7 @@ impl QuicTransport {
             bind: None,
             server_hint: None,
             congestion: CongestionControl::Bbr,
+            profile: crate::options::LinkProfile::Auto,
             initial_mtu: DEFAULT_MTU,
             mtu_limit: MAX_MTU,
         }
@@ -175,6 +182,11 @@ impl QuicTransport {
     /// 设置拥塞控制。
     pub fn set_congestion(&mut self, congestion: CongestionControl) {
         self.congestion = congestion;
+    }
+
+    /// 设置链路档位（局域网档用更低的初始 RTT 加快 BBR 启动）。
+    pub fn set_link_profile(&mut self, profile: crate::options::LinkProfile) {
+        self.profile = profile;
     }
 
     /// 设置已校验的 UDP 载荷上限，限制初始值和路径 MTU 探测。
@@ -223,6 +235,8 @@ impl Transport for QuicTransport {
             ipv4_candidates: ipv4_candidates.clone(),
             cert_fingerprint: identity.fingerprint,
             credential_fingerprint: self.credential_fingerprint,
+            // 能力标志由 session 层按载荷来源注入；传输层恒为 false。
+            multi_stream: false,
         };
 
         crate::log_info!(
@@ -268,7 +282,16 @@ impl Transport for QuicTransport {
             socket.local_addr()?,
         )?;
 
-        let transport = transport_config(self.congestion, self.initial_mtu, self.mtu_limit);
+        let initial_rtt = match self.profile {
+            crate::options::LinkProfile::Lan => LAN_INITIAL_RTT,
+            _ => INITIAL_RTT,
+        };
+        let transport = transport_config(
+            self.congestion,
+            initial_rtt,
+            self.initial_mtu,
+            self.mtu_limit,
+        );
         // 同时向对端声明接收上限，避免只有接收端配置 MTU 时发送端仍使用更大的报文。
         let mut endpoint_config = quinn::EndpointConfig::default();
         endpoint_config
@@ -371,6 +394,12 @@ impl QuicConnection {
         self.conn = Some(conn.clone());
         self.start_stats_task(conn.clone());
         Ok(conn)
+    }
+
+    /// 当前平滑 RTT（握手完成后立即可用；未完成时返回 None）。
+    pub async fn rtt(&mut self) -> Option<Duration> {
+        let conn = self.connection().await.ok()?;
+        Some(conn.rtt())
     }
 
     /// 每 500ms 采样一次 quinn 的网络统计，供发送端进度条读取。
@@ -695,6 +724,7 @@ async fn accept_task(
 /// 构造高吞吐 QUIC transport 配置：BBR + 大窗口 + PMTUD + 低 ACK 延迟。
 fn transport_config(
     congestion: CongestionControl,
+    initial_rtt: Duration,
     initial_mtu: u16,
     mtu_limit: u16,
 ) -> Arc<quinn::TransportConfig> {
@@ -709,7 +739,10 @@ fn transport_config(
     config.receive_window(VarInt::from_u32(window as u32));
     config.send_window(window);
     config.keep_alive_interval(Some(KEEPALIVE));
-    config.initial_rtt(INITIAL_RTT);
+    config.initial_rtt(initial_rtt);
+    // 多流切片模式（局域网档）按切片开流；上限放宽到 1024，
+    // server 侧不允许足够多的并发流会让接收端在 open_bi 上死锁。
+    config.max_concurrent_bidi_streams(VarInt::from_u32(MAX_CONCURRENT_BIDI));
     config.min_mtu(DEFAULT_MTU);
     config.initial_mtu(initial_mtu.clamp(DEFAULT_MTU, mtu_limit));
     let mut discovery = quinn::MtuDiscoveryConfig::default();

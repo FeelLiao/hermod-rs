@@ -11,7 +11,7 @@ use hermod_core::session;
 use hermod_core::transfer::{self, Kind};
 use hermod_core::transport::NetworkStatsHandle;
 use std::io::Seek;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -35,25 +35,28 @@ pub async fn run(
 
     let mut opts = args.network.options(false)?;
 
-    // 先准备输入并确定大小；打开的同一个文件句柄贯穿预告和发送。
+    // 先准备输入并确定大小；文件源用路径（可 seek，支持多流切片），
+    // 顺序源（stdin/文本）保留流形状走单流。
     let (kind, name) = transfer::classify_input(&args.input, crate::tty::stdin_is_piped());
     let mut staged = None;
-    let body: Box<dyn tokio::io::AsyncRead + Unpin + Send>;
+    let source: orchestrate::PayloadSource;
     let size;
     let name = match kind {
         Kind::File => {
-            let file = tokio::fs::File::open(Path::new(&args.input)).await?;
-            let metadata = file.metadata().await?;
+            let path = PathBuf::from(&args.input);
+            let metadata = tokio::fs::metadata(&path).await?;
             if !metadata.is_file() {
                 return Err("Select a regular file".into());
             }
             size = metadata.len();
-            body = Box::new(file);
+            source = orchestrate::PayloadSource::File(path);
             name
         }
         Kind::Text => {
             size = args.input.len() as u64;
-            body = Box::new(std::io::Cursor::new(args.input.into_bytes()));
+            source = orchestrate::PayloadSource::Stream(Box::new(std::io::Cursor::new(
+                args.input.into_bytes(),
+            )));
             "message.txt".into()
         }
         Kind::Stream => {
@@ -83,13 +86,15 @@ pub async fn run(
                 .await??;
             staged = Some(temporary);
             size = length;
-            body = Box::new(tokio::fs::File::from_std(file));
+            source = orchestrate::PayloadSource::Stream(Box::new(tokio::fs::File::from_std(file)));
             "stdin.bin".into()
         }
     };
     let offer = transfer::TransferOffer { kind, name, size };
     offer.validate()?;
     opts.offer = Some(offer.clone());
+    // 可 seek 的文件源经 bundle 声明，接收端才可能选择多流切片模式。
+    opts.multi_stream_capable = matches!(&source, orchestrate::PayloadSource::File(_));
     let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
     let (_, code) = wordlist::generate_transfer_code(&mut rng, usize::from(args.words));
     let mut tx = tokio::time::timeout(
@@ -128,7 +133,7 @@ pub async fn run(
                 kind,
                 name: offer.name,
                 size,
-                body,
+                source,
                 progress,
             },
         ),

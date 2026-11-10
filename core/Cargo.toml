@@ -16,6 +16,8 @@ der = "0.8"
 futures-util = "0.3"
 getrandom = { version = "0.4", features = ["sys_rng"] }
 hkdf = "0.13"
+# 信令 server 的限流/反射 cookie（hkdf 同源传递依赖，无需新下载）。
+hmac = "0.13"
 if-addrs = "0.15.0"
 p256 = { version = "0.14", features = ["ecdh", "hash2curve"] }
 rand_core = "0.10"
@@ -30,6 +32,10 @@ thiserror = "2"
 tracing = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync", "fs"] }
 tokio-util = { version = "0.7", features = ["io"] }
+# 信令 server 的 WSS acceptor（tokio-tungstenite 内部同一版本，无需新下载）。
+tokio-rustls = "0.26"
+# rcgen 的证书有效期字段用 time；已在依赖树里。
+time = "0.3"
 # 需要 rustls 集成以传入自定义 ClientConfig 做 SPKI pinning。
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs", "log"] }

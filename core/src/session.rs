@@ -38,8 +38,9 @@ use sha2::{Digest, Sha256};
 
 /// 端点头 magic。
 const ENDPOINT_MAGIC: [u8; 2] = *b"HE";
-/// 端点头版本。（v1 = 含 WireGuard 的历史协议；v2 = QUIC-only 直连流载荷。）
-const ENDPOINT_VERSION: u8 = 2;
+/// 端点头版本。（v1 = 含 WireGuard 的历史协议；v2 = QUIC-only 直连流载荷；
+/// v3 = 多流切片数据面 + 链路档位，两端必须同代——旧端会得到明确的升级提示。）
+const ENDPOINT_VERSION: u8 = 3;
 /// 端点头长度（magic + version + transport）。
 const ENDPOINT_HEADER_LEN: usize = 4;
 
@@ -98,6 +99,11 @@ pub struct SessionOptions {
     pub transport: Option<TransportKind>,
     /// 统一拥塞控制；auto 在 QUIC 下为 BBR。
     pub congestion: crate::options::Congestion,
+    /// 链路档位：数据面并发与拥塞启动参数（auto 按 RTT 在线决定）。
+    pub profile: crate::options::LinkProfile,
+    /// 发送端声明：载荷源可随机访问（能按切片 seek 发送，支持多流模式）。
+    /// 随端点 bundle 公布给接收端；接收端据此决定是否用多流模式。
+    pub multi_stream_capable: bool,
 }
 
 impl Default for SessionOptions {
@@ -109,6 +115,8 @@ impl Default for SessionOptions {
             // 默认 auto：接收端跟随发送端；发送端用 sender_default()。
             transport: None,
             congestion: crate::options::Congestion::Auto,
+            profile: crate::options::LinkProfile::Auto,
+            multi_stream_capable: false,
         }
     }
 }
@@ -144,6 +152,8 @@ pub struct RxSession {
     pub conn: AnyConnection,
     /// 传输内 HTTP 的一次性 token（rx 用同一个 token 拨号）。
     pub token: [u8; 16],
+    /// 对端（发送方）声明载荷源可随机访问——多流切片模式的前提。
+    pub peer_multi_stream: bool,
 }
 
 /// 配置里当前 server 的 SPKI 指纹（用于 `connect_pinned`）。
@@ -229,7 +239,7 @@ pub async fn sender_session_with_ready(
         "PAKE handshake complete"
     );
     let token = derive_http_token(&k, channel_id);
-    let (conn, _) = exchange_and_establish(
+    let (conn, _, _) = exchange_and_establish(
         &mut ws,
         channel_id,
         &k,
@@ -267,7 +277,7 @@ pub async fn receiver_session_with(
         "PAKE handshake complete"
     );
     let token = derive_http_token(&k, channel_id);
-    let (conn, offer) = exchange_and_establish(
+    let (conn, offer, peer_multi_stream) = exchange_and_establish(
         &mut ws,
         channel_id,
         &k,
@@ -277,7 +287,12 @@ pub async fn receiver_session_with(
         opts,
     )
     .await?;
-    Ok(RxSession { conn, token, offer })
+    Ok(RxSession {
+        conn,
+        token,
+        offer,
+        peer_multi_stream,
+    })
 }
 
 /// 构造指定传输实现，并应用所有通用/协议特有选项。
@@ -290,7 +305,7 @@ fn build_transport(
     opts.validate_for(kind).map_err(SessionError::Options)?;
     let mut transport = AnyTransport::new(kind);
     transport.set_udp_bind(opts.udp_bind);
-    transport.configure(opts.mtu, opts.congestion);
+    transport.configure(opts.mtu, opts.congestion, opts.profile);
     // server 观测地址作为 server-reflexive 提示（仅 IPv6 生效）
     transport.set_server_hint(observed.public_ipv6.parse().ok());
     transport.set_credential_fingerprint(fingerprint);
@@ -368,6 +383,7 @@ fn read_offer(endpoint: &[u8]) -> Result<Option<crate::transfer::TransferOffer>,
 /// 交换加密端点字节，并 establish 传输。
 ///
 /// tx 先 prepare+send，因为接收端需要先看到 tx 的端点头才能选传输实现。
+/// 返回 (连接, 对端 offer, 对端多流能力)。
 async fn exchange_and_establish(
     ws: &mut WsStream,
     channel_id: u16,
@@ -376,7 +392,7 @@ async fn exchange_and_establish(
     observed: ObservedAddrs,
     role: Role,
     opts: &SessionOptions,
-) -> Result<(AnyConnection, Option<crate::transfer::TransferOffer>), SessionError> {
+) -> Result<(AnyConnection, Option<crate::transfer::TransferOffer>, bool), SessionError> {
     let fingerprint = sha256_32(token);
     let psk = derive_wg_psk(k, channel_id);
     let aad = channel_id.to_be_bytes();
@@ -386,6 +402,19 @@ async fn exchange_and_establish(
             let kind = opts.transport.unwrap_or(TransportKind::Quic);
             let mut transport = build_transport(opts, kind, &observed, fingerprint)?;
             let my_endpoint = transport.prepare().await?;
+            // 多流能力写进 QUIC 端点清单（类型安全字段，旧端忽略/拒绝由版本门负责）。
+            let my_endpoint = if kind == TransportKind::Quic && opts.multi_stream_capable {
+                let mut endpoint = crate::transport::quic::bundle::QuicEndpoint::decode(
+                    &my_endpoint,
+                )
+                .map_err(|e| TransportError::Quic(crate::transport::QuicError::Bundle(e)))?;
+                endpoint.multi_stream = true;
+                endpoint
+                    .encode()
+                    .map_err(|e| TransportError::Quic(crate::transport::QuicError::Bundle(e)))?
+            } else {
+                my_endpoint
+            };
             let my_endpoint = attach_offer(&my_endpoint, opts.offer.as_ref())?;
             let my_blob = aead::seal(k, &aad, &wrap_endpoint(kind, &my_endpoint))?;
             client::send_blob(ws, channel_id, &my_blob).await?;
@@ -401,7 +430,11 @@ async fn exchange_and_establish(
             }
 
             crate::log_info!(transport = %kind, "endpoint exchanged, establishing transport");
-            Ok((transport.establish(role, &psk, peer_endpoint).await?, None))
+            Ok((
+                transport.establish(role, &psk, peer_endpoint).await?,
+                None,
+                false,
+            ))
         }
         Role::Receiver => {
             let peer_blob = client::recv_blob(ws).await?;
@@ -417,6 +450,14 @@ async fn exchange_and_establish(
             }
 
             let offer = read_offer(peer_endpoint)?;
+            // 对端多流能力：QUIC 端点清单里的显式字段；解析失败按不支持回退。
+            let peer_multi_stream = match peer_kind {
+                TransportKind::Quic => {
+                    crate::transport::quic::bundle::QuicEndpoint::decode(peer_endpoint)
+                        .map(|endpoint| endpoint.multi_stream)
+                        .unwrap_or(false)
+                }
+            };
             let mut transport = build_transport(opts, peer_kind, &observed, fingerprint)?;
             let my_endpoint = transport.prepare().await?;
             let my_blob = aead::seal(k, &aad, &wrap_endpoint(peer_kind, &my_endpoint))?;
@@ -425,9 +466,14 @@ async fn exchange_and_establish(
             crate::log_info!(
                 transport = %peer_kind,
                 auto = opts.transport.is_none(),
+                peer_multi_stream,
                 "endpoint exchanged, establishing transport"
             );
-            Ok((transport.establish(role, &psk, peer_endpoint).await?, offer))
+            Ok((
+                transport.establish(role, &psk, peer_endpoint).await?,
+                offer,
+                peer_multi_stream,
+            ))
         }
     }
 }
@@ -524,15 +570,15 @@ mod tests {
             parse_endpoint(&[b'X', b'X', 1, 2, b'p']),
             Err(SessionError::BadEndpointHeader(_))
         ));
-        // v2 + wire 2 是合法头（QUIC）；版本字节不对 / wire 码不对都要明确报错
-        assert!(parse_endpoint(&[b'H', b'E', 2, 2, b'p']).is_ok());
+        // v3 + wire 2 是合法头（QUIC）；版本字节不对 / wire 码不对都要明确报错
+        assert!(parse_endpoint(&[b'H', b'E', 3, 2, b'p']).is_ok());
         assert!(matches!(
-            parse_endpoint(&[b'H', b'E', 1, 2, b'p']),
+            parse_endpoint(&[b'H', b'E', 2, 2, b'p']),
             Err(SessionError::BadEndpointHeader(h)) if h.contains("version")
         ));
         // 旧版 WireGuard wire 码 1 → 专门的 LegacyPeerTransport（提示对端升级）
         assert!(matches!(
-            parse_endpoint(&[b'H', b'E', 2, 1, b'p']),
+            parse_endpoint(&[b'H', b'E', 3, 1, b'p']),
             Err(SessionError::LegacyPeerTransport { wire: 1 })
         ));
     }

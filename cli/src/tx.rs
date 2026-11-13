@@ -92,15 +92,28 @@ pub async fn run(
     opts.multi_stream_capable = matches!(&source, orchestrate::PayloadSource::File(_));
     let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
     let (_, code) = wordlist::generate_transfer_code(&mut rng, 3);
+    let device_dir = config::dir();
+    let (identity, contacts, _send_lease) = tokio::task::spawn_blocking(move || {
+        let identity = hermod_core::identity::Identity::load_or_create(&device_dir)?;
+        let contacts = hermod_core::contacts::Contacts::open(&device_dir)?;
+        let lease = contacts.acquire_send_lease()?;
+        Ok::<_, hermod_core::identity::Error>((identity, contacts, lease))
+    })
+    .await??;
+    verbosity::status(format!("Device ID: {}", identity.device_id()));
     let mut tx = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
-        session::sender_session_with_ready(&cfg, &code, &opts, || {
+        session::sender_device_session(&cfg, &code, &opts, &identity, &contacts, args.pair, || {
             eprintln!("Transfer code: {code}")
         }),
     )
     .await
     .map_err(|_| "handshake timed out")?
     .map_err(util::boxed)?;
+    if args.pair {
+        verbosity::status("Device pairing confirmed.");
+    }
+    verbosity::status("Receiver authenticated; transfer code is no longer active.");
     if let Ok(mut s) = abort_slot.lock() {
         *s = Some(tx.conn.abort_handle());
     }

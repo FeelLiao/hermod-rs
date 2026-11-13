@@ -23,13 +23,42 @@ pub async fn run(
     let cfg = config::load().map_err(util::boxed)?;
 
     verbosity::debug(format!("server_url={}", cfg.server_url));
-    let mut rx = tokio::time::timeout(
-        HANDSHAKE_TIMEOUT,
-        session::receiver_session_with(&cfg, &args.code, &opts),
-    )
+    let mut rx = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
+        if let Some(target) = &args.from {
+            let dir = config::dir();
+            let target = target.clone();
+            let (identity, contacts, peer) = tokio::task::spawn_blocking(move || {
+                let identity = hermod_core::identity::Identity::load_or_create(&dir)?;
+                let contacts = hermod_core::contacts::Contacts::open(&dir)?;
+                let peer = contacts.resolve(&target)?;
+                Ok::<_, hermod_core::identity::Error>((identity, contacts, peer))
+            })
+            .await??;
+            Ok::<_, Box<dyn std::error::Error>>(
+                session::receiver_device_session(&cfg, &peer, &opts, &identity, &contacts).await?,
+            )
+        } else {
+            let code = args.code.as_deref().ok_or("transfer code is required")?;
+            if args.pair {
+                let dir = config::dir();
+                let (identity, contacts) = tokio::task::spawn_blocking(move || {
+                    let identity = hermod_core::identity::Identity::load_or_create(&dir)?;
+                    let contacts = hermod_core::contacts::Contacts::open(&dir)?;
+                    Ok::<_, hermod_core::identity::Error>((identity, contacts))
+                })
+                .await??;
+                let session =
+                    session::receiver_pairing_session(&cfg, code, &opts, &identity, &contacts)
+                        .await?;
+                verbosity::status("Device pairing confirmed.");
+                Ok(session)
+            } else {
+                Ok(session::receiver_session_with(&cfg, code, &opts).await?)
+            }
+        }
+    })
     .await
-    .map_err(|_| "handshake timed out")?
-    .map_err(util::boxed)?;
+    .map_err(|_| "handshake timed out")??;
     // 连接已建立：把中止句柄交给 Ctrl+C 处理器（取消时对端立刻收到 RST）。
     if let Ok(mut s) = abort_slot.lock() {
         *s = Some(rx.conn.abort_handle());

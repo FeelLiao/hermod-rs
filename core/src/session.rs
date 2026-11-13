@@ -36,6 +36,11 @@ use crate::transport::iface::{Transport, TransportKind};
 use crate::transport::{AnyConnection, AnyTransport, TransportError};
 use sha2::{Digest, Sha256};
 
+pub mod device;
+mod dual;
+pub use device::{receiver_pairing_session, sender_device_session};
+pub use dual::{receiver_device_session, sender_dual_session};
+
 /// 端点头 magic。
 const ENDPOINT_MAGIC: [u8; 2] = *b"HE";
 /// 端点头版本。（v1 = 含 WireGuard 的历史协议；v2 = QUIC-only 直连流载荷；
@@ -47,6 +52,8 @@ const ENDPOINT_HEADER_LEN: usize = 4;
 /// 会话建立错误。
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
+    #[error("device authentication: {0}")]
+    Authentication(String),
     #[error("options: {0}")]
     Options(String),
     #[error("config: {0}")]

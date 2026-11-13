@@ -53,6 +53,8 @@ fn usage(output: Output) -> String {
 fn help_and_version_are_successful_stdout() {
     let sandbox = Sandbox::new();
     for args in [
+        &["device", "--help"][..],
+        &["device", "rename", "--help"][..],
         &["--help"][..],
         &["--version"],
         &["tx", "--help"],
@@ -86,6 +88,11 @@ fn invalid_arguments_fail_before_config_or_network() {
         vec!["--ipv6", "serve", "--ipv4"],
         vec!["tx"],
         vec!["rx"],
+        vec!["rx", "1-a-b-c", "--from", "Laptop"],
+        vec!["rx", "--from", "Laptop", "--pair"],
+        vec!["rx", "--pair"],
+        vec!["device", "rename", "invalid-id", "Laptop"],
+        vec!["device", "id", "--streams", "1"],
         vec!["tx", "text", "--congestion", "reno"],
         vec!["tx", "text", "--profile", "compatible"],
         vec!["tx", "text", "--streams", "9"],
@@ -192,6 +199,61 @@ fn environment_port_is_validated_and_explicit_default_wins() {
         assert!(!String::from_utf8_lossy(&output.stderr).contains("HERMOD_PORT"));
     }
 }
+#[test]
+fn device_commands_persist_identity_and_manage_local_remarks() {
+    let sandbox = Sandbox::new();
+    let first = sandbox.run(&["device", "id"]);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let id = String::from_utf8(first.stdout).unwrap();
+    assert_eq!(id.trim().len(), 32);
+    assert!(first.stderr.is_empty());
+    assert_eq!(sandbox.run(&["device", "id"]).stdout, id.as_bytes());
+    assert!(sandbox.run(&["device", "list"]).stdout.is_empty());
+    let peer_dir = sandbox.0.join("peer");
+    let peer = hermod_core::identity::Identity::load_or_create(&peer_dir).unwrap();
+    let contacts = hermod_core::contacts::Contacts::open(&sandbox.0.join("hermod")).unwrap();
+    contacts
+        .stage_pairing(
+            peer.device_id(),
+            peer.public_key(),
+            "",
+            "cli-pair",
+            [19; 32],
+        )
+        .unwrap();
+    contacts
+        .confirm_pairing(peer.device_id(), "cli-pair")
+        .unwrap();
+    let peer_id = peer.device_id().to_string();
+    let rename = sandbox.run(&["device", "rename", &peer_id, "我的笔记本"]);
+    assert!(
+        rename.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rename.stderr)
+    );
+    assert!(rename.stdout.is_empty());
+    let list = sandbox.run(&["device", "list"]);
+    assert!(list.status.success());
+    let list = String::from_utf8(list.stdout).unwrap();
+    assert!(list.contains(&peer_id) && list.contains("我的笔记本"));
+    assert!(!list.contains(&"13".repeat(32)));
+    let remove = sandbox.run(&["device", "remove", &peer_id]);
+    assert!(remove.status.success());
+    assert!(sandbox.run(&["device", "list"]).stdout.is_empty());
+    let bytes = std::fs::read(sandbox.0.join("hermod/device-state/device.json")).unwrap();
+    std::fs::write(sandbox.0.join("hermod/device-state/device.json"), "broken").unwrap();
+    assert_eq!(sandbox.run(&["device", "id"]).status.code(), Some(1));
+    assert_eq!(
+        std::fs::read(sandbox.0.join("hermod/device-state/device.json")).unwrap(),
+        b"broken"
+    );
+    assert!(!bytes.is_empty());
+}
+
 #[test]
 fn config_does_not_supply_tuning_or_defaults() {
     let sandbox = Sandbox::new();

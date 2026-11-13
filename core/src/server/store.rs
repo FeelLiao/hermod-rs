@@ -33,6 +33,8 @@ struct MemChannel {
     /// [0] = 接收端存的，[1] = 发送端存的。
     blobs: [Vec<u8>; 2],
     owner: Option<String>,
+    /// 分配连接代号，用于防止旧连接清理已复用的频道。
+    owner_conn_id: Option<u64>,
 }
 
 impl MemoryStore {
@@ -54,6 +56,26 @@ impl MemoryStore {
         ttl: Duration,
         remote: std::net::SocketAddr,
     ) -> Result<(), String> {
+        self.allocate_inner(id, ttl, remote, None)
+    }
+
+    pub(super) fn allocate_channel_owned(
+        &self,
+        id: u16,
+        ttl: Duration,
+        remote: std::net::SocketAddr,
+        conn_id: u64,
+    ) -> Result<(), String> {
+        self.allocate_inner(id, ttl, remote, Some(conn_id))
+    }
+
+    fn allocate_inner(
+        &self,
+        id: u16,
+        ttl: Duration,
+        remote: std::net::SocketAddr,
+        owner_conn_id: Option<u64>,
+    ) -> Result<(), String> {
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         if inner.channels.contains_key(&id) {
             return Err(format!("channel {id} already exists"));
@@ -72,6 +94,7 @@ impl MemoryStore {
                 id,
                 MemChannel {
                     expires: Some(Instant::now() + ttl),
+                    owner_conn_id,
                     owner: Some(prefix),
                     ..MemChannel::default()
                 },
@@ -81,6 +104,7 @@ impl MemoryStore {
                 id,
                 MemChannel {
                     expires: Some(Instant::now() + ttl),
+                    owner_conn_id,
                     ..MemChannel::default()
                 },
             );
@@ -113,6 +137,46 @@ impl MemoryStore {
         Ok(())
     }
 
+    pub(super) fn channel_owner(&self, id: u16) -> Option<u64> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .channels
+            .get(&id)
+            .and_then(|ch| ch.owner_conn_id)
+    }
+
+    pub(super) fn store_blob_owned(
+        &self,
+        id: u16,
+        owner: u64,
+        sender: bool,
+        blob: &[u8],
+    ) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let channel = inner
+            .channels
+            .get_mut(&id)
+            .filter(|ch| ch.owner_conn_id == Some(owner))
+            .ok_or_else(|| "channel lease lost".to_string())?;
+        if !channel.expires.is_some_and(|t| Instant::now() <= t) {
+            return Err("channel expired".into());
+        }
+        channel.blobs[usize::from(sender)] = blob.to_vec();
+        Ok(())
+    }
+
+    pub(super) fn record_failure_owned(&self, id: u16, owner: u64) -> Result<usize, String> {
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let channel = inner
+            .channels
+            .get_mut(&id)
+            .filter(|ch| ch.owner_conn_id == Some(owner))
+            .ok_or_else(|| "channel lease lost".to_string())?;
+        channel.failures += 1;
+        Ok(channel.failures)
+    }
+
     /// 取指定侧存过的 blob（没有则 None；频道不存在也返回 None，与 Go 一致）。
     pub fn fetch_blob(&self, id: u16, sender: bool) -> Result<Option<Vec<u8>>, String> {
         let inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
@@ -142,6 +206,20 @@ impl MemoryStore {
         Self::delete_locked(&mut inner, id);
     }
 
+    pub(super) fn delete_channel_if_owner(&self, id: u16, conn_id: u64) -> bool {
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        if inner
+            .channels
+            .get(&id)
+            .is_some_and(|ch| ch.owner_conn_id == Some(conn_id))
+        {
+            Self::delete_locked(&mut inner, id);
+            true
+        } else {
+            false
+        }
+    }
+
     fn delete_locked(inner: &mut Inner, id: u16) {
         if let Some(channel) = inner.channels.remove(&id)
             && let Some(owner) = channel.owner
@@ -156,14 +234,21 @@ impl MemoryStore {
 
     /// 清理过期频道，返回被清的 ID（调用方据此收尾陈旧 waiter）。
     pub fn purge_expired(&self) -> Vec<u16> {
+        self.purge_expired_owned()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    pub(super) fn purge_expired_owned(&self) -> Vec<(u16, Option<u64>)> {
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        let expired: Vec<u16> = inner
+        let expired: Vec<_> = inner
             .channels
             .iter()
             .filter(|(_, ch)| ch.expires.is_some_and(|t| Instant::now() > t))
-            .map(|(id, _)| *id)
+            .map(|(id, ch)| (*id, ch.owner_conn_id))
             .collect();
-        for id in &expired {
+        for (id, _) in &expired {
             Self::delete_locked(&mut inner, *id);
         }
         expired
@@ -177,6 +262,59 @@ mod tests {
 
     fn addr(ip: &str) -> SocketAddr {
         format!("{ip}:1234").parse().unwrap()
+    }
+
+    #[test]
+    fn stale_owner_cannot_mutate_or_drop_reused_channel() {
+        let store = MemoryStore::new(1);
+        let remote = addr("203.0.113.1");
+        store
+            .allocate_channel_owned(7, Duration::from_secs(60), remote, 10)
+            .unwrap();
+        assert!(store.delete_channel_if_owner(7, 10));
+        store
+            .allocate_channel_owned(7, Duration::from_secs(60), remote, 11)
+            .unwrap();
+        assert!(store.store_blob_owned(7, 10, true, b"stale").is_err());
+        assert!(store.record_failure_owned(7, 10).is_err());
+        assert!(!store.delete_channel_if_owner(7, 10));
+        assert_eq!(store.fetch_blob(7, true).unwrap(), Some(Vec::new()));
+        assert_eq!(store.record_failure_owned(7, 11).unwrap(), 1);
+        store.store_blob_owned(7, 11, true, b"fresh").unwrap();
+        assert_eq!(store.fetch_blob(7, true).unwrap(), Some(b"fresh".to_vec()));
+    }
+
+    #[test]
+    fn owner_cleanup_releases_quota_without_deleting_reused_channel() {
+        let store = MemoryStore::new(1);
+        let remote = addr("203.0.113.1");
+        store
+            .allocate_channel_owned(7, Duration::from_secs(60), remote, 10)
+            .unwrap();
+        assert!(!store.delete_channel_if_owner(7, 9));
+        assert!(store.channel_exists(7));
+        assert!(store.delete_channel_if_owner(7, 10));
+        store
+            .allocate_channel_owned(7, Duration::from_secs(60), remote, 11)
+            .unwrap();
+        assert!(!store.delete_channel_if_owner(7, 10));
+        assert!(store.channel_exists(7));
+    }
+
+    #[test]
+    fn expired_owner_snapshot_cannot_delete_new_generation() {
+        let store = MemoryStore::new(1);
+        let remote = addr("203.0.113.1");
+        store
+            .allocate_channel_owned(7, Duration::ZERO, remote, 10)
+            .unwrap();
+        let expired = store.purge_expired_owned();
+        assert_eq!(expired, vec![(7, Some(10))]);
+        store
+            .allocate_channel_owned(7, Duration::from_secs(60), remote, 11)
+            .unwrap();
+        assert!(!store.delete_channel_if_owner(expired[0].0, expired[0].1.unwrap()));
+        assert!(store.channel_exists(7));
     }
 
     #[test]

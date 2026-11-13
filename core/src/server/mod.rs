@@ -14,6 +14,7 @@
 //! tokio Mutex 保证。锁序恒为 waiters → sink，无环，不会死锁。
 
 pub mod cert;
+mod devices;
 pub mod ratelimit;
 pub mod reflector;
 pub mod store;
@@ -69,6 +70,7 @@ pub struct Server {
     cert_pem: String,
     next_conn_id: AtomicU64,
     waiters: Mutex<HashMap<u16, Vec<Waiter>>>,
+    devices: devices::Devices,
 }
 
 #[derive(Clone)]
@@ -76,6 +78,8 @@ struct Waiter {
     sink: WsSink,
     is_sender: bool,
     conn_id: u64,
+    device_call_token: Option<String>,
+    channel_owner_conn_id: Option<u64>,
 }
 
 impl Waiter {
@@ -124,6 +128,7 @@ impl Server {
             cert_pem,
             next_conn_id: AtomicU64::new(0),
             waiters: Mutex::new(HashMap::new()),
+            devices: devices::Devices::default(),
         })
     }
 
@@ -141,7 +146,7 @@ impl Server {
             loop {
                 tick.tick().await;
                 round += 1;
-                let expired = this.store.purge_expired();
+                let expired = this.store.purge_expired_owned();
                 if !expired.is_empty() {
                     this.purge_expired_waiters(expired).await;
                 }
@@ -201,7 +206,7 @@ impl Server {
             inner: tls,
         };
         match (head.method.as_str(), head.path.as_str()) {
-            ("GET", "/ws") => {
+            ("GET", "/ws" | "/device") => {
                 // 浏览器来源的跨域 WS 一律拒绝（对应 Go CheckOrigin）；
                 // CLI/GUI 客户端不带 Origin，不受影响。
                 if head.has_origin {
@@ -237,7 +242,12 @@ impl Server {
                         return;
                     }
                 };
-                self.serve_client(ws, remote).await;
+                if head.path == "/device" {
+                    let conn_id = self.next_conn_id.fetch_add(1, Ordering::Relaxed);
+                    self.devices.serve(&self, ws, conn_id).await;
+                } else {
+                    self.serve_client(ws, remote).await;
+                }
             }
             ("GET", "/cert") => {
                 if !self.cert_rl.allow(remote) {
@@ -314,14 +324,20 @@ impl Server {
         channel_id: u16,
         conn_id: u64,
     ) {
-        if let Err(error) = self
-            .store
-            .allocate_channel(channel_id, self.limits.ttl, remote)
+        if let Err(error) =
+            self.store
+                .allocate_channel_owned(channel_id, self.limits.ttl, remote, conn_id)
         {
             crate::log_warn!(channel_id, remote = %remote, error = %error, "channel allocation failed");
             send_error(sink, "could not allocate channel").await;
             return;
         }
+        let mut random = [0; 32];
+        if getrandom::fill(&mut random).is_err() {
+            self.store.delete_channel_if_owner(channel_id, conn_id);
+            return;
+        }
+        let device_call_token = crate::signal::device::hex(&random);
         // 持锁完成：清陈旧 waiter → ok → ready → 入列（与 Go 相同的原子性）。
         let mut map = self.waiters.lock().await;
         let mut stale = Vec::new();
@@ -333,7 +349,9 @@ impl Server {
                 false
             }
         });
-        let payload = serde_json::to_vec(&public_ip_response(remote.ip())).unwrap_or_default();
+        let mut response = public_ip_response(remote.ip());
+        response["device_call_token"] = serde_json::Value::String(device_call_token.clone());
+        let payload = serde_json::to_vec(&response).unwrap_or_default();
         send_msg(sink, &Message::ok(channel_id, payload)).await;
         let receiver_waiting = map
             .entry(channel_id)
@@ -348,6 +366,8 @@ impl Server {
             sink: sink.clone(),
             is_sender: true,
             conn_id,
+            device_call_token: Some(device_call_token),
+            channel_owner_conn_id: Some(conn_id),
         });
         drop(map);
         for waiter in stale {
@@ -355,7 +375,8 @@ impl Server {
             waiter.close().await;
         }
         crate::log_info!(channel_id, remote = %remote, "channel allocated");
-        self.relay(sink, source, channel_id, true).await;
+        self.relay(sink, source, channel_id, true, conn_id, conn_id)
+            .await;
     }
 
     /// join：限流 → 频道必须存在 → 拒绝重复接收端 → 持锁完成 ready/ok/入列 → 中继。
@@ -382,6 +403,11 @@ impl Server {
         }
 
         let mut map = self.waiters.lock().await;
+        let Some(channel_owner) = self.store.channel_owner(channel_id) else {
+            drop(map);
+            send_error(sink, "operation failed").await;
+            return;
+        };
         let entry = map.entry(channel_id).or_default();
         if entry.iter().any(|waiter| !waiter.is_sender) {
             crate::log_warn!(channel_id, remote = %remote, "duplicate receiver rejected");
@@ -400,15 +426,26 @@ impl Server {
             sink: sink.clone(),
             is_sender: false,
             conn_id,
+            device_call_token: None,
+            channel_owner_conn_id: Some(channel_owner),
         });
         drop(map);
 
         crate::log_info!(channel_id, remote = %remote, "receiver joined channel");
-        self.relay(sink, source, channel_id, false).await;
+        self.relay(sink, source, channel_id, false, conn_id, channel_owner)
+            .await;
     }
 
     /// 中继循环：读本端的 blob 消息并转发给对端。
-    async fn relay(&self, sink: &WsSink, mut source: WsSource, channel_id: u16, is_sender: bool) {
+    async fn relay(
+        &self,
+        sink: &WsSink,
+        mut source: WsSource,
+        channel_id: u16,
+        is_sender: bool,
+        conn_id: u64,
+        channel_owner: u64,
+    ) {
         let role = if is_sender { "sender" } else { "receiver" };
         crate::log_debug!(channel_id, role, "relay loop started");
         let mut blob_count = 0_usize;
@@ -437,9 +474,17 @@ impl Server {
                         send_error(sink, "blob limit exceeded").await;
                         break;
                     }
-                    if let Err(error) = self.store.store_blob(channel_id, is_sender, &msg.payload) {
+                    if let Err(error) = self.store.store_blob_owned(
+                        channel_id,
+                        channel_owner,
+                        is_sender,
+                        &msg.payload,
+                    ) {
                         crate::log_warn!(channel_id, role, error = %error, "failed to store blob");
-                        let message = if self.record_failure_and_drop(channel_id).await {
+                        let message = if self
+                            .record_failure_and_drop(channel_id, channel_owner)
+                            .await
+                        {
                             "handshake data store failed: channel terminated"
                         } else {
                             "handshake data store failed"
@@ -451,7 +496,10 @@ impl Server {
                         let map = self.waiters.lock().await;
                         map.get(&channel_id)
                             .and_then(|waiters| {
-                                waiters.iter().find(|waiter| waiter.is_sender != is_sender)
+                                waiters.iter().find(|waiter| {
+                                    waiter.is_sender != is_sender
+                                        && waiter.channel_owner_conn_id == Some(channel_owner)
+                                })
                             })
                             .cloned()
                     };
@@ -464,7 +512,8 @@ impl Server {
                 }
                 _ => {
                     crate::log_warn!(channel_id, role, msg_type = ?msg.msg_type, "unexpected message type in relay");
-                    self.record_failure_and_drop(channel_id).await;
+                    self.record_failure_and_drop(channel_id, channel_owner)
+                        .await;
                     send_error(sink, "unexpected message type").await;
                     break;
                 }
@@ -475,17 +524,24 @@ impl Server {
             let mut map = self.waiters.lock().await;
             let mut peer = None;
             if let Some(waiters) = map.get_mut(&channel_id) {
+                let owns_lease = waiters.iter().any(|waiter| waiter.is_same_conn(sink));
                 waiters.retain(|waiter| {
                     if waiter.is_same_conn(sink) {
                         false
                     } else {
-                        peer = Some(waiter.clone());
+                        if owns_lease && waiter.channel_owner_conn_id == Some(channel_owner) {
+                            peer = Some(waiter.clone());
+                        }
                         true
                     }
                 });
                 if waiters.is_empty() {
                     map.remove(&channel_id);
                 }
+            }
+            // 删除与 waiter 摘除同属本次清理；旧代不能释放新分配的频道。
+            if is_sender {
+                self.store.delete_channel_if_owner(channel_id, conn_id);
             }
             peer
         };
@@ -500,13 +556,23 @@ impl Server {
         crate::log_debug!(channel_id, role, "relay loop ended");
     }
 
-    async fn purge_expired_waiters(&self, ids: Vec<u16>) {
+    async fn purge_expired_waiters(&self, ids: Vec<(u16, Option<u64>)>) {
         let mut to_close = Vec::new();
         {
             let mut map = self.waiters.lock().await;
-            for id in ids {
-                if let Some(waiters) = map.remove(&id) {
-                    to_close.extend(waiters);
+            for (id, owner) in ids {
+                if let Some(waiters) = map.get_mut(&id) {
+                    waiters.retain(|waiter| {
+                        if waiter.channel_owner_conn_id == owner {
+                            to_close.push(waiter.clone());
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                    if waiters.is_empty() {
+                        map.remove(&id);
+                    }
                 }
             }
         }
@@ -516,14 +582,26 @@ impl Server {
     }
 
     /// 弃置频道：给所有连接发最终错误并关闭，再从存储删除。可安全重复调用。
-    async fn drop_channel(&self, channel_id: u16) {
-        let conns = self
-            .waiters
-            .lock()
-            .await
-            .remove(&channel_id)
-            .unwrap_or_default();
-        self.store.delete_channel(channel_id);
+    async fn drop_channel_if_owner(&self, channel_id: u16, owner: u64) {
+        let conns = {
+            let mut map = self.waiters.lock().await;
+            self.store.delete_channel_if_owner(channel_id, owner);
+            let mut conns = Vec::new();
+            if let Some(waiters) = map.get_mut(&channel_id) {
+                waiters.retain(|waiter| {
+                    if waiter.channel_owner_conn_id == Some(owner) {
+                        conns.push(waiter.clone());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                if waiters.is_empty() {
+                    map.remove(&channel_id);
+                }
+            }
+            conns
+        };
         for waiter in &conns {
             waiter
                 .send(&Message {
@@ -540,13 +618,13 @@ impl Server {
     }
 
     /// 记一次协议失败；达到上限返回 true（频道已被弃置）。
-    async fn record_failure_and_drop(&self, channel_id: u16) -> bool {
-        match self.store.record_failure(channel_id) {
+    async fn record_failure_and_drop(&self, channel_id: u16, owner: u64) -> bool {
+        match self.store.record_failure_owned(channel_id, owner) {
             Err(_) => true, // 频道可能已被删；按终态处理
             Ok(count) => {
                 if count >= self.limits.max_cpace_failures {
                     crate::log_warn!(channel_id, "CPace failure limit reached — dropping channel");
-                    self.drop_channel(channel_id).await;
+                    self.drop_channel_if_owner(channel_id, owner).await;
                     true
                 } else {
                     false

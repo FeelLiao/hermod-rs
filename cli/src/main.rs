@@ -1,6 +1,7 @@
 //! Hermod CLI 入口 —— `hermod-core` 的薄封装（D17）。
 
 mod cli;
+mod device;
 mod progress;
 mod rx;
 mod serve;
@@ -108,6 +109,7 @@ async fn run(
         cli::Command::Tx(a) => tx::run(a, args.network.options(false, family)?, abort_slot).await,
         cli::Command::Rx(a) => rx::run(a, args.network.options(true, family)?, abort_slot).await,
         cli::Command::Trust(a) => trust::run(a, family).await,
+        cli::Command::Device(a) => device::run(a),
         // serve 不用全局 abort 槽：服务器常驻，Ctrl+C 由 main 的全局处理器结束进程。
         cli::Command::Serve(a) => serve::run(a, family).await,
     }

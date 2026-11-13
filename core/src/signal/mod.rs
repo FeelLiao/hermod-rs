@@ -2,5 +2,6 @@
 //! Rust 信令服务实现位于 [`crate::server`]，不与客户端模块混放。
 
 pub mod client;
+pub mod device;
 pub mod protocol;
 pub mod tls;

@@ -62,7 +62,9 @@
 //! [`crypto::kdf::derive_wg_psk`]，上面 `k = [0u8; 32]` 只是占位。
 
 pub mod config;
+pub mod contacts;
 pub mod crypto;
+pub mod identity;
 pub mod log;
 pub mod options;
 pub mod orchestrate;

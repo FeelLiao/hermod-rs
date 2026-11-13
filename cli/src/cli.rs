@@ -97,12 +97,14 @@ pub struct Cli {
 pub enum Command {
     #[command(about = "Send a file, text, or stdin")]
     Tx(TxArgs),
-    #[command(about = "Receive using a transfer code")]
+    #[command(about = "Receive using a transfer code or a paired device")]
     Rx(RxArgs),
     #[command(about = "Fetch and pin a signaling server's SPKI fingerprint")]
     Trust(TrustArgs),
     #[command(about = "Start the signaling and NAT helper service")]
     Serve(ServeArgs),
+    #[command(about = "Manage this device identity and paired contacts")]
+    Device(DeviceArgs),
 }
 #[derive(Args, Debug, Default)]
 pub struct NetworkArgs {
@@ -242,7 +244,7 @@ impl Cli {
                 }
                 args.resolved_port()?;
             }
-            Command::Trust(_) => {
+            Command::Trust(_) | Command::Device(_) => {
                 if self.network.explicit() {
                     return Err("data-plane options are only valid with tx/rx".into());
                 }
@@ -297,14 +299,51 @@ fn parse_size_usize(text: &str) -> Result<usize, String> {
 pub struct TxArgs {
     #[arg(help = "File path, text, or - for stdin")]
     pub input: String,
+    #[arg(
+        long,
+        help = "Explicitly pair devices; the receiver must also pass --pair"
+    )]
+    pub pair: bool,
 }
 #[derive(Args, Debug)]
 pub struct RxArgs {
-    #[arg(help = "Transfer code")]
-    pub code: String,
+    #[arg(
+        help = "Transfer code",
+        required_unless_present = "from",
+        conflicts_with = "from"
+    )]
+    pub code: Option<String>,
+    #[arg(long, value_name = "DEVICE", conflicts_with_all = ["code", "pair"], help = "Receive from a paired device ID or an unambiguous local remark")]
+    pub from: Option<String>,
+    #[arg(
+        long,
+        requires = "code",
+        help = "Explicitly pair devices; the sender must also pass --pair"
+    )]
+    pub pair: bool,
     #[arg(short = 'd', long, default_value = ".", help = "Output directory")]
     pub output: std::path::PathBuf,
 }
+#[derive(Args, Debug)]
+pub struct DeviceArgs {
+    #[command(subcommand)]
+    pub command: DeviceCommand,
+}
+#[derive(Subcommand, Debug)]
+pub enum DeviceCommand {
+    #[command(about = "Show this installation's stable device ID")]
+    Id,
+    #[command(about = "List paired devices without exposing secrets")]
+    List,
+    #[command(about = "Set a local remark; does not change the device identity")]
+    Rename {
+        id: hermod_core::identity::DeviceId,
+        name: String,
+    },
+    #[command(about = "Remove local trust in a paired device")]
+    Remove { id: hermod_core::identity::DeviceId },
+}
+
 #[derive(Args, Debug)]
 pub struct TrustArgs {
     #[arg(help = "Server URL or host:port")]

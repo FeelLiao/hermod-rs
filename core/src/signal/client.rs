@@ -49,12 +49,29 @@ pub async fn connect_pinned_with_family(
     expected_spki: [u8; 32],
     family: IpFamily,
 ) -> Result<WsStream, ClientError> {
-    let request = ws_endpoint(url).into_client_request()?;
+    connect_endpoint_pinned_with_family(&ws_endpoint(url), expected_spki, family).await
+}
+
+/// 连接完整端点 URL，保留路径；旧连接 API 仍自动补 `/ws`。
+pub async fn connect_endpoint_pinned_with_family(
+    url: &str,
+    expected_spki: [u8; 32],
+    family: IpFamily,
+) -> Result<WsStream, ClientError> {
+    let request = url.into_client_request()?;
     let tcp = connect_request_tcp(&request, family).await?;
     let config = pinned_client_config(expected_spki);
     let connector = Connector::Rustls(config);
+    let websocket_config = if request.uri().path() == "/device" {
+        let mut config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
+        config.max_message_size = Some(64 * 1024);
+        config.max_frame_size = Some(64 * 1024);
+        Some(config)
+    } else {
+        None
+    };
     let (stream, _response) =
-        client_async_tls_with_config(request, tcp, None, Some(connector)).await?;
+        client_async_tls_with_config(request, tcp, websocket_config, Some(connector)).await?;
     Ok(stream)
 }
 

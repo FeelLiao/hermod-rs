@@ -60,7 +60,11 @@ core/src/
 │   ├── mod.rs        #   AnyTransport/AnyConnection runtime dispatch
 │   ├── network.rs    #   address enumeration / candidate filtering (shared)
 │   ├── quic/         #   implementation: quinn + rustls, self-signed pins
+├── identity.rs       # persistent P-256 identity and canonical device ID
+├── identity/storage.rs # private files, permissions, transaction locks
+├── contacts.rs       # remarks, pending/active pairings, sending lease
 ├── session.rs        # one hop: transfer code → established connection
+├── session/          # signed pairing and dual-door device rendezvous
 ├── orchestrate.rs    # tx/rx framing + verdict on top of a connection
 ├── transfer.rs       # payload semantics: Kind, paths, hashing, offers
 ├── config.rs         # Go-compatible YAML schema, trusted-server pins
@@ -240,12 +244,45 @@ See the example in `src/lib.rs`: two `QuicTransport`s can be established
 end-to-end without any signaling server, given a `K` and a channel id — useful
 for tests and for any future app that already shares a secret out-of-band.
 
-## Where the protocol is heading
+## Device pairing and ID rendezvous
 
-`../docs/device-id-pairing.md` drafts the planned device-identity/pairing
-extension (long-term keys, contacts, "call by device id" alongside the
-transfer-code flow). It reuses every layer described here; only
-`signal/` and `session.rs` gain new entry points.
+The CLI now opts into long-term pairing on both sides with `--pair`. Ordinary
+code transfers keep their existing protocol and do not save contacts. New public
+session entry points are `sender_device_session`, `receiver_pairing_session`,
+`sender_dual_session` and `receiver_device_session`; GUI callers of existing entry
+points are unchanged. See the [CLI device guide](../cli/README.md) for commands,
+file locations, platform permission requirements and recovery rules.
+
+A sender owns its normal `/ws` code connection and an independent authenticated
+`/device` control connection. Each ID candidate uses a separate channel; CPace
+uses the saved secret, while signatures pin the expected device and bind the
+ordered endpoint transcript. File direction is distinct from channel creation
+and CPace send order. Only an authenticated winner proceeds to confirmation;
+the other entry is cancelled. Neither call notification nor registration proof
+establishes end-to-end peer trust.
+
+Identity and contacts live under `config_dir/device-state/`. Storage fails closed
+on invalid schema or permissions; writes use cross-process locks and atomic
+replacement. Pairing confirmation supports matching pending/active recovery,
+but is not a distributed atomic transaction. Existing active secrets are not
+silently replaced, and file-transfer success remains a separate outcome.
+
+The server's registry and pending calls are in memory, bounded and associated
+with connection IDs. Registration proves possession of the claimed identity;
+channel-owner tokens restrict calls to an allocated candidate channel. No
+account database, contact list or pairing secret is stored on the server.
+QUIC payload v3 remains unchanged. New acceptance suites are
+`device_storage`, `device_control`, `device_pairing`, `device_dual` and
+`device_sessions`; they cover private storage, registration proof, interrupted
+confirmation, forged candidates and real-server file transfer. Windows tests
+must run under a token allowed to set and verify the test files' private ACLs;
+restricted execution is expected to fail closed, not skip the check. Linux
+storage permission tests are platform-specific and require a working native C
+linker in addition to Rust.
+
+The older root design draft describes the
+motivation but its automatic-pairing, Go-server and key-size details are superseded
+by this implemented CLI/core contract; no GUI or Go code is changed.
 
 ## See also
 

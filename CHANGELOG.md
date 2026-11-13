@@ -6,10 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### CLI transport tuning — implementation in progress
+## [0.5.0] - 2026-11-13
 
-Awaiting user verification; the following records the confirmed implementation
-contract, not completed acceptance or measured performance gains.
+### Device pairing
+
+- Add persistent P-256 device identities and explicit two-sided CLI `--pair`.
+- Receive from a paired device ID or an unambiguous local remark using `rx --from`.
+- Add `device id/list/rename/remove`; remarks never change the device identity.
+- Add authenticated Rust server device routing, dual-door rendezvous, recoverable
+  pairing confirmation and generation-safe channel cleanup. Payload v3 is unchanged.
+- Protect identity/contact files with private permissions and cross-process locks.
+  Windows storage and real-server integration tests pass; Linux validation remains
+  blocked by the local WSL environment's missing native C linker.
+
+### CLI transport tuning
+
+Implemented and covered by Rust workspace checks and tests. Real-network
+performance improvements have not been measured.
 
 - Tuning uses explicit CLI values for this invocation, otherwise built-in defaults;
   it is not persisted or read from YAML. Existing server/pin configuration remains.

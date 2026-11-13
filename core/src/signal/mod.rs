@@ -1,5 +1,5 @@
-//! Signaling: the WebSocket rendezvous protocol (client side) and certificate
-//! pinning. 服务端仍用 Go 版（D13）；Rust server 延后。See DEVELOPMENT.md §2.1/M2.
+//! 信令客户端：WebSocket 会合协议、CPace 握手编排与服务器 SPKI 钉扎。
+//! Rust 信令服务实现位于 [`crate::server`]，不与客户端模块混放。
 
 pub mod client;
 pub mod protocol;

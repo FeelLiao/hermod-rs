@@ -6,19 +6,14 @@
 
 use crate::cli::ServeArgs;
 use crate::{util, verbosity};
+use hermod_core::options::IpFamily;
 use hermod_core::server::{self, MemoryStore, Server, ServerLimits, cert};
-use std::net::SocketAddr;
+use hermod_core::transport::network::bind_tcp;
 use std::time::Duration;
 
 /// 执行 `serve`。
-pub async fn run(args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
-    // HERMOD_LISTEN 只在未显式传 --listen 时生效（对应 Go envOrDefault 的优先级）。
-    let listen = if args.listen == ":4376" {
-        std::env::var("HERMOD_LISTEN").unwrap_or(args.listen.clone())
-    } else {
-        args.listen.clone()
-    };
-    let addr = parse_listen(&listen)?;
+pub async fn run(args: ServeArgs, family: IpFamily) -> Result<(), Box<dyn std::error::Error>> {
+    let port = args.resolved_port()?;
 
     // 证书：配置目录 server/ 子目录（首启生成；到期前自动续期，密钥不变）。
     let cert_dir = hermod_core::config::dir().join("server");
@@ -42,9 +37,10 @@ pub async fn run(args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
         cert.cert_pem.clone(),
     );
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    // UDP 反射与 TCP 同端口（CGNAT 外部地址发现）；失败降级为仅 TCP，与 Go 一致。
-    let reflector = match server::reflector::start(addr) {
+    let listener = bind_tcp(port, family)?;
+    let addr = listener.local_addr()?;
+    // UDP 反射与 TCP 同端口（包括端口 0 动态分配）；失败降级为仅 TCP。
+    let reflector = match server::reflector::start_with_family(addr, family) {
         Ok(handle) => Some(handle),
         Err(error) => {
             crate::verbosity::info(format!(
@@ -74,33 +70,6 @@ pub async fn run(args: ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// 解析监听地址：":4376" 补全为双栈 `[::]:4376`（对应 Go `":4376"` 的语义）。
-fn parse_listen(text: &str) -> Result<SocketAddr, String> {
-    let normalized = match text.strip_prefix(':') {
-        Some(port) => format!("[::]:{port}"),
-        None => text.to_string(),
-    };
-    normalized
-        .parse()
-        .map_err(|_| format!("invalid listen address: {text}"))
-}
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn colon_listen_binds_dual_stack() {
-        let addr = parse_listen(":4376").unwrap();
-        assert_eq!(addr.port(), 4376);
-        assert!(addr.is_ipv6());
-        // 显式地址原样解析
-        let explicit = parse_listen("0.0.0.0:4376").unwrap();
-        assert!(explicit.is_ipv4());
-        assert!(parse_listen("not-an-addr").is_err());
-    }
 }

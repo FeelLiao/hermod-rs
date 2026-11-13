@@ -85,13 +85,16 @@ where
 {
     let mut fut = Box::pin(fut);
     let mut sleep = Box::pin(tokio::time::sleep(idle));
+    let mut ticks_open = true;
     loop {
         tokio::select! {
             r = &mut fut => return Ok(r),
-            tick = ticks.recv() => {
-                // 通道关闭（发送端 drop）后不再重置，让超时生效
+            tick = ticks.recv(), if ticks_open => {
+                // 通道关闭后禁用此分支，避免持续就绪导致忙循环。
                 if tick.is_some() {
                     sleep.as_mut().reset(tokio::time::Instant::now() + idle);
+                } else {
+                    ticks_open = false;
                 }
             }
             _ = &mut sleep => return Err("payload idle timeout"),
@@ -138,6 +141,64 @@ impl Default for Speed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn continuing_progress_resets_idle_deadline() {
+        let (sender, receiver) = mpsc::channel(1);
+        let payload = async move {
+            for _ in 0..5 {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+                sender.send(()).await.unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            42
+        };
+        let result = with_idle_timeout(payload, receiver, Duration::from_millis(200)).await;
+        assert_eq!(result, Ok(42));
+    }
+
+    #[tokio::test]
+    async fn no_progress_expires_even_with_open_channel() {
+        let (_sender, receiver) = mpsc::channel(1);
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            with_idle_timeout(
+                std::future::pending::<()>(),
+                receiver,
+                Duration::from_millis(30),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, Err("payload idle timeout"));
+    }
+
+    #[tokio::test]
+    async fn closed_channel_allows_payload_and_idle_timer_to_finish() {
+        let (sender, receiver) = mpsc::channel(1);
+        drop(sender);
+        let payload = async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            42
+        };
+        assert_eq!(
+            with_idle_timeout(payload, receiver, Duration::from_secs(2)).await,
+            Ok(42)
+        );
+        let (sender, receiver) = mpsc::channel(1);
+        drop(sender);
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            with_idle_timeout(
+                std::future::pending::<()>(),
+                receiver,
+                Duration::from_millis(30),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, Err("payload idle timeout"));
+    }
 
     #[test]
     fn formats_rate_in_binary_units() {

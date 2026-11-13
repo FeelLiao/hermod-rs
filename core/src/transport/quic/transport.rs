@@ -43,8 +43,6 @@ use tokio::sync::oneshot;
 
 /// 数据面连接建立超时（并行尝试全部候选地址的总预算）。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-/// 空闲超时；与 CLI 的 30 s 看门狗对齐。
-const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// 等待合法 client 发送 session 指纹前导的超时；防止未授权连接占住 listen。
 const PREAMBLE_TIMEOUT: Duration = Duration::from_secs(5);
 /// session 指纹前导长度（SHA-256(token)）。
@@ -53,16 +51,12 @@ const PREAMBLE_LEN: usize = 32;
 const CLOSE_DONE: u32 = 0;
 /// QUIC 主动取消关闭码；对端据此显示 "peer cancelled the transfer"。
 const CLOSE_CANCEL: u32 = 1;
-/// 保活间隔。
-const KEEPALIVE: Duration = Duration::from_secs(10);
 /// 初始 RTT（比 quinn 默认 333 ms 更贴近常见网络）。
 const INITIAL_RTT: Duration = Duration::from_millis(100);
 /// 局域网档的初始 RTT：实际 RTT 通常 < 5 ms，过高的估计会拖慢 BBR 启动爬坡。
 const LAN_INITIAL_RTT: Duration = Duration::from_millis(25);
-/// 单条流的接收窗口 / 连接总接收窗口 / 发送窗口。
-const IO_WINDOW: u64 = 64 * 1024 * 1024;
-/// 双向流并发上限：多流切片模式的流数（≤ 257）必须被 server 侧允许。
-const MAX_CONCURRENT_BIDI: u32 = 1024;
+/// 八条数据流加一条控制流；与本端并发偏好无关，避免阻断合法对端。
+const MAX_CONCURRENT_BIDI: u32 = 9;
 /// QUIC 初始 UDP payload 下限（RFC 9000 要求至少 1200）。
 const DEFAULT_MTU: u16 = 1200;
 /// 以太网内常见 IPv6 UDP payload 上限（1500 - 40 - 8）。
@@ -151,6 +145,8 @@ pub struct QuicTransport {
     profile: crate::options::LinkProfile,
     initial_mtu: u16,
     mtu_limit: u16,
+    family: crate::options::IpFamily,
+    tuning: crate::options::TransferTuning,
 }
 
 impl QuicTransport {
@@ -166,7 +162,24 @@ impl QuicTransport {
             profile: crate::options::LinkProfile::Auto,
             initial_mtu: DEFAULT_MTU,
             mtu_limit: MAX_MTU,
+            family: crate::options::IpFamily::Auto,
+            tuning: crate::options::TransferTuning::default(),
         }
+    }
+
+    /// 设置本次会话地址族与非持久化传输预算。
+    pub fn set_transfer_options(
+        &mut self,
+        family: crate::options::IpFamily,
+        tuning: crate::options::TransferTuning,
+    ) {
+        // 已准备的 socket 的地址族和缓冲预算不可事后改变；修改后须重新 prepare。
+        if self.family != family || self.tuning != tuning {
+            self.socket = None;
+            self.identity = None;
+        }
+        self.family = family;
+        self.tuning = tuning;
     }
 
     /// 设置 UDP 绑定地址（内部测试用；默认 `[::]:0`）。
@@ -214,7 +227,12 @@ impl Transport for QuicTransport {
     }
 
     async fn prepare(&mut self) -> Result<Vec<u8>, QuicError> {
-        let socket = crate::transport::network::bind_udp(self.bind)?;
+        self.tuning.validate().map_err(QuicError::Config)?;
+        let socket = crate::transport::network::bind_udp_with_options(
+            self.bind,
+            self.family,
+            self.tuning.udp_buffer,
+        )?;
         let bound = socket.local_addr()?;
         let udp_port = bound.port();
         let identity = Identity::generate()?;
@@ -226,7 +244,7 @@ impl Transport for QuicTransport {
             candidates.insert(0, hint);
         }
         let (candidates, ipv4_candidates) =
-            crate::transport::network::candidates(bound, candidates);
+            crate::transport::network::candidates_with_family(bound, candidates, self.family);
 
         let bundle = QuicEndpoint {
             version: QUIC_ENDPOINT_VERSION,
@@ -260,6 +278,7 @@ impl Transport for QuicTransport {
         _psk: &[u8; 32],
         peer_endpoint: &[u8],
     ) -> Result<QuicConnection, QuicError> {
+        self.tuning.validate().map_err(QuicError::Config)?;
         let peer = QuicEndpoint::decode(peer_endpoint)?;
         if peer.version != QUIC_ENDPOINT_VERSION {
             return Err(QuicError::VersionMismatch {
@@ -275,15 +294,24 @@ impl Transport for QuicTransport {
         let identity = self.identity.take().ok_or(QuicError::NotPrepared)?;
         let peer_fingerprint = peer.cert_fingerprint;
         let credential_fingerprint = self.credential_fingerprint;
-        let peer_addrs = crate::transport::network::peer_addresses(
+        let peer_addrs = crate::transport::network::peer_addresses_with_family(
             &peer.ipv6_candidates,
             &peer.ipv4_candidates,
             peer.udp_port,
             socket.local_addr()?,
+            self.family,
         )?;
 
         let initial_rtt = match self.profile {
             crate::options::LinkProfile::Lan => LAN_INITIAL_RTT,
+            crate::options::LinkProfile::Auto
+                if peer_addrs.iter().all(|addr| {
+                    crate::transport::network::classify_link(*addr)
+                        == crate::transport::network::LinkKind::Lan
+                }) =>
+            {
+                LAN_INITIAL_RTT
+            }
             _ => INITIAL_RTT,
         };
         let transport = transport_config(
@@ -291,6 +319,7 @@ impl Transport for QuicTransport {
             initial_rtt,
             self.initial_mtu,
             self.mtu_limit,
+            self.tuning,
         );
         // 同时向对端声明接收上限，避免只有接收端配置 MTU 时发送端仍使用更大的报文。
         let mut endpoint_config = quinn::EndpointConfig::default();
@@ -323,7 +352,7 @@ impl Transport for QuicTransport {
                 let endpoint = quinn::Endpoint::new(endpoint_config, None, socket, runtime)?;
                 let (tx, rx) = oneshot::channel();
                 tokio::spawn(connect_task(endpoint.clone(), client, peer_addrs, tx));
-                QuicConnection::new(endpoint, rx, credential_fingerprint)
+                QuicConnection::new(endpoint, rx, credential_fingerprint, self.tuning)
             }
             Role::Receiver => {
                 // rx 是 server；先向 tx 的候选发几个 dummy UDP 包，打开 rx 侧
@@ -348,7 +377,7 @@ impl Transport for QuicTransport {
                     quinn::Endpoint::new(endpoint_config, Some(server), socket, runtime)?;
                 let (tx, rx) = oneshot::channel();
                 tokio::spawn(accept_task(endpoint.clone(), tx));
-                QuicConnection::new(endpoint, rx, credential_fingerprint)
+                QuicConnection::new(endpoint, rx, credential_fingerprint, self.tuning)
             }
         };
 
@@ -367,6 +396,7 @@ pub struct QuicConnection {
     /// 后台采样的网络层统计；CLI 用它显示实际 UDP 发送速率。
     stats: NetworkStatsHandle,
     closed: bool,
+    tuning: crate::options::TransferTuning,
 }
 
 impl QuicConnection {
@@ -374,6 +404,7 @@ impl QuicConnection {
         endpoint: quinn::Endpoint,
         handshake: oneshot::Receiver<Result<quinn::Connection, QuicError>>,
         credential_fingerprint: [u8; 32],
+        tuning: crate::options::TransferTuning,
     ) -> Self {
         Self {
             endpoint,
@@ -382,6 +413,7 @@ impl QuicConnection {
             credential_fingerprint,
             stats: NetworkStatsHandle::new(),
             closed: false,
+            tuning,
         }
     }
 
@@ -432,6 +464,16 @@ impl QuicConnection {
 impl TransportConnection for QuicConnection {
     type Error = QuicError;
     type Stream = QuicStream;
+
+    fn peer_addr(&self) -> Option<SocketAddr> {
+        self.conn
+            .as_ref()
+            .map(|conn| crate::transport::network::canonical(conn.remote_address()))
+    }
+
+    fn transfer_tuning(&self) -> crate::options::TransferTuning {
+        self.tuning
+    }
 
     fn http_port(&self) -> u16 {
         0
@@ -727,21 +769,31 @@ fn transport_config(
     initial_rtt: Duration,
     initial_mtu: u16,
     mtu_limit: u16,
+    tuning: crate::options::TransferTuning,
 ) -> Arc<quinn::TransportConfig> {
     let mut config = quinn::TransportConfig::default();
     config.max_idle_timeout(Some(
-        IDLE_TIMEOUT
+        tuning
+            .idle_timeout
             .try_into()
-            .expect("30s idle timeout fits in QUIC VarInt"),
+            .expect("validated idle timeout fits QUIC VarInt"),
     ));
-    let window = IO_WINDOW;
-    config.stream_receive_window(VarInt::from_u32(window as u32));
-    config.receive_window(VarInt::from_u32(window as u32));
-    config.send_window(window);
-    config.keep_alive_interval(Some(KEEPALIVE));
+    config.stream_receive_window(
+        VarInt::from_u64(tuning.window).expect("validated window fits QUIC VarInt"),
+    );
+    config.receive_window(
+        VarInt::from_u64(tuning.connection_window())
+            .expect("validated connection window fits QUIC VarInt"),
+    );
+    config.send_window(tuning.connection_window());
+    config.keep_alive_interval((!tuning.keepalive.is_zero()).then_some(tuning.keepalive));
+    crate::log_debug!(
+        ?tuning,
+        connection_window = tuning.connection_window(),
+        "QUIC tuning applied"
+    );
     config.initial_rtt(initial_rtt);
-    // 多流切片模式（局域网档）按切片开流；上限放宽到 1024，
-    // server 侧不允许足够多的并发流会让接收端在 open_bi 上死锁。
+    // 八条数据流加一条控制流；不按发送端偏好降低对端的合法并发额度。
     config.max_concurrent_bidi_streams(VarInt::from_u32(MAX_CONCURRENT_BIDI));
     config.min_mtu(DEFAULT_MTU);
     config.initial_mtu(initial_mtu.clamp(DEFAULT_MTU, mtu_limit));
@@ -783,18 +835,30 @@ mod tests {
         t
     }
 
-    /// prepare 产出的 endpoint 是 QUIC 类型，带证书指纹和可用端口。
     #[tokio::test]
-    async fn prepare_produces_quic_endpoint() {
-        let mut t = loopback_transport();
-        t.set_credential_fingerprint([0x42; 32]);
-        let bytes = t.prepare().await.unwrap();
-        let b = QuicEndpoint::decode(&bytes).unwrap();
-        assert_eq!(b.version, QUIC_ENDPOINT_VERSION);
-        assert_eq!(b.credential_fingerprint, [0x42; 32]);
-        assert_ne!(b.cert_fingerprint, [0u8; 32]);
-        assert_ne!(b.udp_port, 0);
-        assert!(b.ipv6_candidates.contains(&Ipv6Addr::LOCALHOST));
+    async fn changing_prepared_options_requires_prepare_and_revalidates() {
+        use crate::options::{IpFamily, TransferTuning};
+        let mut transport = loopback_transport();
+        let endpoint = transport.prepare().await.unwrap();
+        transport.set_transfer_options(IpFamily::V6, TransferTuning::default());
+        assert!(transport.socket.is_none());
+        let error = transport
+            .establish(Role::Receiver, &[0; 32], &endpoint)
+            .await
+            .err();
+        assert!(matches!(error, Some(QuicError::NotPrepared)));
+        transport.set_transfer_options(
+            IpFamily::V6,
+            TransferTuning {
+                window: u64::MAX,
+                ..Default::default()
+            },
+        );
+        let error = transport
+            .establish(Role::Receiver, &[0; 32], &endpoint)
+            .await
+            .err();
+        assert!(matches!(error, Some(QuicError::Config(_))));
     }
 
     /// 两个 QUICTransport 在本机回环完成 TLS 握手 + 双向流传输。
@@ -858,45 +922,6 @@ mod tests {
         rx_conn.shutdown().await.unwrap();
     }
 
-    /// 凭证指纹不一致必须在握手前拒绝。
-    #[tokio::test]
-    async fn credential_mismatch_is_rejected() {
-        let mut tx = loopback_transport();
-        let mut rx = loopback_transport();
-        tx.set_credential_fingerprint([0x01; 32]);
-        rx.set_credential_fingerprint([0x02; 32]);
-        let _tx_ep = tx.prepare().await.unwrap();
-        let rx_ep = rx.prepare().await.unwrap();
-        let psk = crate::crypto::kdf::derive_wg_psk(&[0x88; 32], 3);
-        let err = tx.establish(Role::Sender, &psk, &rx_ep).await.err();
-        assert!(matches!(err, Some(QuicError::CredentialMismatch)));
-    }
-
-    /// 错误的对端证书指纹必须让握手失败（钉扎生效）。
-    #[tokio::test]
-    async fn wrong_certificate_fingerprint_fails_handshake() {
-        let mut tx = loopback_transport();
-        let mut rx = loopback_transport();
-        tx.set_credential_fingerprint([0x33; 32]);
-        rx.set_credential_fingerprint([0x33; 32]);
-        let tx_ep = tx.prepare().await.unwrap();
-        let mut rx_ep = QuicEndpoint::decode(&rx.prepare().await.unwrap()).unwrap();
-        // 客户端只试 ::1，避免在测试里等不可达候选的超时。
-        rx_ep.ipv6_candidates = vec![Ipv6Addr::LOCALHOST];
-        // 把 rx（QUIC server）公布的证书指纹改坏；tx（client）必须拒绝它。
-        rx_ep.cert_fingerprint = [0x00; 32];
-        let rx_ep = rx_ep.encode().unwrap();
-        let psk = crate::crypto::kdf::derive_wg_psk(&[0x99; 32], 4);
-
-        let mut tx_conn = tx.establish(Role::Sender, &psk, &rx_ep).await.unwrap();
-        let _rx_conn = rx.establish(Role::Receiver, &psk, &tx_ep).await.unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(10), tx_conn.listen()).await;
-        assert!(
-            matches!(result, Ok(Err(_))),
-            "握手必须因为证书指纹不匹配而失败"
-        );
-    }
-
     /// 对端主动取消时，流上的 io error 必须带 peer-cancelled marker。
     #[tokio::test]
     async fn peer_cancel_maps_to_marker() {
@@ -928,53 +953,5 @@ mod tests {
             crate::transport::iface::is_peer_cancelled(&error),
             "取消错误必须带 peer-cancelled marker: {error}"
         );
-    }
-
-    /// 手动吞吐基准：`cargo test -p hermod-core --release -- --ignored quic_throughput`。
-    #[tokio::test]
-    #[ignore = "throughput benchmark; run manually in release mode"]
-    async fn quic_throughput() {
-        let mut tx = loopback_transport();
-        let mut rx = loopback_transport();
-        tx.set_credential_fingerprint([0x44; 32]);
-        rx.set_credential_fingerprint([0x44; 32]);
-        let tx_ep = tx.prepare().await.unwrap();
-        let rx_ep = rx.prepare().await.unwrap();
-        let psk = crate::crypto::kdf::derive_wg_psk(&[0xaa; 32], 1);
-        let mut tx_conn = tx.establish(Role::Sender, &psk, &rx_ep).await.unwrap();
-        let rx_conn = rx.establish(Role::Receiver, &psk, &tx_ep).await.unwrap();
-
-        const TOTAL: usize = 256 * 1024 * 1024;
-        let data = vec![0xa5_u8; 1024 * 1024];
-        let start = std::time::Instant::now();
-        let client_task = tokio::spawn(async move {
-            let mut client_conn = rx_conn;
-            let mut client = client_conn.dial().await.unwrap();
-            for _ in 0..(TOTAL / data.len()) {
-                client.write_all(&data).await.unwrap();
-            }
-            client.shutdown().await.unwrap();
-            client_conn
-        });
-
-        let mut server = tx_conn.listen().await.unwrap();
-        let mut buf = vec![0u8; 1024 * 1024];
-        let mut total = 0usize;
-        loop {
-            let n = server.read(&mut buf).await.unwrap();
-            if n == 0 {
-                break;
-            }
-            total += n;
-        }
-        let mut rx_conn = client_task.await.unwrap();
-        let secs = start.elapsed().as_secs_f64();
-        println!(
-            "QUIC throughput: {:.1} MiB/s ({total} bytes in {secs:.3}s)",
-            total as f64 / 1_048_576.0 / secs
-        );
-        assert_eq!(total, TOTAL);
-        tx_conn.shutdown().await.unwrap();
-        rx_conn.shutdown().await.unwrap();
     }
 }

@@ -66,16 +66,20 @@ core/src/
 ├── config.rs         # Go-compatible YAML schema, trusted-server pins
 ├── options.rs        # shared CLI/GUI connection settings → SessionOptions
 └── log.rs            # tracing macros; the HOST installs the subscriber
+```
 
 Extras that Cargo knows about:
 
 ```
 core/
-├── tests/            # public-API acceptance layer, driven by an in-process relay
+├── tests/            # public-API integration targets
 │   ├── common/       #   one-shot local signaling relay + test Config helpers
+│   ├── orchestrate.rs #  orchestration integration entry point
+│   ├── orchestrate/  #   memory and QUIC integration cases
+│   ├── quic_transport.rs # endpoint lifecycle and authentication
+│   ├── server_e2e.rs #   real TLS signaling service
 │   └── e2e_full_chain.rs
 └── examples/         # manual probes; ipv6_load_probe backs latency-check.sh
-```
 ```
 
 Naming conventions to keep in mind:
@@ -195,20 +199,40 @@ any network access; both front ends call exactly this code path.
 - **Transports**: handshake/frame/streams/digest/cancel tests run QUIC
   implementations against local loops; full candidate paths additionally
   require a private IPv4 or IPv6 test interface (see root CI).
-- **End-to-end**: `orchestrate` tests drive WG+QUIC pairs through real SDU
-  pipelines; `cli/tests/interop.rs` runs the actual binary against the GUI
-  engine over a local relay, and `core/tests/e2e_full_chain.rs` is the
-  acceptance layer that opens the crate's public API the way external hosts
-  do — full session + transfer + cancel over an in-process relay.
-  `cargo bench` benchmarks were deliberately not adopted: correctness gates
-  (fmt/test/clippy/doc/deny) are the automated bars, while performance work
-  uses the manual probes (`quic_throughput` ignored test, `latency-check.sh`).
+- **Public-API integration**: [orchestration tests](tests/orchestrate.rs) drive
+  memory streams and real QUIC pairs, including distinct chunk sizes and bounded
+  concurrency. [Full-chain tests](tests/e2e_full_chain.rs) add session negotiation
+  and cancellation over an in-process relay; [server tests](tests/server_e2e.rs)
+  exercise the real TLS signaling service.
+- **Process integration**: [CLI interoperability](../cli/tests/interop.rs) runs
+  the actual binary against the GUI engine; [CLI arguments](../cli/tests/arguments.rs)
+  checks standard streams, usage errors and exit codes.
+- **Performance**: correctness gates (fmt/test/clippy/doc/deny) do not establish
+  throughput improvement. Manual probes include the ignored `quic_throughput`
+  test and `latency-check.sh`.
 
-Folder layout follows standard Rust 2018: `src/lib.rs` plus `mod` trees; a
-module with sub-files either uses `name.rs` + `name/` directory (XML-era
-style, as in `transport.rs` + `transport/quic.rs`) or `name/mod.rs`
-(deeper modules like `transport/quic`). Keep it that way — nesting mirrors the
-module hierarchy, and `cargo` tooling (doc, fmt, clippy) all assume it.
+### Source and test placement
+
+Rust distinguishes tests by visibility and compilation boundary, not by whether
+networking or async code is involved:
+
+- Small unit tests may remain inline as `#[cfg(test)] mod tests { ... }`.
+- Larger private unit suites use an ordinary child module: `#[cfg(test)] mod tests;`
+  in the implementation and `src/<module>/tests.rs` for the test body. They can
+  inspect private helpers without exposing them as public APIs. This is a layout
+  convention, not a requirement to create a separate test file for every module.
+- Tests that exercise only public APIs belong in the crate-root `tests/`
+  directory. Each top-level Rust file is a separate Cargo integration target.
+  Related cases live in submodules such as `tests/orchestrate/{memory,quic}.rs`
+  under the single `tests/orchestrate.rs` entry point.
+- Shared integration helpers belong in `tests/common/mod.rs` (or a similarly
+  named subdirectory), not a top-level helper file that Cargo treats as a test target.
+- Never add `pub`, `include!` or a cross-directory `#[path]` just to let an
+  integration test access private production code. Private assertions stay unit tests.
+
+Both `name.rs` + `name/` and `name/mod.rs` are valid Rust module layouts;
+`mod.rs` is not deprecated. Follow the surrounding module's convention rather
+than mechanically renaming unrelated production files.
 
 ## Embedding
 

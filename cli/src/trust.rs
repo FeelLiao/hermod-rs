@@ -8,7 +8,10 @@ use hermod_core::signal::tls;
 use hermod_core::transfer;
 
 /// 执行 `trust`。
-pub async fn run(args: TrustArgs) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run(
+    args: TrustArgs,
+    family: hermod_core::options::IpFamily,
+) -> Result<(), Box<dyn std::error::Error>> {
     let url = if args.server.contains("://") {
         args.server.clone()
     } else {
@@ -17,7 +20,7 @@ pub async fn run(args: TrustArgs) -> Result<(), Box<dyn std::error::Error>> {
 
     // 先规范化（无端口时补 4376），保证 trust 与 tx/rx 连的是同一地址。
     let normalized = config::normalize_server_url(&url).map_err(util::boxed)?;
-    let fp = tls::fetch_server_spki(&normalized)
+    let fp = tls::fetch_server_spki_with_family(&normalized, family)
         .await
         .map_err(util::boxed)?;
     let hex = transfer::hex(&fp);

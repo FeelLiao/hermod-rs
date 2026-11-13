@@ -223,6 +223,16 @@ pub trait TransportConnection {
         None
     }
 
+    /// 实际连接对端；未知地址时 Auto 使用保守档。
+    fn peer_addr(&self) -> Option<std::net::SocketAddr> {
+        None
+    }
+
+    /// 当前连接携带的本端传输预算。
+    fn transfer_tuning(&self) -> crate::options::TransferTuning {
+        crate::options::TransferTuning::default()
+    }
+
     /// 当前平滑 RTT 估计（实现没有估计时返回 `None`）。
     ///
     /// 链路档位（Auto）用它在线区分局域网与弱网，决定数据面并发档。

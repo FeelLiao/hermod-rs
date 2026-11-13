@@ -10,12 +10,11 @@ mod tx;
 mod util;
 mod verbosity;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use verbosity::Level;
 
 fn main() -> std::process::ExitCode {
-    // Windows 主线程默认只有 1 MiB 栈，WireGuard/smoltcp 接收路径在深度调用时
-    // 会溢出；把整个 CLI 逻辑放到显式大栈的用户线程中执行。
+    // 保持既有大栈工作线程行为，避免改变平台上的传输执行环境。
     match std::thread::Builder::new()
         .name("hermod-cli".into())
         .stack_size(64 * 1024 * 1024)
@@ -35,11 +34,16 @@ fn main() -> std::process::ExitCode {
 #[tokio::main]
 async fn run_cli() -> std::process::ExitCode {
     let args = cli::Cli::parse();
-    let level = match args.verbose.as_str() {
-        "error" => Level::Error,
-        "warning" => Level::Warning,
-        "info" => Level::Info,
-        "debug" => Level::Debug,
+    if let Err(message) = args.validate() {
+        cli::Cli::command()
+            .error(clap::error::ErrorKind::ValueValidation, message)
+            .exit();
+    }
+    let level = match args.verbose {
+        cli::Verbosity::Error => Level::Error,
+        cli::Verbosity::Warning => Level::Warning,
+        cli::Verbosity::Info => Level::Info,
+        cli::Verbosity::Debug => Level::Debug,
         _ => Level::None,
     };
     verbosity::set(level, args.quiet);
@@ -99,11 +103,12 @@ async fn run(
     args: cli::Cli,
     abort_slot: util::AbortSlot,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let family = args.family();
     match args.cmd {
-        cli::Command::Tx(a) => tx::run(a, abort_slot).await,
-        cli::Command::Rx(a) => rx::run(a, abort_slot).await,
-        cli::Command::Trust(a) => trust::run(a).await,
+        cli::Command::Tx(a) => tx::run(a, args.network.options(false, family)?, abort_slot).await,
+        cli::Command::Rx(a) => rx::run(a, args.network.options(true, family)?, abort_slot).await,
+        cli::Command::Trust(a) => trust::run(a, family).await,
         // serve 不用全局 abort 槽：服务器常驻，Ctrl+C 由 main 的全局处理器结束进程。
-        cli::Command::Serve(a) => serve::run(a).await,
+        cli::Command::Serve(a) => serve::run(a, family).await,
     }
 }

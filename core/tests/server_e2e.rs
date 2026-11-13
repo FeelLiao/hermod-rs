@@ -17,7 +17,13 @@ use rand_core::UnwrapErr;
 use std::time::Duration;
 
 fn temp_dir(tag: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("hermod-server-e2e-{tag}-{}", std::process::id(),));
+    // 每个测试独占证书目录，避免并行首启读到另一测试尚未配对的证书和私钥。
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "hermod-server-e2e-{tag}-{}-{serial}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }

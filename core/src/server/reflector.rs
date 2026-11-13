@@ -63,7 +63,17 @@ struct Keys {
 /// 在 `addr` 上启动 UDP 反射；失败返回 Err（调用方降级为仅 TCP，与 Go 一致）。
 /// 必须在 tokio 运行时内调用（socket 交给异步驱动）。
 pub fn start(addr: SocketAddr) -> std::io::Result<ReflectorHandle> {
-    let socket = tokio::net::UdpSocket::from_std(std::net::UdpSocket::bind(addr)?)?;
+    start_with_family(addr, crate::options::IpFamily::Auto)
+}
+
+/// 与 TCP 服务端共用地址族策略，IPv6-only 不接受 IPv4 映射流量。
+pub fn start_with_family(
+    addr: SocketAddr,
+    family: crate::options::IpFamily,
+) -> std::io::Result<ReflectorHandle> {
+    let socket = tokio::net::UdpSocket::from_std(
+        crate::transport::network::bind_udp_with_options(Some(addr), family, 1024 * 1024)?,
+    )?;
     let local_addr = socket.local_addr()?;
     crate::log_info!(addr = %local_addr, "UDP reflection enabled for CGNAT address discovery");
     let keys = Keys {
@@ -123,7 +133,7 @@ fn verify_one(key: &[u8; 32], ip: IpAddr, cookie: &[u8]) -> bool {
         <HmacSha256 as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(ip_octets(ip).as_slice());
     let tag = mac.finalize().into_bytes();
-    bool::from(tag.as_slice().ct_eq(cookie))
+    bool::from(tag[..COOKIE_SIZE].ct_eq(cookie))
 }
 
 async fn serve(socket: UdpSocket, limiter: RateLimiter, keys: Mutex<Keys>) {
@@ -181,6 +191,7 @@ async fn serve(socket: UdpSocket, limiter: RateLimiter, keys: Mutex<Keys>) {
 
 /// 外部地址的二进制编码：`[4][IPv4(4)][port BE u16]` 或 `[6][IPv6(16)][port BE u16]`。
 pub fn encode_external_address(addr: SocketAddr) -> Option<Vec<u8>> {
+    let addr = crate::transport::network::canonical(addr);
     let mut out = match addr.ip() {
         IpAddr::V4(ip) => {
             let mut out = vec![4u8];
@@ -210,7 +221,7 @@ pub fn decode_external_address(data: &[u8]) -> Result<SocketAddr, String> {
             }
             let ip = std::net::Ipv4Addr::new(data[1], data[2], data[3], data[4]);
             let port = u16::from_be_bytes([data[5], data[6]]);
-            Ok(SocketAddr::new(IpAddr::V4(ip.into()), port))
+            Ok(SocketAddr::new(IpAddr::V4(ip), port))
         }
         Some(6) => {
             if data.len() < 19 {
@@ -239,29 +250,34 @@ mod tests {
 
     #[tokio::test]
     async fn cookie_handshake_reveals_external_address() {
-        let handle = start("127.0.0.1:0".parse().unwrap()).unwrap();
-        let bound = handle.local_addr();
-        let probe = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        for (addr, family) in [
+            ("127.0.0.1:0", crate::options::IpFamily::V4),
+            ("[::1]:0", crate::options::IpFamily::V6),
+        ] {
+            let handle = start_with_family(addr.parse().unwrap(), family).unwrap();
+            let bound = handle.local_addr();
+            let probe = tokio::net::UdpSocket::bind(addr).await.unwrap();
 
-        // 阶段 1：拿 cookie
-        probe.send_to(&[MAGIC], bound).await.unwrap();
-        let mut buf = [0u8; MAX_PACKET];
-        let (n, _) = tokio::time::timeout(Duration::from_secs(2), probe.recv_from(&mut buf))
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(n, 1 + COOKIE_SIZE);
-        assert_eq!(buf[0], MAGIC);
+            // 阶段 1：拿 cookie
+            probe.send_to(&[MAGIC], bound).await.unwrap();
+            let mut buf = [0u8; MAX_PACKET];
+            let (n, _) = tokio::time::timeout(Duration::from_secs(2), probe.recv_from(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(n, 1 + COOKIE_SIZE);
+            assert_eq!(buf[0], MAGIC);
 
-        // 阶段 2：回显 cookie 换外部地址
-        probe.send_to(&buf[..n], bound).await.unwrap();
-        let (n2, _) = tokio::time::timeout(Duration::from_secs(2), probe.recv_from(&mut buf))
-            .await
-            .unwrap()
-            .unwrap();
-        let external = decode_external_address(&buf[..n2]).unwrap();
-        assert_eq!(external.ip(), probe.local_addr().unwrap().ip());
-        handle.abort();
+            // 阶段 2：回显 cookie 换外部地址
+            probe.send_to(&buf[..n], bound).await.unwrap();
+            let (n2, _) = tokio::time::timeout(Duration::from_secs(2), probe.recv_from(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+            let external = decode_external_address(&buf[..n2]).unwrap();
+            assert_eq!(external.ip(), probe.local_addr().unwrap().ip());
+            handle.abort();
+        }
     }
 
     #[test]

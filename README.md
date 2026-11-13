@@ -10,7 +10,7 @@ travel between your devices; the signaling server only helps them connect.
 - **Android:** Flutter runner exists for ongoing platform integration; no Android release package is currently published.
 - **Linux CLI:** static musl binaries for terminals and automation.
 - **One data-plane protocol:** QUIC (TLS 1.3, BBR by default) for both GUI and CLI; receivers follow automatically.
-- Files, text, cancellation, progress, adjustable bandwidth, server fingerprint pinning and SHA-256 verification.
+- Files, text, cancellation, progress, server fingerprint pinning and SHA-256 verification.
 - Runs in userspace: no VPN configuration, TUN interface or administrator privileges for transfers.
 
 ## Download
@@ -27,7 +27,7 @@ There are no macOS, Linux GUI, Windows CLI, or Android release builds. Release a
 
 ## Before connecting
 
-**Use the same IPv4 LAN or reachable IPv6, and allow peer UDP traffic.** Both
+**Use the same IPv4 LAN or reachable IPv6, and allow peer UDP traffic.**
 QUIC supports private/link-local IPv4 LAN addresses, including IPv4-only
 networks. Pairing still requires the selected signaling server; offline discovery,
 Internet IPv4 NAT traversal and file relays are not provided. A network address
@@ -53,18 +53,15 @@ The default follows your system language. Choose **Settings → Language → Eng
 简体中文 / System**, then **Save settings** to remember it. Language changes apply
 immediately; original technical logs and unknown diagnostic details remain available.
 
-Settings cover send/receive protocol, MTU, congestion control, bandwidth, code length,
-server, fingerprint trust, receive folder, log level, reduced notifications, theme and language.
-They persist locally. Each new transfer takes a settings snapshot; saving changes does
-not reconfigure a running connection. New GUI installations use **QUIC, Auto receive
-and unlimited speed (0)**. Existing preferences are preserved; Settings offers **Use
-new defaults**, followed by Save settings. You can still set a bandwidth cap to keep
-capacity available for other applications.
+GUI settings persist locally, and each new transfer takes a settings snapshot;
+saving changes does not reconfigure a running connection. The CLI tuning work below
+does not change GUI/bridge settings or promise compatibility with old `compatible`
+profile values. Its new tuning flags are not persisted or read from YAML.
 
-The encrypted pairing exchange announces the filename, type and size before payload
-transfer. Receivers show the total immediately and reject a conflicting HTTP length
-or metadata. Older peers remain compatible over IPv6; their size is learned from
-HTTP headers. IPv4 LAN transfers require upgraded clients on both devices.
+The encrypted pairing exchange announces filename, type and size before payload
+transfer. Current payload protocol v3 runs directly on QUIC streams and verifies
+SHA-256; HTTP and WireGuard payloads are no longer supported. Use upgraded clients
+on both devices; incompatible protocol versions fail explicitly.
 
 ## Installation and upgrades
 
@@ -84,9 +81,9 @@ For Windows upgrades, keep the Store package identity unchanged. Uninstalling ca
 
 ```bash
 chmod +x hermod-linux-x64-musl
-./hermod-linux-x64-musl tx ./archive.zip --limit-mbps 8
+./hermod-linux-x64-musl tx ./archive.zip
 # On the receiver, replace CODE with the sender's complete code:
-./hermod-linux-x64-musl rx CODE --destination ./received
+./hermod-linux-x64-musl rx CODE -d ./received
 ```
 
 Or install the binary as `hermod` and use:
@@ -94,34 +91,49 @@ Or install the binary as `hermod` and use:
 ```bash
 hermod tx 'Hello from Hermod'
 printf 'Read from stdin\n' | hermod tx -
-hermod tx ./archive.zip --mtu 1280 --congestion bbr
-hermod rx CODE --limit-mbps 8
+hermod -4 tx ./archive.zip --mtu 1280 --congestion bbr
+hermod rx CODE --streams 4 --output ./received
+hermod serve -p 4376
 hermod --help
 hermod tx --help
 ```
 
-CLI has no default bandwidth cap (`0` means unlimited). Sending runs over QUIC;
-receiving defaults to `auto`. Keep both peers open until the digest verdict completes.
+**CLI tuning status: implementation in progress, awaiting user verification.**
+QUIC is the only data plane; receiving follows it automatically. There is no payload
+rate limiter. Keep both peers open until the digest verdict completes. Tuning applies
+only to this invocation: explicit values override built-in defaults, unspecified values
+use defaults. Tuning is neither persisted nor read from YAML. Server trust configuration
+still persists separately. See the [confirmed implementation plan](docs/cli-transport-tuning.md).
 
-| Option | Meaning |
+| Option | Default / meaning |
 | --- | --- |
+| `-4/--ipv4`, `-6/--ipv6` | Mutually exclusive, strict family restriction on all four commands; no cross-family fallback |
+| `-m/--mtu auto\|NUMBER` | auto; QUIC UDP payload cap 1200–1452 bytes; auto probes from 1200 to 1452 |
+| `-c/--congestion auto\|bbr\|cubic\|newreno` | bbr; auto also selects BBR |
+| `-P/--profile auto\|lan\|wan` | auto; no compatible alias |
+| `--streams auto\|1..8` | auto; rx selects actual concurrency, subject to source capability and file size |
+| `--chunk SIZE` | 1MiB; 256KiB–4MiB |
+| `--window SIZE` | 64MiB per stream; 8MiB–256MiB; connection receive/send budget = window × 8 |
+| `--udp-buffer SIZE` | 16MiB; 1MiB–64MiB requested socket buffer |
+| `--slice-size SIZE` | 4MiB; 4MiB–64MiB slice target |
+| `--prefetch NUMBER` | 16; 4–64 queued chunks |
+| `--keepalive SECONDS` | 10; 0–60, 0 disables keepalive |
+| `--idle-timeout SECONDS` | 30; 10–300 and strictly greater than keepalive |
+| rx `-d/--output DIR` | `.`; output directory |
+| serve `-p/--port PORT` | Numeric 0–65535; CLI > HERMOD_PORT > 4376 |
+| `--verbose LEVEL`, `-q/--quiet` | Global log level (default none) and reduced status output |
 
-| `--mtu auto\|NUMBER` | One MTU setting for the selected protocol |
-| `--congestion auto\|cubic\|reno\|bbr\|newreno` | Only algorithms supported by the selected protocol are accepted |
-| `--limit-mbps NUMBER` | Decimal megabits/s of payload, 0 unlimited; lower sender/receiver cap wins |
-| `--server URL` | Signaling server (must be trusted) |
-| `--words NUMBER` | Sender code length, 1–32 words, default 3 |
-| `--destination PATH` | Receiver output directory |
-| `--verbose LEVEL`, `--quiet` | Global logging level and reduced status output |
+Enum values are case-insensitive. Sizes accept integer bytes or integer KiB/MiB only
+(e.g. `1048576`, `1024KiB`, `1MiB`), not decimals, MB or embedded spaces. Invalid values
+fail before networking. All data-plane flags (mtu, congestion, profile and the eight
+tuning options) are errors when explicitly passed to serve/trust, even with default values.
 
-**MTU semantics:** WireGuard uses the inner IP MTU (auto: 1400, accepted 576–65488).
-QUIC uses a UDP payload ceiling (1200–1452); auto begins at 1200 and probes up to 1452.
-An explicit QUIC cap is never exceeded by discovery. Larger values do not automatically
-make WireGuard faster: leave space for outer IPv6/UDP/WireGuard overhead.
-
-**Congestion control:** `auto` means CUBIC on WireGuard and BBR on QUIC. WireGuard
-supports CUBIC/Reno; QUIC supports BBR/CUBIC/NewReno. Unsupported combinations fail
-explicitly, including after an auto receiver learns the sender's protocol.
+The receiver owns the stream plan: tx tuning cannot force rx concurrency. Auto profiles
+use peer address classification, with a valid RTT ≤25ms additionally required for LAN
+multi-stream selection when RTT is available. Keepalive/idle timeout configure QUIC;
+idle-timeout also sets the CLI payload no-progress watchdog, not the separate handshake
+budget. Larger windows, chunks and prefetch queues consume more resources, not guaranteed
+throughput; see [memory tradeoffs and measurement](NETWORK_PERFORMANCE.md).
 
 **Custom server trust:** independently obtain the server's SHA-256 SPKI fingerprint,
 then use `hermod trust SERVER --fingerprint HEX` (see `hermod trust --help`). The GUI
@@ -129,7 +141,7 @@ provides Fetch fingerprint and an explicit confirmation; fetching alone is not i
 verification. Each client profile keeps **one trusted server**. Successful verification replaces
 the old trust and selects the new server in one operation; failed verification
 retains the previous configuration. Old trust lists migrate to the selected server.
-`--server` must match that single trusted address. CLI config is
+tx/rx use that selected server; there is no per-transfer `--server` override. CLI config is
 `$XDG_CONFIG_HOME/hermod/config.yaml`, or `~/.config/hermod/config.yaml` by default;
 GUI config and verified inbox are in the platform's application data directory.
 
@@ -137,20 +149,26 @@ GUI config and verified inbox are in the platform's application data directory.
 
 | Removed | Replacement |
 | --- | --- |
-| `--wg-mtu N` | `--transport wireguard --mtu N` |
-| `--quic-mtu N` | `--transport quic --mtu N` (now a hard discovery ceiling) |
-| `--quic-cc ALGORITHM` | `--transport quic --congestion ALGORITHM` |
-| `--listen ADDRESS` / bind address | Automatic dual-stack binding with IPv4 fallback; no public binding control |
-| `serve` placeholder | Removed; run a compatible signaling server separately |
+| `--wg-mtu`, `--transport`, `--limit-mbps` | Removed; QUIC only, no payload rate limiter |
+| `--quic-mtu N` | `--mtu N`, a hard discovery ceiling |
+| `--quic-cc ALGORITHM` | `--congestion ALGORITHM` |
+| tx/rx `--server`, tx `--words` | Select server with trust; CLI codes are fixed at three words |
+| rx `--destination DIR` | `-d/--output DIR` |
+| `--profile compatible` | Use wan as appropriate; old value and alias are removed |
+| serve `-l/--listen`, HERMOD_LISTEN | `serve -p/--port`, HERMOD_PORT; CLI > environment > 4376 |
+
+`serve` now runs the signaling/NAT helper service, with dual-stack listening by default;
+use global -4 or -6 to restrict its family. This is not a file relay.
 
 Windows uses Flutter Material 3. The GUI loads `hermod_flutter_bridge.dll` over flutter_rust_bridge (FFI), whose `gui_api` facade owns settings, jobs and the private inbox while relying on `hermod-core` for all transport work; private inbox paths never cross into Flutter.
 
 ## Troubleshooting and development
 
 - **Code cannot connect:** check both peers' IPv4 LAN/IPv6 routing, signaling reachability,
-  UDP firewall rules, complete code and compatible forced protocols.
-- **Browsing slows while sending:** lower `--limit-mbps` / GUI bandwidth. A saturated
-  upload can queue browsing requests; see [performance and latency](NETWORK_PERFORMANCE.md).
+  UDP firewall rules, complete code, client versions and any -4/-6 restriction.
+- **Browsing slows while sending:** a saturated upload can queue browsing requests.
+  Hermod has no payload rate limiter; consider router SQM/AQM or external traffic shaping.
+  See [performance and latency](NETWORK_PERFORMANCE.md).
 - **Export failed:** keep the verified inbox copy, choose a writable folder again, then retry Save a copy.
 - **Windows MSIXBundle will not install:** the GitHub bundle is an unsigned Store submission
   packages. Install the Store-signed version after it has been approved and published.

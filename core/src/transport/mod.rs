@@ -12,7 +12,6 @@
 //! ├── iface.rs            # trait + TransportKind + AbortHandle
 //! ├── mod.rs              # AnyTransport / AnyConnection 运行时分发
 //! ├── network.rs          # 传输无关的地址/UDP 工具
-//! ├── http/               # 共享的传输内 HTTP/1.1
 //! └── quic/               # 实现：QUIC endpoint / TLS 钉扎 / 可插拔 CC
 //! ```
 
@@ -70,6 +69,17 @@ impl AnyTransport {
     pub fn set_server_hint(&mut self, hint: Option<Ipv6Addr>) {
         match self {
             Self::Quic(t) => t.set_server_hint(hint),
+        }
+    }
+
+    /// 配置本次会话的地址族与本端传输预算。
+    pub fn set_transfer_options(
+        &mut self,
+        family: crate::options::IpFamily,
+        tuning: crate::options::TransferTuning,
+    ) {
+        match self {
+            Self::Quic(t) => t.set_transfer_options(family, tuning),
         }
     }
 
@@ -187,6 +197,18 @@ impl TransportConnection for AnyConnection {
     fn network_stats(&self) -> Option<NetworkStatsHandle> {
         match self {
             Self::Quic(c) => c.network_stats(),
+        }
+    }
+
+    fn peer_addr(&self) -> Option<SocketAddr> {
+        match self {
+            Self::Quic(c) => c.peer_addr(),
+        }
+    }
+
+    fn transfer_tuning(&self) -> crate::options::TransferTuning {
+        match self {
+            Self::Quic(c) => c.transfer_tuning(),
         }
     }
 

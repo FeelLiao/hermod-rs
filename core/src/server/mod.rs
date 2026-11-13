@@ -145,7 +145,7 @@ impl Server {
                 if !expired.is_empty() {
                     this.purge_expired_waiters(expired).await;
                 }
-                if round % 10 == 0 {
+                if round.is_multiple_of(10) {
                     let stale = Duration::from_secs(30 * 60);
                     this.cert_rl.cleanup(stale);
                     this.ws_rl.cleanup(stale);

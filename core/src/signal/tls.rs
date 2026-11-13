@@ -11,6 +11,7 @@
 //! - 指纹比较用 `subtle::ConstantTimeEq`（**常量时间**），防止通过比较耗时推断指纹。
 //! - 签名验证委托给 rustls 的 `verify_tls12/13_signature`（用默认 crypto provider）。
 
+use crate::options::IpFamily;
 use der::asn1::AnyRef;
 use der::{Decode, Encode, Reader, Tag, TagNumber};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -20,6 +21,7 @@ use rustls::{DigitallySignedStruct, Error, SignatureScheme};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 /// 证书解析错误。
 #[derive(Debug, thiserror::Error)]
@@ -232,6 +234,16 @@ impl ServerCertVerifier for CaptureVerifier {
 /// 供 `hermod trust` 使用：首次信任时调用，把结果存进 `config.trusted_servers`。
 /// 调用方应在展示给用户确认后（或与已知指纹比对后）才落盘。
 pub async fn fetch_server_spki(url: &str) -> Result<[u8; 32], TlsError> {
+    fetch_server_spki_with_family(url, IpFamily::Auto).await
+}
+
+/// 抓取证书时同样严格限制 DNS/TCP 地址族，保留 URL 主机名用于 TLS。
+pub async fn fetch_server_spki_with_family(
+    url: &str,
+    family: IpFamily,
+) -> Result<[u8; 32], TlsError> {
+    let request = url.into_client_request()?;
+    let tcp = super::client::connect_request_tcp(&request, family).await?;
     let captured: Arc<std::sync::Mutex<Option<Vec<u8>>>> = Arc::new(std::sync::Mutex::new(None));
     let provider = rustls::crypto::aws_lc_rs::default_provider();
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider.clone()))
@@ -247,7 +259,7 @@ pub async fn fetch_server_spki(url: &str) -> Result<[u8; 32], TlsError> {
     // 我们不关心 WS 升级是否成功：只要 TLS 握手完成，证书已在 CaptureVerifier 里。
     // （server 的 /ws 路径可能返回 404，但证书不受路径影响。）
     let connect_result =
-        tokio_tungstenite::connect_async_tls_with_config(url, None, false, Some(connector)).await;
+        tokio_tungstenite::client_async_tls_with_config(request, tcp, None, Some(connector)).await;
 
     match captured.lock().expect("capture lock").take() {
         Some(der) => spki_fingerprint(&CertificateDer::from(der)),
@@ -291,6 +303,73 @@ mod tests {
 
     fn cert_der() -> CertificateDer<'static> {
         CertificateDer::from(unhex(TEST_CERT_DER_HEX))
+    }
+
+    #[tokio::test]
+    async fn family_connections_preserve_sni_and_spki_pinning() {
+        use rustls::pki_types::PrivatePkcs8KeyDer;
+        for family in [IpFamily::V4, IpFamily::V6] {
+            let generated = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+            let cert = generated.cert.der().clone();
+            let pin = spki_fingerprint(&cert).unwrap();
+            let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+                rustls::crypto::aws_lc_rs::default_provider(),
+            ))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![cert],
+                PrivatePkcs8KeyDer::from(generated.signing_key.serialize_der()).into(),
+            )
+            .unwrap();
+            let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+            let listener = crate::transport::network::bind_tcp(0, family).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                for _ in 0..3 {
+                    let (tcp, _) = listener.accept().await.unwrap();
+                    if let Ok(tls) = acceptor.accept(tcp).await {
+                        assert_eq!(tls.get_ref().1.server_name(), Some("localhost"));
+                        let _ = tokio_tungstenite::accept_async(tls).await;
+                    }
+                }
+            });
+            let url = format!("wss://localhost:{port}/ws");
+            let stream = super::super::client::connect_pinned_with_family(&url, pin, family)
+                .await
+                .unwrap();
+            drop(stream);
+            assert_eq!(
+                fetch_server_spki_with_family(&url, family).await.unwrap(),
+                pin
+            );
+            assert!(
+                super::super::client::connect_pinned_with_family(&url, [0; 32], family)
+                    .await
+                    .is_err()
+            );
+            tokio::time::timeout(std::time::Duration::from_secs(3), server)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn certificate_fetch_rejects_wrong_family_before_tls() {
+        let error = fetch_server_spki_with_family("wss://127.0.0.1:1/ws", IpFamily::V6)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("No DNS candidates"));
+        let error = super::super::client::connect_pinned_with_family(
+            "wss://[::1]:1/ws",
+            [0; 32],
+            IpFamily::V4,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("No DNS candidates"));
     }
 
     /// TOFU 抓取：CaptureVerifier 会把 end-entity 证书 DER 记录下来。

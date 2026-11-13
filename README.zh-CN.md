@@ -10,7 +10,7 @@ Hermod 是使用 Rust 编写的加密 P2P **IPv4 局域网 / IPv6** 文件传输
 - **Android**：Flutter runner 已保留用于后续平台接入，目前不发布 Android 安装包。
 - **Linux 命令行**：musl 静态可执行文件，适合终端和脚本。
 - 唯一数据面协议为 **QUIC**（TLS 1.3，默认 BBR）；GUI 与 CLI 一致，接收端自动跟随。
-- 支持文件、文本、取消、进度、限速、服务器指纹信任与 SHA-256 校验。
+- 支持文件、文本、取消、进度、服务器指纹信任与 SHA-256 校验。
 - 传输在用户态完成，不需要配置 VPN、创建 TUN 网卡或使用管理员权限。
 
 ## 下载哪个文件？
@@ -51,13 +51,12 @@ WSL NAT 通常没有可用 IPv6。支持镜像网络的 Windows 11 / WSL 可在 
 **简体中文 / English / 跟随系统**，点击 **保存设置** 后下次打开仍使用此选择。界面语言立即切换，
 技术日志和未识别的底层错误详情保留原文以便排查。
 
-设置包括：发送与接收协议、统一 MTU、拥塞控制、限速、传输码长度、服务器、指纹信任、接收目录、
-日志级别、减少提示、主题和语言。设置会持久化；每次开始传输时取得快照，修改只影响后续传输。
-新安装的 GUI 默认 **QUIC 发送、Auto 接收、不限速（0）**。旧设置保持不变，可在设置中点击
-**采用新默认设置**，再保存。需要为其他应用留出带宽时，仍可手动设置限速。
+GUI 设置会本地持久化，每次开始传输时取得快照，修改只影响后续传输。
+下述 CLI 调优工作不修改 GUI/bridge 设置，也不保证旧 `compatible` 档位值兼容；
+新增 CLI 调优参数不持久化，也不从 YAML 读取。
 
-发送前的加密协商会预告文件名、类型和大小，接收端立即显示总大小，并校验后续 HTTP 信息是否一致。
-旧客户端仍可通过 IPv6 互通，旧发送端的大小从 HTTP 响应头补齐；IPv4 局域网传输需要双方升级。
+发送前的加密协商会预告文件名、类型和大小。当前 payload v3 直接使用 QUIC 流并校验 SHA-256，
+不再支持 HTTP 或 WireGuard 载荷。请双方使用升级后的客户端；协议版本不兼容时明确报错。
 
 ## 安装和升级
 
@@ -73,9 +72,9 @@ Windows 更新必须保留相同的商店包身份。旧包身份或签名不同
 
 ```bash
 chmod +x hermod-linux-x64-musl
-./hermod-linux-x64-musl tx ./archive.zip --limit-mbps 8
+./hermod-linux-x64-musl tx ./archive.zip
 # 在另一端把 CODE 替换为完整传输码
-./hermod-linux-x64-musl rx CODE --destination ./received
+./hermod-linux-x64-musl rx CODE -d ./received
 ```
 
 也可将程序安装为 `hermod`：
@@ -83,54 +82,69 @@ chmod +x hermod-linux-x64-musl
 ```bash
 hermod tx 'Hello from Hermod'
 printf 'Read from stdin\n' | hermod tx -
-hermod tx ./archive.zip --mtu 1280 --congestion bbr
-hermod rx CODE --limit-mbps 8
+hermod -4 tx ./archive.zip --mtu 1280 --congestion bbr
+hermod rx CODE --streams 4 --output ./received
+hermod serve -p 4376
 hermod --help
 hermod tx --help
 ```
 
-CLI 默认不限速，`0` 表示不限速；发送走 QUIC，接收默认 Auto。双方保持程序打开，直到摘要验证完成。
+**CLI 调优状态：实施中，等待用户验证。** 唯一数据面是 QUIC，接收端自动跟随，目前没有载荷限速器。
+双方保持程序打开，直到摘要验证完成。调优仅用于本次调用：显式值覆盖内建默认，未输入项使用默认；
+不持久化，不从 YAML 读取。服务器信任配置仍独立持久化。详见[已确认实施方案](docs/cli-transport-tuning.md)。
 
-| 参数 | 作用 |
+| 参数 | 默认 / 作用 |
 | --- | --- |
+| `-4/--ipv4`、`-6/--ipv6` | 互斥；严格约束全部四个命令，不跨族回退 |
+| `-m/--mtu auto\|数值` | auto；QUIC UDP 载荷上限 1200–1452 字节；auto 从 1200 探测到 1452 |
+| `-c/--congestion auto\|bbr\|cubic\|newreno` | bbr；auto 同样选择 BBR |
+| `-P/--profile auto\|lan\|wan` | auto；不保留 compatible 别名 |
+| `--streams auto\|1..8` | auto；rx 决定实际并发，仍受源能力与文件大小限制 |
+| `--chunk 大小` | 1MiB；256KiB–4MiB |
+| `--window 大小` | 单流 64MiB；8MiB–256MiB；连接接收/发送预算 = window × 8 |
+| `--udp-buffer 大小` | 16MiB；1MiB–64MiB，请求的 socket 缓冲 |
+| `--slice-size 大小` | 4MiB；4MiB–64MiB，切片目标大小 |
+| `--prefetch 数量` | 16；4–64 个预读块 |
+| `--keepalive 秒` | 10；0–60，0 关闭 keepalive |
+| `--idle-timeout 秒` | 30；10–300，且必须严格大于 keepalive |
+| rx `-d/--output 目录` | `.`；接收目录 |
+| serve `-p/--port 端口` | 纯数字 0–65535；CLI > HERMOD_PORT > 4376 |
+| `--verbose 级别`、`-q/--quiet` | 全局日志级别（默认 none）和减少状态提示 |
 
-| `--mtu auto\|数值` | 控制本次实际使用协议的 MTU |
-| `--congestion auto\|cubic\|reno\|bbr\|newreno` | 只接受实际协议支持的算法 |
-| `--limit-mbps 数值` | 十进制 Mbps 载荷速率，发送和接收限制取较小值 |
-| `--server URL` | 信令服务器，需要预先建立信任 |
-| `--words 数值` | 发送端传输码词数，1–32，默认 3 |
-| `--destination 路径` | 接收目录 |
-| `--verbose 级别`、`--quiet` | 全局日志级别和减少状态提示 |
+枚举值大小写不敏感。大小仅接受整数字节或整数 KiB/MiB，例如 `1048576`、`1024KiB`、`1MiB`；
+不接受小数、MB 或内嵌空格。非法值在联网前报错。全部数据面参数（mtu、congestion、profile 和八项调优）
+在 serve/trust 中显式传入即错误，即使传的是默认值。
 
-**MTU**：QUIC 表示 UDP 载荷上限，
-允许 1200–1452；auto 从 1200 开始探测，最高 1452；显式设置后不会探测超过该值。WireGuard 的
-较大 MTU 不保证更快，还需为外层 IPv6、UDP 和 WireGuard 头部预留空间。
-
-**拥塞控制**：auto 在 WireGuard 下为 CUBIC，在 QUIC 下为 BBR。WireGuard 支持 CUBIC/Reno；
-QUIC 支持 BBR/CUBIC/NewReno。不兼容组合会报错，不会静默忽略。Auto 接收在知道对端协议后同样校验。
+接收端拥有开流计划，tx 调优不能强迫 rx 并发。auto 按对端地址分类，有有效 RTT 时还需 ≤25ms 才选择 LAN 多流。
+keepalive/idle-timeout 用于 QUIC，idle-timeout 也用于 CLI 载荷无进展看门狗，不改变独立的握手预算。
+较大窗口、chunk 与预读队列会消耗更多资源，不保证吞吐提升，详见[内存权衡与测量](NETWORK_PERFORMANCE.md)。
 
 **自建服务器信任**：从可信渠道取得服务器 SPKI SHA-256 指纹后，运行
 `hermod trust SERVER --fingerprint HEX`。GUI 可以获取指纹并显式确认；仅从网络获取指纹本身不能证明服务器身份。
 每个客户端配置只保留**一个信任的服务器**。验证成功后同时替换旧信任并切换服务器，失败则保留原配置。
-旧信任列表按当前选中的服务器迁移；`--server` 必须与唯一信任的地址匹配。CLI 配置位于 `$XDG_CONFIG_HOME/hermod/config.yaml`，默认是
+旧信任列表按当前选中的服务器迁移；tx/rx 使用该服务器，不再支持本次传输的 `--server` 覆盖。CLI 配置位于 `$XDG_CONFIG_HOME/hermod/config.yaml`，默认是
 `~/.config/hermod/config.yaml`；GUI 配置和收件箱位于各平台应用数据目录。
 
 ## 从 0.3.x 迁移
 
 | 已删除参数 / 功能 | 替代方法 |
 | --- | --- |
-| `--wg-mtu N` | `--transport wireguard --mtu N` |
-| `--quic-mtu N` | `--transport quic --mtu N`，现在也是探测硬上限 |
-| `--quic-cc 算法` | `--transport quic --congestion 算法` |
-| `--listen 地址` / bind address | 自动监听 `[::]:0`，无需手动配置 |
-| 未实现的 `serve` | 已删除，信令服务需要单独部署兼容实现 |
+| `--wg-mtu`、`--transport`、`--limit-mbps` | 已移除；仅 QUIC，没有载荷限速器 |
+| `--quic-mtu N` | `--mtu N`，探测硬上限 |
+| `--quic-cc 算法` | `--congestion 算法` |
+| tx/rx `--server`、tx `--words` | 用 trust 选择服务器；CLI 固定三词码 |
+| rx `--destination 目录` | `-d/--output 目录` |
+| `--profile compatible` | 按需求使用 wan；旧值与别名均删除 |
+| serve `-l/--listen`、HERMOD_LISTEN | `serve -p/--port`、HERMOD_PORT；CLI > 环境变量 > 4376 |
+
+`serve` 现为实际的信令/NAT 辅助服务，默认双栈监听，可用全局 -4/-6 限制地址族；它不提供文件中转。
 
 Windows 使用 Flutter Material 3。GUI 经 flutter_rust_bridge 以 FFI 加载 `hermod_flutter_bridge.dll`，其 `gui_api` 门面持有设置、任务和私有收件箱，传输能力全部依赖 `hermod-core`；私有收件箱路径不会进入 Flutter 层。
 
 ## 常见问题
 
-- **传输码连不上**：检查双方 IPv4 局域网 / IPv6 路由、信令服务器、UDP 防火墙、完整传输码及强制协议是否一致。
-- **发送时网页很卡**：降低 GUI 限速或 `--limit-mbps`；上行跑满会挤占其他请求，见[性能分析](NETWORK_PERFORMANCE.md)。
+- **传输码连不上**：检查双方 IPv4 局域网 / IPv6 路由、信令服务器、UDP 防火墙、完整传输码、客户端版本及 -4/-6 限制。
+- **发送时网页很卡**：上行跑满会挤占其他请求；当前没有载荷限速器，可考虑路由器 SQM/AQM 或外部流量整形，见[性能分析](NETWORK_PERFORMANCE.md)。
 - **导出失败**：收件箱副本仍在，重新选择可写目录后导出。
 - **Windows MSIXBundle 无法安装**：GitHub 文件仅供商店提交，尚未签名；请在审核上线后安装商店签名的版本。
 

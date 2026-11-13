@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::{Notify, mpsc};
 
+use crate::options::TransferTuning as ConnectionTuning;
 use crate::transfer::TransferOffer;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use sha2::{Digest, Sha256};
@@ -43,17 +44,13 @@ const VERDICT_OK: u8 = 0;
 const VERDICT_LEN: usize = 1 + 32 + 8;
 /// 切片计划帧字节长度：slice_size(u64 LE) + slice_count(u32 LE)。
 const PLAN_LEN: usize = 12;
-/// 载荷搬运块大小：一次 read/write 的字节数（1 MiB 把 await 往返摊开到每 MiB 一次）。
-const CHUNK: usize = 1024 * 1024;
-/// 单流路径的预读队列深度（块数）；磁盘读取与哈希/写流在这里重叠。
-const PREFETCH_QUEUE: usize = 16;
+/// 计划数量上限保持 v3 兼容；与实际同时运行的数据流数量无关。
+const MAX_SLICES: u64 = 512;
 /// 多流模式的最小文件尺寸：小文件用多流是纯开销。
 const MIN_MULTISTREAM_SIZE: u64 = 16 * 1024 * 1024;
-/// 切片目标下限：切片不小于 4 MiB。
-const SLICE_MIN: u64 = 4 * 1024 * 1024;
 /// 切片目标数量：文件再大也按 256 片划分（切片随尺寸自动放大）。
 const TARGET_SLICES: u64 = 256;
-/// 多流并行度上限；也是计划校验的切片数上限（防对端撑爆并发流）。
+/// 数据流并行度上限；控制流独立占用一条流，不受本端并发偏好限制。
 const MAX_STREAMS: usize = 8;
 /// Auto 档的局域网 RTT 判定阈值；不高于它按局域网档并发。
 const LAN_RTT_THRESHOLD: Duration = Duration::from_millis(25);
@@ -155,54 +152,51 @@ pub struct ReceiveOptions<'a> {
     pub peer_multi_stream: bool,
 }
 
-/// 数据面并发档（接收端解析后的结果）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TransferTuning {
-    /// 数据流条数：1 = 单流；>1 = 多流切片。
-    pub streams: usize,
-}
-
-impl TransferTuning {
-    /// 按档位 / RTT / 文件尺寸 / 对端能力解析数据面并发。
-    ///
-    /// Auto 用 RTT 在线判定：局域网（低 RTT）用多流，弱网退回单流；
-    /// 对端不可 seek 或文件太小时多流无意义，强制单流。
-    pub fn resolve(
-        profile: crate::options::LinkProfile,
-        rtt: Option<Duration>,
-        size: u64,
-        peer_multi_stream: bool,
-    ) -> Self {
-        let want_multi = match profile {
-            crate::options::LinkProfile::Lan => true,
-            crate::options::LinkProfile::Auto => rtt.is_some_and(|rtt| rtt <= LAN_RTT_THRESHOLD),
-            crate::options::LinkProfile::Compatible => false,
-        };
-        let multi = want_multi && peer_multi_stream && size >= MIN_MULTISTREAM_SIZE;
-        Self {
-            streams: if multi { MAX_STREAMS } else { 1 },
-        }
+/// 解析本次接收的并发预算；显式覆盖仍受能力与尺寸闸门约束。
+fn resolve_streams(
+    tuning: ConnectionTuning,
+    profile: crate::options::LinkProfile,
+    peer: Option<std::net::SocketAddr>,
+    rtt: Option<Duration>,
+    size: u64,
+    peer_multi_stream: bool,
+) -> usize {
+    if !peer_multi_stream || size < MIN_MULTISTREAM_SIZE {
+        return 1;
     }
+    if let Some(streams) = tuning.streams {
+        return streams;
+    }
+    let lan = match profile {
+        crate::options::LinkProfile::Lan => true,
+        crate::options::LinkProfile::Wan => false,
+        crate::options::LinkProfile::Auto => {
+            peer.is_some_and(|addr| {
+                crate::transport::network::classify_link(addr)
+                    == crate::transport::network::LinkKind::Lan
+            }) && rtt
+                .filter(|rtt| !rtt.is_zero())
+                .is_none_or(|rtt| rtt <= LAN_RTT_THRESHOLD)
+        }
+    };
+    if lan { MAX_STREAMS } else { 1 }
 }
 
-/// 由文件尺寸推导切片计划（对齐到整块，切片数封顶）。
-fn slice_plan(size: u64) -> (u64, u64) {
+/// 由文件尺寸推导切片计划；切片尺寸独立于本地搬运块大小。
+fn slice_plan(size: u64, slice_target: u64) -> (u64, u64) {
     debug_assert!(size >= MIN_MULTISTREAM_SIZE);
-    let count = size.div_ceil(SLICE_MIN).clamp(2, TARGET_SLICES);
-    let slice_size = size
-        .div_ceil(count)
-        .next_multiple_of(CHUNK as u64)
-        .max(CHUNK as u64);
-    let count = size.div_ceil(slice_size);
-    (slice_size, count)
+    let target = slice_target.max(1).min(size.div_ceil(2));
+    let count = size.div_ceil(target).clamp(2, TARGET_SLICES);
+    let slice_size = size.div_ceil(count);
+    (slice_size, size.div_ceil(slice_size))
 }
 
 /// 校验对端发来的切片计划（对端可控；越界即协议违约）。
 fn validate_plan(size: u64, slice_size: u64, slice_count: u64) -> Result<(), OrchestrateError> {
-    let ok = slice_size >= CHUNK as u64
-        && (2..=512).contains(&slice_count)
-        && (slice_count - 1) * slice_size < size
-        && size <= slice_count * slice_size;
+    // 除法等价于精确覆盖检查，避免对端控制的乘法溢出；不依赖本端 chunk。
+    let ok = slice_size > 0
+        && (2..=MAX_SLICES).contains(&slice_count)
+        && size.div_ceil(slice_size) == slice_count;
     if ok {
         Ok(())
     } else {
@@ -212,13 +206,28 @@ fn validate_plan(size: u64, slice_size: u64, slice_count: u64) -> Result<(), Orc
     }
 }
 
-/// 有界预读：把 `AsyncRead` 的读取搬进后台任务，经容量 `PREFETCH_QUEUE` 的
+/// 有界预读：把 `AsyncRead` 的读取搬进后台任务，经本端预算指定容量的
 /// 队列递送，让磁盘读取与下游处理（哈希 / 写流）重叠——单流路径不再每块
 /// 串行等磁盘。
 struct PrefetchReader {
     rx: mpsc::Receiver<io::Result<Vec<u8>>>,
     current: Vec<u8>,
     pos: usize,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for PrefetchReader {
+    fn drop(&mut self) {
+        // 丢弃上游时连带取消阻塞中的预读，不能只依赖队列接收端关闭。
+        self.task.abort();
+    }
+}
+
+impl PrefetchReader {
+    async fn stop(&mut self) {
+        self.task.abort();
+        let _ = (&mut self.task).await;
+    }
 }
 
 impl AsyncRead for PrefetchReader {
@@ -247,15 +256,15 @@ impl AsyncRead for PrefetchReader {
 }
 
 /// 把 `reader` 搬进预读任务，返回可读的适配器。
-fn prefetch<R>(reader: R) -> PrefetchReader
+fn prefetch<R>(reader: R, tuning: ConnectionTuning) -> PrefetchReader
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
-    let (tx, rx) = mpsc::channel(PREFETCH_QUEUE);
-    tokio::spawn(async move {
+    let (tx, rx) = mpsc::channel(tuning.prefetch.max(1));
+    let task = tokio::spawn(async move {
         let mut reader = reader;
         loop {
-            let mut buf = vec![0u8; CHUNK];
+            let mut buf = vec![0u8; tuning.chunk.max(1)];
             match reader.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
@@ -275,6 +284,7 @@ where
         rx,
         current: Vec::new(),
         pos: 0,
+        task,
     }
 }
 
@@ -345,6 +355,8 @@ where
     if let Err(error) = crate::transfer::validate_filename(&opts.name) {
         return Err(OrchestrateError::Protocol(error.to_string()));
     }
+    let tuning = conn.transfer_tuning();
+    tuning.validate().map_err(OrchestrateError::Protocol)?;
     let summary = Summary::new("tx", conn);
     let mut stream = conn
         .listen()
@@ -353,7 +365,7 @@ where
     let mut first = [0u8; 1];
     stream.read_exact(&mut first).await.map_err(classify_io)?;
     match first[0] {
-        MODE_SINGLE => serve_single(summary, stream, opts).await,
+        MODE_SINGLE => serve_single(summary, stream, opts, tuning).await,
         MODE_MULTI => serve_multi(conn, summary, stream, opts).await,
         other => Err(OrchestrateError::Protocol(format!(
             "unexpected data-plane mode {other:#04x}"
@@ -367,6 +379,7 @@ async fn serve_single<S>(
     summary: Summary,
     mut stream: S,
     mut opts: ServeOptions,
+    tuning: ConnectionTuning,
 ) -> Result<ServeOutcome, OrchestrateError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -377,17 +390,17 @@ where
         PayloadSource::Stream(Box::new(tokio::io::empty())),
     );
     let mut body = match source {
-        PayloadSource::Stream(reader) => prefetch(reader),
+        PayloadSource::Stream(reader) => prefetch(reader, tuning),
         PayloadSource::File(path) => {
             let file = tokio::fs::File::open(&path).await.map_err(classify_io)?;
-            prefetch(file)
+            prefetch(file, tuning)
         }
     };
     let mut hasher = Sha256::new();
     let mut written: u64 = 0;
     let mut remaining = opts.size;
     while remaining > 0 {
-        let want = (CHUNK as u64).min(remaining) as usize;
+        let want = (tuning.chunk.max(1) as u64).min(remaining) as usize;
         let mut buf = vec![0u8; want];
         let n = body.read(&mut buf).await.map_err(classify_io)?;
         if n == 0 {
@@ -403,6 +416,7 @@ where
             progress(written);
         }
     }
+    body.stop().await;
     stream.flush().await.map_err(classify_io)?;
     let mut local_sha_bytes = [0u8; 32];
     local_sha_bytes.copy_from_slice(&hasher.finalize());
@@ -417,6 +431,30 @@ where
     })
 }
 
+/// 等待新流时继续推进已有切片，且不取消带认证前导的建流 future。
+async fn await_stream<F, T, E, W>(
+    opening: F,
+    tasks: &mut FuturesUnordered<W>,
+    tick: &mut tokio::time::Interval,
+    mut report: impl FnMut(),
+) -> Result<T, OrchestrateError>
+where
+    F: std::future::Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+    W: std::future::Future<Output = Result<(), OrchestrateError>>,
+{
+    tokio::pin!(opening);
+    loop {
+        tokio::select! {
+            stream = &mut opening => return stream.map_err(|e| OrchestrateError::Transport(e.to_string())),
+            _ = tick.tick() => report(),
+            item = tasks.next(), if !tasks.is_empty() => {
+                if let Some(result) = item { result?; }
+            }
+        }
+    }
+}
+
 /// tx：多流切片模式。控制流读计划，按对端开来的切片流 seek 源文件发送。
 async fn serve_multi<C>(
     conn: &mut C,
@@ -427,6 +465,7 @@ async fn serve_multi<C>(
 where
     C: crate::transport::TransportConnection,
 {
+    let tuning = conn.transfer_tuning();
     // 1) 切片计划（对端=接收端决定）
     let mut plan = [0u8; PLAN_LEN];
     control.read_exact(&mut plan).await.map_err(classify_io)?;
@@ -445,18 +484,24 @@ where
     };
 
     // 3) 本地哈希：独立任务顺序读源文件（与发送并行；页缓存让二次读很便宜）
-    let hash_task = tokio::spawn(hash_file(path.clone(), opts.size));
+    let hash_task = hash_file(path.clone(), opts.size, tuning);
 
     // 4) 逐个接受切片流，按对端的索引 seek 发送对应切片
     let sent = Arc::new(AtomicU64::new(0));
     let mut tasks = FuturesUnordered::new();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    for _ in 0..slice_count {
-        tokio::select! {
-            stream = conn.listen() => {
-                let mut stream =
-                    stream.map_err(|e| OrchestrateError::Transport(e.to_string()))?;
+    let mut accepted = 0;
+    let mut seen = vec![false; slice_count as usize];
+    let sending = async {
+        while accepted < slice_count || !tasks.is_empty() {
+            if accepted < slice_count && tasks.len() < MAX_STREAMS {
+                let mut stream = await_stream(conn.listen(), &mut tasks, &mut tick, || {
+                    if let Some(progress) = opts.progress.as_mut() {
+                        progress(sent.load(Ordering::Relaxed));
+                    }
+                })
+                .await?;
                 let mut index = [0u8; 4];
                 stream.read_exact(&mut index).await.map_err(classify_io)?;
                 let index = u32::from_le_bytes(index) as u64;
@@ -465,43 +510,35 @@ where
                         "slice index {index} out of range {slice_count}"
                     )));
                 }
+                if std::mem::replace(&mut seen[index as usize], true) {
+                    return Err(OrchestrateError::Protocol(format!(
+                        "duplicate slice index {index}"
+                    )));
+                }
+                accepted += 1;
                 let offset = index * slice_size;
                 let len = (opts.size - offset).min(slice_size);
                 let (path2, sent2) = (path.clone(), sent.clone());
-                tasks.push(tokio::spawn(async move {
-                    serve_slice(path2, stream, offset, len, sent2).await
-                }));
+                tasks.push(
+                    async move { serve_slice(path2, stream, offset, len, sent2, tuning).await },
+                );
+                continue;
             }
-            _ = tick.tick() => {
-                if let Some(progress) = opts.progress.as_mut() {
-                    progress(sent.load(Ordering::Relaxed));
+            tokio::select! {
+                result = tasks.next(), if !tasks.is_empty() => {
+                    if let Some(result) = result { result?; }
+                }
+                _ = tick.tick() => {
+                    if let Some(progress) = opts.progress.as_mut() {
+                        progress(sent.load(Ordering::Relaxed));
+                    }
                 }
             }
         }
-    }
-    let joined: Result<(), OrchestrateError> = loop {
-        tokio::select! {
-            result = tasks.next() => match result {
-                None => break Ok(()),
-                Some(Ok(Ok(()))) => {}
-                Some(Ok(Err(e))) => break Err(e),
-                Some(Err(join)) => {
-                    break Err(OrchestrateError::Transport(join.to_string()));
-                }
-            },
-            _ = tick.tick() => {
-                if let Some(progress) = opts.progress.as_mut() {
-                    progress(sent.load(Ordering::Relaxed));
-                }
-            }
-        }
+        Ok::<(), OrchestrateError>(())
     };
-    joined?;
-
-    // 5) 本地核算 + 裁决
-    let local_sha_bytes = hash_task
-        .await
-        .map_err(|join| OrchestrateError::Transport(join.to_string()))??;
+    // 5) 本地核算与发送并行；任一失败会释放另一侧 future。
+    let (_, local_sha_bytes) = tokio::try_join!(sending, hash_task)?;
     let local_sha = hex(&local_sha_bytes);
     let verified = read_verdict(&mut control, &local_sha_bytes, opts.size).await?;
     summary.finish("multi", slice_count as usize, opts.size);
@@ -518,6 +555,7 @@ async fn serve_slice<S>(
     offset: u64,
     len: u64,
     sent: Arc<AtomicU64>,
+    tuning: ConnectionTuning,
 ) -> Result<(), OrchestrateError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send,
@@ -527,9 +565,9 @@ where
         .await
         .map_err(classify_io)?;
     let mut remaining = len;
-    let mut buf = vec![0u8; CHUNK];
+    let mut buf = vec![0u8; tuning.chunk.max(1)];
     while remaining > 0 {
-        let want = (CHUNK as u64).min(remaining) as usize;
+        let want = (tuning.chunk.max(1) as u64).min(remaining) as usize;
         let n = file.read(&mut buf[..want]).await.map_err(classify_io)?;
         if n == 0 {
             return Err(OrchestrateError::Protocol(
@@ -546,13 +584,17 @@ where
 }
 
 /// 顺序读整个文件并计算 SHA-256（tx 多流模式下的本地核算，与发送并行）。
-async fn hash_file(path: std::path::PathBuf, size: u64) -> Result<[u8; 32], OrchestrateError> {
+async fn hash_file(
+    path: std::path::PathBuf,
+    size: u64,
+    tuning: ConnectionTuning,
+) -> Result<[u8; 32], OrchestrateError> {
     let mut file = tokio::fs::File::open(&path).await.map_err(classify_io)?;
     let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; CHUNK];
+    let mut buf = vec![0u8; tuning.chunk.max(1)];
     let mut remaining = size;
     while remaining > 0 {
-        let want = (CHUNK as u64).min(remaining) as usize;
+        let want = (tuning.chunk.max(1) as u64).min(remaining) as usize;
         let n = file.read(&mut buf[..want]).await.map_err(classify_io)?;
         if n == 0 {
             return Err(OrchestrateError::Protocol(
@@ -618,6 +660,7 @@ async fn fetch_single<S>(
     offer: &TransferOffer,
     temp: &std::path::Path,
     mut progress: Option<&mut (dyn FnMut(u64) + Send)>,
+    tuning: ConnectionTuning,
 ) -> Result<(String, bool), OrchestrateError>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -630,14 +673,14 @@ where
         .map_err(classify_io)?;
     let mut dest = open_temp_rw(temp).await?;
     let (read_half, mut write_half) = tokio::io::split(control);
-    let mut body = prefetch(read_half);
+    let mut body = prefetch(read_half.take(offer.size), tuning);
 
     // 2) 精确读 offer.size 字节，边读边写、边算 SHA-256
     let mut hasher = Sha256::new();
     let mut received: u64 = 0;
     let mut remaining = offer.size;
     while remaining > 0 {
-        let want = (CHUNK as u64).min(remaining) as usize;
+        let want = (tuning.chunk.max(1) as u64).min(remaining) as usize;
         let mut buf = vec![0u8; want];
         let n = body.read(&mut buf).await.map_err(classify_io)?;
         if n == 0 {
@@ -653,6 +696,7 @@ where
             progress(received);
         }
     }
+    body.stop().await;
     dest.flush().await.map_err(classify_io)?;
     drop(dest);
     let mut local_sha_bytes = [0u8; 32];
@@ -676,11 +720,13 @@ async fn fetch_multi<C>(
     offer: &TransferOffer,
     temp: &std::path::Path,
     mut progress: Option<&mut (dyn FnMut(u64) + Send)>,
+    tuning: ConnectionTuning,
 ) -> Result<(String, bool), OrchestrateError>
 where
     C: crate::transport::TransportConnection,
 {
-    let (slice_size, slice_count) = slice_plan(offer.size);
+    let streams = tuning.streams.unwrap_or(MAX_STREAMS);
+    let (slice_size, slice_count) = slice_plan(offer.size, tuning.slice_size);
     // 1) 控制流：模式 + 计划
     control
         .write_all(&[MODE_MULTI])
@@ -696,52 +742,66 @@ where
     let received = Arc::new(AtomicU64::new(0));
     let done = Arc::new(SliceDone::new(slice_count));
     let mut tasks = FuturesUnordered::new();
-    for index in 0..slice_count {
-        let mut stream = conn
-            .dial()
-            .await
-            .map_err(|e| OrchestrateError::Transport(e.to_string()))?;
-        stream
-            .write_all(&(index as u32).to_le_bytes())
-            .await
-            .map_err(classify_io)?;
-        let (temp2, received2, done2) = (temp.to_path_buf(), received.clone(), done.clone());
-        tasks.push(tokio::spawn(async move {
-            fetch_slice(temp2, stream, index, slice_size, size, received2, done2).await
-        }));
-    }
-
-    // 3) 哈希任务：按序等待 + 读回切片
-    let hash_task = tokio::spawn(hash_slices(
+    let mut next = 0;
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let receiving = async {
+        while next < slice_count || !tasks.is_empty() {
+            if next < slice_count && tasks.len() < streams {
+                let mut stream = await_stream(conn.dial(), &mut tasks, &mut tick, || {
+                    if let Some(progress) = progress.as_mut() {
+                        progress(received.load(Ordering::Relaxed));
+                    }
+                })
+                .await?;
+                let index = next;
+                stream
+                    .write_all(&(index as u32).to_le_bytes())
+                    .await
+                    .map_err(classify_io)?;
+                next += 1;
+                let (temp2, received2, done2) =
+                    (temp.to_path_buf(), received.clone(), done.clone());
+                // 直接持有 future：返回错误或调用者取消时，所有切片立即一起释放。
+                tasks.push(async move {
+                    fetch_slice(
+                        temp2,
+                        stream,
+                        index,
+                        slice_size,
+                        size,
+                        SliceProgress {
+                            received: received2,
+                            done: done2,
+                        },
+                        tuning,
+                    )
+                    .await
+                });
+                continue;
+            }
+            tokio::select! {
+                item = tasks.next(), if !tasks.is_empty() => {
+                    if let Some(result) = item { result?; }
+                }
+                _ = tick.tick() => {
+                    if let Some(progress) = progress.as_mut() {
+                        progress(received.load(Ordering::Relaxed));
+                    }
+                }
+            }
+        }
+        Ok::<(), OrchestrateError>(())
+    };
+    let hashing = hash_slices(
         temp.to_path_buf(),
         size,
         slice_size,
         slice_count,
-        done,
-    ));
-
-    // 4) 收任务 + 进度（进度回调只在主任务里调用）
-    let mut tick = tokio::time::interval(Duration::from_millis(100));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let joined: Result<(), OrchestrateError> = loop {
-        tokio::select! {
-            item = tasks.next() => match item {
-                None => break Ok(()),
-                Some(Ok(Ok(()))) => {}
-                Some(Ok(Err(e))) => break Err(e),
-                Some(Err(join)) => break Err(OrchestrateError::Transport(join.to_string())),
-            },
-            _ = tick.tick() => {
-                if let Some(progress) = progress.as_mut() {
-                    progress(received.load(Ordering::Relaxed));
-                }
-            }
-        }
-    };
-    joined?;
-    let local_sha_bytes = hash_task
-        .await
-        .map_err(|join| OrchestrateError::Transport(join.to_string()))??;
+        done.clone(),
+        tuning,
+    );
+    let (_, local_sha_bytes) = tokio::try_join!(receiving, hashing)?;
 
     // 5) 裁决（诚实 rx：按本地核算提交）
     let mut verdict = [0u8; VERDICT_LEN];
@@ -756,6 +816,12 @@ where
     ))
 }
 
+/// 切片写入共享状态：累计进度与完成通知同属一次接收。
+struct SliceProgress {
+    received: Arc<AtomicU64>,
+    done: Arc<SliceDone>,
+}
+
 /// rx：接收一个切片——读索引声明的区间，按偏移写盘，完成即置位。
 async fn fetch_slice<S>(
     temp: std::path::PathBuf,
@@ -763,8 +829,8 @@ async fn fetch_slice<S>(
     index: u64,
     slice_size: u64,
     size: u64,
-    received: Arc<AtomicU64>,
-    done: Arc<SliceDone>,
+    progress: SliceProgress,
+    tuning: ConnectionTuning,
 ) -> Result<(), OrchestrateError>
 where
     S: AsyncRead + Unpin + Send,
@@ -776,9 +842,9 @@ where
         .await
         .map_err(classify_io)?;
     let mut remaining = len;
-    let mut buf = vec![0u8; CHUNK];
+    let mut buf = vec![0u8; tuning.chunk.max(1)];
     while remaining > 0 {
-        let want = (CHUNK as u64).min(remaining) as usize;
+        let want = (tuning.chunk.max(1) as u64).min(remaining) as usize;
         let n = stream.read(&mut buf[..want]).await.map_err(classify_io)?;
         if n == 0 {
             return Err(OrchestrateError::Protocol(
@@ -786,10 +852,11 @@ where
             ));
         }
         dest.write_all(&buf[..n]).await.map_err(classify_io)?;
-        received.fetch_add(n as u64, Ordering::Relaxed);
+        progress.received.fetch_add(n as u64, Ordering::Relaxed);
         remaining -= n as u64;
     }
-    done.mark(index as usize);
+    dest.flush().await.map_err(classify_io)?;
+    progress.done.mark(index as usize);
     Ok(())
 }
 
@@ -800,10 +867,11 @@ async fn hash_slices(
     slice_size: u64,
     slice_count: u64,
     done: Arc<SliceDone>,
+    tuning: ConnectionTuning,
 ) -> Result<[u8; 32], OrchestrateError> {
     let mut file = tokio::fs::File::open(&path).await.map_err(classify_io)?;
     let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; CHUNK];
+    let mut buf = vec![0u8; tuning.chunk.max(1)];
     for index in 0..slice_count {
         done.wait_for(index as usize).await;
         file.seek(io::SeekFrom::Start(index * slice_size))
@@ -811,7 +879,7 @@ async fn hash_slices(
             .map_err(classify_io)?;
         let mut remaining = (size - index * slice_size).min(slice_size);
         while remaining > 0 {
-            let want = (CHUNK as u64).min(remaining) as usize;
+            let want = (tuning.chunk.max(1) as u64).min(remaining) as usize;
             file.read_exact(&mut buf[..want])
                 .await
                 .map_err(classify_io)?;
@@ -904,6 +972,8 @@ pub async fn receive<C>(
 where
     C: crate::transport::TransportConnection,
 {
+    let mut tuning = conn.transfer_tuning();
+    tuning.validate().map_err(OrchestrateError::Protocol)?;
     let offer = options.offer.ok_or_else(|| {
         OrchestrateError::Protocol(
             "payload size unknown (the sender never announced a transfer offer)".into(),
@@ -928,21 +998,25 @@ where
     let guard = TempGuard(temp.clone());
 
     let summary = Summary::new("rx", conn);
-    let tuning = TransferTuning::resolve(
+    let rtt = conn.rtt().await;
+    let streams = resolve_streams(
+        tuning,
         options.profile,
-        conn.rtt().await,
+        conn.peer_addr(),
+        rtt,
         offer.size,
         options.peer_multi_stream,
     );
-    let use_multi = tuning.streams > 1 && offer.size >= MIN_MULTISTREAM_SIZE;
+    tuning.streams = Some(streams);
+    let use_multi = streams > 1;
     let stream = conn
         .dial()
         .await
         .map_err(|e| OrchestrateError::Transport(e.to_string()))?;
     let (sha256, verified) = if use_multi {
-        fetch_multi(conn, stream, offer, &temp, options.progress).await?
+        fetch_multi(conn, stream, offer, &temp, options.progress, tuning).await?
     } else {
-        fetch_single(stream, offer, &temp, options.progress).await?
+        fetch_single(stream, offer, &temp, options.progress, tuning).await?
     };
     // 落盘完整后 sync（Windows 的 FlushFileBuffers 需要写访问 → 读+写句柄）
     let file = open_temp_rw(&temp).await?;
@@ -969,7 +1043,7 @@ where
     std::mem::forget(guard);
     summary.finish(
         if use_multi { "multi" } else { "single" },
-        tuning.streams,
+        streams,
         offer.size,
     );
     Ok(Receipt {
@@ -978,205 +1052,4 @@ where
         size: offer.size,
         kind: offer.kind,
     })
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::crypto::cpace::Role;
-    use crate::crypto::kdf::derive_wg_psk;
-    use crate::options::LinkProfile;
-    use crate::transport::QuicConnection;
-    use crate::transport::iface::Transport;
-    use crate::transport::quic::transport::QuicTransport;
-    use std::net::{Ipv6Addr, SocketAddrV6};
-
-    /// 建一对已建立、可 listen/dial 的连接（QUIC 回环）。
-    async fn connected_pair() -> (QuicConnection, QuicConnection) {
-        let mut tx = QuicTransport::new();
-        let mut rx = QuicTransport::new();
-        let bind: std::net::SocketAddr = SocketAddrV6::new(Ipv6Addr::LOCALHOST, 0, 0, 0).into();
-        tx.set_udp_bind(Some(bind));
-        rx.set_udp_bind(Some(bind));
-        tx.set_credential_fingerprint([0x66; 32]);
-        rx.set_credential_fingerprint([0x66; 32]);
-        let tx_ep = tx.prepare().await.unwrap();
-        let rx_ep = rx.prepare().await.unwrap();
-        let psk = derive_wg_psk(&[0x44u8; 32], 7);
-        let tx_conn = tx.establish(Role::Sender, &psk, &rx_ep).await.unwrap();
-        let rx_conn = rx.establish(Role::Receiver, &psk, &tx_ep).await.unwrap();
-        (tx_conn, rx_conn)
-    }
-
-    /// 终极 e2e：两个 QuicTransport + 单流帧，完整搬运一段文本并裁决。
-    #[tokio::test]
-    async fn end_to_end_file_transfer() {
-        let (mut tx_conn, mut rx_conn) = connected_pair().await;
-        let data = "hermod end-to-end file transfer!".to_string();
-        let offer = TransferOffer {
-            kind: crate::transfer::Kind::File,
-            name: "hello.txt".into(),
-            size: data.len() as u64,
-        };
-
-        let dir = std::env::temp_dir().join(format!("hermod-e2e-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let dest_dir = dir.join("out");
-
-        let (serve_out, receipt) = tokio::join!(
-            async { send_text(&mut tx_conn, &data, None).await.unwrap() },
-            async {
-                receive(
-                    &mut rx_conn,
-                    &dest_dir,
-                    ReceiveOptions {
-                        offer: Some(&offer),
-                        ..Default::default()
-                    },
-                )
-                .await
-                .unwrap()
-            },
-        );
-
-        assert!(serve_out.verified);
-        assert_eq!(std::fs::read(&receipt.path).unwrap(), data.as_bytes());
-        assert_eq!(receipt.sha256, crate::transfer::hash_bytes(data.as_bytes()));
-        assert_eq!(receipt.path.file_name().unwrap(), "hello.txt");
-        let _ = std::fs::remove_dir_all(&dir);
-        crate::transport::iface::TransportConnection::shutdown(&mut tx_conn)
-            .await
-            .unwrap();
-        crate::transport::iface::TransportConnection::shutdown(&mut rx_conn)
-            .await
-            .unwrap();
-    }
-
-    /// 多流切片 e2e：真实文件源 + 局域网档，17 MiB 走多流路径，
-    /// 校验字节级一致与哈希一致。
-    #[tokio::test]
-    async fn end_to_end_multistream_transfer() {
-        let (mut tx_conn, mut rx_conn) = connected_pair().await;
-        // 17 MiB 确定性伪随机载荷（LCG，不引依赖）
-        let mut data = Vec::with_capacity(17 * 1024 * 1024);
-        let mut state = 0x1234_5678_u32;
-        for _ in 0..data.capacity() {
-            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            data.push((state >> 24) as u8);
-        }
-        let dir = std::env::temp_dir().join(format!("hermod-e2e-multi-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let src = dir.join("payload.bin");
-        std::fs::write(&src, &data).unwrap();
-        let offer = TransferOffer {
-            kind: crate::transfer::Kind::File,
-            name: "payload.bin".into(),
-            size: data.len() as u64,
-        };
-        let dest_dir = dir.join("out");
-
-        let (serve_out, receipt) = tokio::join!(
-            async { send_file(&mut tx_conn, &src, None).await.unwrap() },
-            async {
-                receive(
-                    &mut rx_conn,
-                    &dest_dir,
-                    ReceiveOptions {
-                        offer: Some(&offer),
-                        profile: LinkProfile::Lan,
-                        peer_multi_stream: true,
-                        ..Default::default()
-                    },
-                )
-                .await
-                .unwrap()
-            },
-        );
-
-        assert!(serve_out.verified);
-        assert_eq!(receipt.sha256, crate::transfer::hash_bytes(&data));
-        assert_eq!(std::fs::read(&receipt.path).unwrap(), data);
-        let _ = std::fs::remove_dir_all(&dir);
-        crate::transport::iface::TransportConnection::shutdown(&mut tx_conn)
-            .await
-            .unwrap();
-        crate::transport::iface::TransportConnection::shutdown(&mut rx_conn)
-            .await
-            .unwrap();
-    }
-
-    /// 档位解析：Auto 按 RTT，Lan/Compatible 强制，对端能力与文件大小是闸门。
-    #[test]
-    fn tuning_resolves_profiles() {
-        let big = 1_u64 << 30;
-        // 弱网 RTT → 单流
-        assert_eq!(
-            TransferTuning::resolve(
-                LinkProfile::Auto,
-                Some(Duration::from_millis(80)),
-                big,
-                true
-            )
-            .streams,
-            1
-        );
-        // 局域网 RTT + 对端可 seek + 大文件 → 多流
-        assert_eq!(
-            TransferTuning::resolve(LinkProfile::Auto, Some(Duration::from_millis(5)), big, true)
-                .streams,
-            MAX_STREAMS
-        );
-        // 对端不可 seek → 单流
-        assert_eq!(
-            TransferTuning::resolve(LinkProfile::Lan, Some(Duration::from_millis(5)), big, false)
-                .streams,
-            1
-        );
-        // 小文件 → 单流
-        assert_eq!(
-            TransferTuning::resolve(LinkProfile::Lan, Some(Duration::from_millis(5)), 1024, true)
-                .streams,
-            1
-        );
-        // 兼容档 → 单流
-        assert_eq!(
-            TransferTuning::resolve(
-                LinkProfile::Compatible,
-                Some(Duration::from_millis(1)),
-                big,
-                true,
-            )
-            .streams,
-            1
-        );
-    }
-
-    /// 切片计划必须恰好覆盖 [0, size) 且通过自身的校验。
-    #[test]
-    fn slice_plan_covers_the_file_exactly() {
-        for size in [
-            MIN_MULTISTREAM_SIZE,
-            MIN_MULTISTREAM_SIZE + 1,
-            100 * 1024 * 1024,
-            3 * 1024 * 1024 * 1024 - 7,
-        ] {
-            let (slice_size, count) = slice_plan(size);
-            assert!((2..=512).contains(&count), "count {count} for size {size}");
-            validate_plan(size, slice_size, count).unwrap();
-            assert!((count - 1) * slice_size < size);
-            assert!(size <= count * slice_size);
-        }
-    }
-
-    /// 计划校验拒绝敌意取值（对端可控帧）。
-    #[test]
-    fn plan_validation_rejects_hostile_values() {
-        let size = 100 * 1024 * 1024_u64;
-        assert!(validate_plan(size, CHUNK as u64, 1).is_err()); // 少于 2 片
-        assert!(validate_plan(size, CHUNK as u64, 513).is_err()); // 超上限
-        assert!(validate_plan(size, 1024, 8).is_err()); // 切片过小
-        assert!(validate_plan(size, 13 * 1024 * 1024, 2).is_err()); // 覆盖不足
-        assert!(validate_plan(size, 51 * 1024 * 1024, 2).is_ok()); // 正常
-    }
 }

@@ -12,21 +12,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-const IDLE: Duration = Duration::from_secs(30);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(660);
 
 /// 执行 `rx`。
 pub async fn run(
     args: RxArgs,
+    opts: session::SessionOptions,
     abort_slot: util::AbortSlot,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cfg = config::load().map_err(util::boxed)?;
-    if let Some(s) = &args.server {
-        cfg.server_url = config::normalize_server_url(s).map_err(util::boxed)?;
-    }
+    let cfg = config::load().map_err(util::boxed)?;
 
     verbosity::debug(format!("server_url={}", cfg.server_url));
-    let opts = args.network.options(true)?;
     let mut rx = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         session::receiver_session_with(&cfg, &args.code, &opts),
@@ -40,7 +36,7 @@ pub async fn run(
     }
     verbosity::status("Establishing P2P connection...");
 
-    let dest = args.destination.unwrap_or_else(|| ".".to_string());
+    let dest = args.output;
     std::fs::create_dir_all(&dest).map_err(util::boxed)?;
 
     let pb = progress::spinner(verbosity::is_quiet());
@@ -57,8 +53,10 @@ pub async fn run(
             indicatif::HumanBytes(n),
             indicatif::HumanBytes(rate as u64)
         ));
-        got2.store(n, Ordering::Relaxed);
-        let _ = tick_tx.try_send(());
+        // 多流定时回调可能重复同一累计值；只有真实字节进展才重置看门狗。
+        if n > got2.fetch_max(n, Ordering::Relaxed) {
+            let _ = tick_tx.try_send(());
+        }
     };
     let mut on_progress = on_progress;
     // 协议 v2：元数据来自端点交换里的 offer（进度条总长已知）
@@ -81,7 +79,7 @@ pub async fn run(
             peer_multi_stream: rx.peer_multi_stream,
         },
     );
-    let receipt = match progress::with_idle_timeout(fut, tick_rx, IDLE).await {
+    let receipt = match progress::with_idle_timeout(fut, tick_rx, opts.tuning.idle_timeout).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => return Err(Box::new(e)),
         Err(msg) => {

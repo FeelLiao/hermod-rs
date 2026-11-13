@@ -1,7 +1,104 @@
 //! CLI 与 GUI 共用的连接选项；按实际协议校验，禁止静默忽略。
 use crate::{session::SessionOptions, transport::TransportKind};
 use serde::{Deserialize, Serialize};
-use std::{fmt, str::FromStr};
+use std::{fmt, net::IpAddr, str::FromStr, time::Duration};
+
+/// 本次运行的地址族约束；显式限制不得跨族回退。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum IpFamily {
+    #[default]
+    Auto,
+    V4,
+    V6,
+}
+impl IpFamily {
+    /// IPv4 映射地址按原始 IPv4 家族处理。
+    pub fn allows(self, ip: IpAddr) -> bool {
+        let ipv4 = match ip {
+            IpAddr::V4(_) => true,
+            IpAddr::V6(ip) => ip.to_ipv4_mapped().is_some(),
+        };
+        match self {
+            Self::Auto => true,
+            Self::V4 => ipv4,
+            Self::V6 => !ipv4,
+        }
+    }
+}
+
+/// 非持久化的本端传输预算；CLI 和会话入口在联网前统一校验。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransferTuning {
+    pub streams: Option<usize>,
+    pub chunk: usize,
+    pub window: u64,
+    pub udp_buffer: usize,
+    pub slice_size: u64,
+    pub prefetch: usize,
+    pub keepalive: Duration,
+    pub idle_timeout: Duration,
+}
+impl Default for TransferTuning {
+    fn default() -> Self {
+        Self {
+            streams: None,
+            chunk: 1024 * 1024,
+            window: 64 * 1024 * 1024,
+            udp_buffer: 16 * 1024 * 1024,
+            slice_size: 4 * 1024 * 1024,
+            prefetch: 16,
+            keepalive: Duration::from_secs(10),
+            idle_timeout: Duration::from_secs(30),
+        }
+    }
+}
+impl TransferTuning {
+    /// 预算最大为 8 条流、2 GiB 连接窗和 256 MiB 预读队列，不按输入截断。
+    pub fn validate(&self) -> Result<(), String> {
+        if self.streams.is_some_and(|n| !(1..=8).contains(&n)) {
+            return Err("streams must be auto or 1..=8".into());
+        }
+        for (name, value, min, max) in [
+            ("chunk", self.chunk as u64, 256 * 1024, 4 * 1024 * 1024),
+            ("window", self.window, 8 * 1024 * 1024, 256 * 1024 * 1024),
+            (
+                "udp-buffer",
+                self.udp_buffer as u64,
+                1024 * 1024,
+                64 * 1024 * 1024,
+            ),
+            (
+                "slice-size",
+                self.slice_size,
+                4 * 1024 * 1024,
+                64 * 1024 * 1024,
+            ),
+            ("prefetch", self.prefetch as u64, 4, 64),
+        ] {
+            if !(min..=max).contains(&value) {
+                return Err(format!(
+                    "{name} must be {min}..={max}{}",
+                    if name == "prefetch" { "" } else { " bytes" }
+                ));
+            }
+        }
+        if self.keepalive > Duration::from_secs(60) {
+            return Err("keepalive must be 0..=60 seconds".into());
+        }
+        if !(Duration::from_secs(10)..=Duration::from_secs(300)).contains(&self.idle_timeout) {
+            return Err("idle-timeout must be 10..=300 seconds".into());
+        }
+        if self.idle_timeout <= self.keepalive {
+            return Err("idle-timeout must be greater than keepalive".into());
+        }
+        Ok(())
+    }
+
+    /// 连接总窗口按允许的八条数据流预留，避免两端并发偏好不同导致流控饥饿。
+    pub(crate) fn connection_window(&self) -> u64 {
+        self.window * 8
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -13,7 +110,7 @@ pub enum Mtu {
 impl FromStr for Mtu {
     type Err = String;
     fn from_str(value: &str) -> Result<Self, String> {
-        if value == "auto" {
+        if value.eq_ignore_ascii_case("auto") {
             return Ok(Self::Auto);
         }
         let value: u16 = value
@@ -58,35 +155,35 @@ pub enum Congestion {
 
 /// 链路档位：决定数据面并发（单流/多流切片）与拥塞启动参数。
 ///
-/// - `Auto`：按探测到的 RTT 在线选择（局域网用激进参数，弱网保守）；
+/// - `Auto`：按实际对端地址判断；有有效 RTT 时还须不超过 25 ms；
 /// - `Lan`：强制局域网档（多流并行 + 更低的初始 RTT）；
-/// - `Compatible`：强制兼容档（单流大块流水线，最保守）。
+/// - `Wan`：强制广域网档（默认单流大块流水线）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LinkProfile {
     #[default]
     Auto,
     Lan,
-    Compatible,
+    Wan,
 }
 impl LinkProfile {
-    /// 字符串值："auto" | "lan" | "compatible"。
+    /// 字符串值："auto" | "lan" | "wan"。
     pub fn as_str(self) -> &'static str {
         match self {
             LinkProfile::Auto => "auto",
             LinkProfile::Lan => "lan",
-            LinkProfile::Compatible => "compatible",
+            LinkProfile::Wan => "wan",
         }
     }
 }
 impl FromStr for LinkProfile {
     type Err = String;
     fn from_str(value: &str) -> Result<Self, String> {
-        match value {
+        match value.to_ascii_lowercase().as_str() {
             "auto" => Ok(Self::Auto),
             "lan" => Ok(Self::Lan),
-            "compatible" => Ok(Self::Compatible),
-            _ => Err("Profile must be auto, lan or compatible".into()),
+            "wan" => Ok(Self::Wan),
+            _ => Err("Profile must be auto, lan or wan".into()),
         }
     }
 }
@@ -109,7 +206,7 @@ impl fmt::Display for LinkProfile {
 impl FromStr for Congestion {
     type Err = String;
     fn from_str(value: &str) -> Result<Self, String> {
-        match value {
+        match value.to_ascii_lowercase().as_str() {
             "auto" => Ok(Self::Auto),
             "bbr" => Ok(Self::Bbr),
             "cubic" => Ok(Self::Cubic),
@@ -159,14 +256,19 @@ impl ConnectionSettings {
             profile: self.profile,
             ..Default::default()
         };
-        if let Some(kind) = transport {
-            options.validate_for(kind)?;
-        }
+        options.validate_for(transport.unwrap_or(TransportKind::Quic))?;
         Ok(options)
     }
 }
 impl SessionOptions {
     pub fn validate_for(&self, kind: TransportKind) -> Result<(), String> {
+        self.tuning.validate()?;
+        if self
+            .udp_bind
+            .is_some_and(|addr| !self.family.allows(addr.ip()))
+        {
+            return Err("UDP bind address conflicts with the selected IP family".into());
+        }
         let valid_mtu = match kind {
             TransportKind::Quic => 1200..=1452,
         };
@@ -196,6 +298,129 @@ impl SessionOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tuning_rejects_invalid_budgets_and_accepts_boundaries() {
+        let defaults = TransferTuning::default();
+        assert!(defaults.validate().is_ok());
+        assert_eq!(defaults.connection_window(), 512 * 1024 * 1024);
+        for streams in [0, 9, usize::MAX] {
+            assert!(
+                TransferTuning {
+                    streams: Some(streams),
+                    ..defaults
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        for chunk in [0, 256 * 1024 - 1, 4 * 1024 * 1024 + 1] {
+            assert!(TransferTuning { chunk, ..defaults }.validate().is_err());
+        }
+        for window in [0, 8 * 1024 * 1024 - 1, 256 * 1024 * 1024 + 1] {
+            assert!(TransferTuning { window, ..defaults }.validate().is_err());
+        }
+        for udp_buffer in [0, 1024 * 1024 - 1, 64 * 1024 * 1024 + 1] {
+            assert!(
+                TransferTuning {
+                    udp_buffer,
+                    ..defaults
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        for slice_size in [0, 4 * 1024 * 1024 - 1, 64 * 1024 * 1024 + 1] {
+            assert!(
+                TransferTuning {
+                    slice_size,
+                    ..defaults
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        for prefetch in [0, 3, 65] {
+            assert!(
+                TransferTuning {
+                    prefetch,
+                    ..defaults
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        for idle_timeout in [
+            Duration::ZERO,
+            Duration::from_secs(9),
+            Duration::from_secs(301),
+        ] {
+            assert!(
+                TransferTuning {
+                    idle_timeout,
+                    ..defaults
+                }
+                .validate()
+                .is_err()
+            );
+        }
+        assert!(
+            TransferTuning {
+                keepalive: Duration::from_secs(61),
+                ..defaults
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            TransferTuning {
+                keepalive: Duration::from_secs(30),
+                ..defaults
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            TransferTuning {
+                keepalive: Duration::ZERO,
+                idle_timeout: Duration::from_secs(10),
+                ..defaults
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            TransferTuning {
+                streams: Some(8),
+                chunk: 4 * 1024 * 1024,
+                window: 256 * 1024 * 1024,
+                udp_buffer: 64 * 1024 * 1024,
+                slice_size: 64 * 1024 * 1024,
+                prefetch: 64,
+                keepalive: Duration::from_secs(60),
+                idle_timeout: Duration::from_secs(300)
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn clean_profiles_and_family_constraints() {
+        assert_eq!("WaN".parse::<LinkProfile>().unwrap(), LinkProfile::Wan);
+        assert!("compatible".parse::<LinkProfile>().is_err());
+        assert_eq!(serde_json::to_string(&LinkProfile::Wan).unwrap(), "\"wan\"");
+        assert_eq!("BBR".parse::<Congestion>().unwrap(), Congestion::Bbr);
+        assert_eq!("AUTO".parse::<Mtu>().unwrap(), Mtu::Auto);
+        assert!(IpFamily::V4.allows("::ffff:127.0.0.1".parse().unwrap()));
+        assert!(!IpFamily::V6.allows("::ffff:127.0.0.1".parse().unwrap()));
+        let options = SessionOptions {
+            family: IpFamily::V6,
+            udp_bind: Some("127.0.0.1:0".parse().unwrap()),
+            ..Default::default()
+        };
+        assert!(options.validate_for(TransportKind::Quic).is_err());
+    }
+
     #[test]
     fn settings_validate_protocol_semantics_and_receiver_auto() {
         let mut settings = ConnectionSettings::default();

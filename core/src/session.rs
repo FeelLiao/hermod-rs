@@ -104,6 +104,10 @@ pub struct SessionOptions {
     /// 发送端声明：载荷源可随机访问（能按切片 seek 发送，支持多流模式）。
     /// 随端点 bundle 公布给接收端；接收端据此决定是否用多流模式。
     pub multi_stream_capable: bool,
+    /// 本次会话严格使用的地址族。
+    pub family: crate::options::IpFamily,
+    /// 本端非持久化传输预算。
+    pub tuning: crate::options::TransferTuning,
 }
 
 impl Default for SessionOptions {
@@ -117,6 +121,8 @@ impl Default for SessionOptions {
             congestion: crate::options::Congestion::Auto,
             profile: crate::options::LinkProfile::Auto,
             multi_stream_capable: false,
+            family: crate::options::IpFamily::Auto,
+            tuning: crate::options::TransferTuning::default(),
         }
     }
 }
@@ -181,12 +187,12 @@ fn parse_hex32(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-async fn open(config: &Config) -> Result<WsStream, SessionError> {
+async fn open(config: &Config, family: crate::options::IpFamily) -> Result<WsStream, SessionError> {
     let (url, spki) = expected_spki(config)?;
     crate::log_info!(server = %url, "connecting to signaling server");
     let ws = tokio::time::timeout(
         std::time::Duration::from_secs(15),
-        client::connect_pinned(&url, spki),
+        client::connect_pinned_with_family(&url, spki, family),
     )
     .await
     .map_err(|_| {
@@ -229,7 +235,7 @@ pub async fn sender_session_with_ready(
     }
     let (channel_id, words) = wordlist::parse_transfer_code(code)?;
     let password = words.join("-");
-    let mut ws = open(config).await?;
+    let mut ws = open(config, opts.family).await?;
     crate::log_info!(channel_id, "waiting for receiver to join channel");
     let (k, observed) =
         client::sender_handshake_with_ready(&mut ws, channel_id, &password, on_ready).await?;
@@ -264,12 +270,11 @@ pub async fn receiver_session_with(
     code: &str,
     opts: &SessionOptions,
 ) -> Result<RxSession, SessionError> {
-    if let Some(kind) = opts.transport {
-        opts.validate_for(kind).map_err(SessionError::Options)?;
-    }
+    opts.validate_for(opts.transport.unwrap_or(TransportKind::Quic))
+        .map_err(SessionError::Options)?;
     let (channel_id, words) = wordlist::parse_transfer_code(code)?;
     let password = words.join("-");
-    let mut ws = open(config).await?;
+    let mut ws = open(config, opts.family).await?;
     let (k, observed) = client::receiver_handshake(&mut ws, channel_id, &password).await?;
     crate::log_info!(
         public_v6 = %observed.public_ipv6,
@@ -306,6 +311,7 @@ fn build_transport(
     let mut transport = AnyTransport::new(kind);
     transport.set_udp_bind(opts.udp_bind);
     transport.configure(opts.mtu, opts.congestion, opts.profile);
+    transport.set_transfer_options(opts.family, opts.tuning);
     // server 观测地址作为 server-reflexive 提示（仅 IPv6 生效）
     transport.set_server_hint(observed.public_ipv6.parse().ok());
     transport.set_credential_fingerprint(fingerprint);
@@ -481,6 +487,22 @@ async fn exchange_and_establish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn invalid_tuning_precedes_trust_dns_and_channel_access() {
+        let config = cfg_with("wss://invalid.invalid:4376", None);
+        let options = SessionOptions {
+            tuning: crate::options::TransferTuning {
+                prefetch: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let tx = sender_session_with(&config, "not-a-valid-code", &options).await;
+        assert!(matches!(tx, Err(SessionError::Options(_))));
+        let rx = receiver_session_with(&config, "not-a-valid-code", &options).await;
+        assert!(matches!(rx, Err(SessionError::Options(_))));
+    }
 
     #[test]
     fn optional_offer_is_compatible_and_validated() {

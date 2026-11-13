@@ -17,23 +17,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-const IDLE: Duration = Duration::from_secs(30);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(660);
 
 /// 执行 `tx`。
 pub async fn run(
     args: TxArgs,
+    mut opts: session::SessionOptions,
     abort_slot: util::AbortSlot,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut cfg = config::load().map_err(util::boxed)?;
-    if let Some(s) = &args.server {
-        cfg.server_url = config::normalize_server_url(s).map_err(util::boxed)?;
-    }
+    let cfg = config::load().map_err(util::boxed)?;
 
     // 0) 先确认 server 已信任，避免打印一个用不了的传输码
     hermod_core::session::expected_spki(&cfg).map_err(util::boxed)?;
-
-    let mut opts = args.network.options(false)?;
 
     // 先准备输入并确定大小；文件源用路径（可 seek，支持多流切片），
     // 顺序源（stdin/文本）保留流形状走单流。
@@ -96,7 +91,7 @@ pub async fn run(
     // 可 seek 的文件源经 bundle 声明，接收端才可能选择多流切片模式。
     opts.multi_stream_capable = matches!(&source, orchestrate::PayloadSource::File(_));
     let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
-    let (_, code) = wordlist::generate_transfer_code(&mut rng, usize::from(args.words));
+    let (_, code) = wordlist::generate_transfer_code(&mut rng, 3);
     let mut tx = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         session::sender_session_with_ready(&cfg, &code, &opts, || {
@@ -123,8 +118,10 @@ pub async fn run(
     let sent2 = sent.clone();
     let progress = Some(Box::new(move |n| {
         pb2.set_position(n);
-        sent2.store(n, Ordering::Relaxed);
-        let _ = tick_tx.try_send(());
+        // 多流定时回调可能重复同一累计值；只有真实字节进展才重置看门狗。
+        if n > sent2.fetch_max(n, Ordering::Relaxed) {
+            let _ = tick_tx.try_send(());
+        }
     }) as Box<dyn FnMut(u64) + Send>);
     let out = run_with_idle(
         orchestrate::serve_file(
@@ -139,6 +136,7 @@ pub async fn run(
         ),
         tick_rx,
         sent,
+        opts.tuning.idle_timeout,
     )
     .await?;
     pb.finish_and_clear();
@@ -235,11 +233,12 @@ async fn run_with_idle<F, T>(
     fut: F,
     ticks: mpsc::Receiver<()>,
     sent: Arc<AtomicU64>,
+    idle_timeout: Duration,
 ) -> Result<T, Box<dyn std::error::Error>>
 where
     F: std::future::Future<Output = Result<T, orchestrate::OrchestrateError>>,
 {
-    match progress::with_idle_timeout(fut, ticks, IDLE).await {
+    match progress::with_idle_timeout(fut, ticks, idle_timeout).await {
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(Box::new(e)),
         Err(msg) => Err(format!(

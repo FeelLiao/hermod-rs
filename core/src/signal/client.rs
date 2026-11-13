@@ -4,14 +4,15 @@
 //! - [`connect_pinned`]：连 `wss://host:4376/ws`，用 M2.2 的 SPKI pinning 验证服务器；
 //! - [`send_message`] / [`recv_message`]：收发 M2.1 定义的 JSON 信封。
 
+use crate::options::IpFamily;
 use crate::signal::protocol::{Message, MsgType};
 use crate::signal::tls::pinned_client_config;
+use crate::transport::network::connect_tcp_with_family;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
-use tokio_tungstenite::{
-    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
-};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::{Connector, MaybeTlsStream, WebSocketStream, client_async_tls_with_config};
 
 /// 信令 WebSocket 流类型（明文或 TLS 由 URL scheme 决定）。
 pub type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -39,12 +40,40 @@ pub enum ClientError {
 ///
 /// `expected_spki` 来自 `hermod trust` 记录的指纹（见 [`crate::signal::tls`]）。
 pub async fn connect_pinned(url: &str, expected_spki: [u8; 32]) -> Result<WsStream, ClientError> {
-    let ws_url = ws_endpoint(url);
+    connect_pinned_with_family(url, expected_spki, IpFamily::Auto).await
+}
+
+/// 自行解析 DNS 并限制 TCP 地址族；TLS 仍使用原 URL 主机名及 SPKI pin。
+pub async fn connect_pinned_with_family(
+    url: &str,
+    expected_spki: [u8; 32],
+    family: IpFamily,
+) -> Result<WsStream, ClientError> {
+    let request = ws_endpoint(url).into_client_request()?;
+    let tcp = connect_request_tcp(&request, family).await?;
     let config = pinned_client_config(expected_spki);
     let connector = Connector::Rustls(config);
     let (stream, _response) =
-        connect_async_tls_with_config(&ws_url, None, false, Some(connector)).await?;
+        client_async_tls_with_config(request, tcp, None, Some(connector)).await?;
     Ok(stream)
+}
+
+/// 保留原始请求 URI，TLS 连接器据此取 SNI，不能替换成 DNS 解析出的 IP。
+pub(crate) async fn connect_request_tcp(
+    request: &tokio_tungstenite::tungstenite::handshake::client::Request,
+    family: IpFamily,
+) -> Result<TcpStream, tokio_tungstenite::tungstenite::Error> {
+    use tokio_tungstenite::tungstenite::{Error, error::UrlError};
+    let uri = request.uri();
+    let host = uri.host().ok_or(Error::Url(UrlError::NoHostName))?;
+    let port = match uri.scheme_str() {
+        Some("wss") => uri.port_u16().unwrap_or(443),
+        Some("ws") => uri.port_u16().unwrap_or(80),
+        _ => return Err(Error::Url(UrlError::UnsupportedUrlScheme)),
+    };
+    connect_tcp_with_family(host, port, family)
+        .await
+        .map_err(Error::Io)
 }
 
 /// 补 `/ws` 路径（对应 Go `signaling.go` 的行为）：server 的 WebSocket 端点在 `/ws`。

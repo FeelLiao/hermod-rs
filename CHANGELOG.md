@@ -6,6 +6,35 @@ adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### CLI transport tuning — implementation in progress
+
+Awaiting user verification; the following records the confirmed implementation
+contract, not completed acceptance or measured performance gains.
+
+- Tuning uses explicit CLI values for this invocation, otherwise built-in defaults;
+  it is not persisted or read from YAML. Existing server/pin configuration remains.
+- Add strict global -4/-6 selection for tx, rx, trust and serve, with no cross-family
+  fallback. serve defaults to dual-stack and supports family-restricted listeners.
+- Use case-insensitive auto/lan/wan profiles and auto/bbr/cubic/newreno congestion
+  values (default BBR). Remove LinkProfile::Compatible and its alias without a GUI/
+  bridge compatibility promise; this work does not modify those layers.
+- Expose six resource options (streams, chunk, window, udp-buffer, slice-size,
+  prefetch) and two resilience options (keepalive, idle-timeout), validated before
+  networking. Sizes accept integer bytes or integer KiB/MiB. Explicit data-plane
+  options on serve/trust are errors, including explicit default values.
+- rx selects actual stream concurrency; tx budgets cannot force rx concurrency.
+  Connection receive/send windows provision window × 8 for legal eight-stream
+  peers. Larger windows, chunk/prefetch queues and socket buffers have memory
+  tradeoffs; no throughput improvement has been measured for this change.
+- idle-timeout configures QUIC and the CLI payload no-progress watchdog; the
+  handshake budget remains separate. Payload v3 is unchanged; no 0-RTT, adv,
+  initial-rtt or ack-delay option is introduced.
+- Remove tx/rx server overrides, tx words, rx destination, serve listen and
+  HERMOD_LISTEN. Use rx -d/--output and numeric serve -p/--port with precedence
+  CLI > HERMOD_PORT > 4376. serve is an implemented signaling/NAT helper service.
+- Correct current README guidance about removed bandwidth/WireGuard/HTTP support;
+  preserve historical release entries. Unrelated dead-code cleanup is deferred.
+
 ### Fixed
 
 - Check the pending Microsoft Store submission ID instead of object presence, and

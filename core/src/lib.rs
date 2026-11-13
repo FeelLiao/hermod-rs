@@ -3,7 +3,7 @@
 //! 本 crate 是所有逻辑的唯一归属地，GUI / 脚本 / 其它前端可以直接嵌入，
 //! 不必依赖 CLI（DEVELOPMENT.md §3.1，决策 D17）。CLI 只是它的薄封装。
 //!
-//! # 数据流总览（协议 v2）
+//! # 数据流总览（载荷协议 v3）
 //!
 //! ```text
 //! 会合（signal）→ 密钥协商（crypto::cpace）→ 加密交换端点清单（含 TransferOffer）

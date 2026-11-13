@@ -201,7 +201,7 @@ async fn run_all() {
                     let output = cli(&cfgdir)
                         .arg("rx")
                         .arg(code)
-                        .arg("--destination")
+                        .arg("--output")
                         .arg(&destination)
                         .output()
                         .await
@@ -257,6 +257,7 @@ async fn run_all() {
                             break code.to_string();
                         }
                     };
+                    assert_eq!(generated_word_count(&code), Some(3), "{code}");
                     if mode == "cli-to-gui" {
                         engine.start(None, Some(code), None).unwrap();
                         complete(&engine).await;
@@ -271,7 +272,7 @@ async fn run_all() {
                         let output = cli(&cfgdir)
                             .arg("rx")
                             .arg(code)
-                            .arg("--destination")
+                            .arg("--output")
                             .arg(&destination)
                             .output()
                             .await

@@ -91,7 +91,9 @@ def verify_bundle(path, expected_version=None):
 if __name__ == "__main__":
     if sys.argv[2] == '--bundle':
         import tomllib
-        workspace = tomllib.loads((pathlib.Path(__file__).resolve().parents[2] / 'Cargo.toml').read_text())
+        # TOML is UTF-8 by definition. Binary load avoids Windows ANSI defaults.
+        with (pathlib.Path(__file__).resolve().parents[2] / 'Cargo.toml').open('rb') as source:
+            workspace = tomllib.load(source)
         major, minor, patch = map(int, workspace['workspace']['package']['version'].split('.'))
         verify_bundle(sys.argv[1], f'{major + 1}.{minor}.{patch}.0')
         print('Store bundle verified: identity, version, exact unsigned x64/ARM64 contents')

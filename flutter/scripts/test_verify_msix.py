@@ -2,6 +2,10 @@
 import importlib.util
 import io
 import pathlib
+import os
+import subprocess
+import sys
+import tempfile
 import struct
 import unittest
 import zipfile
@@ -45,6 +49,21 @@ def bundle(arm_version='1.5.0.0', include_arm=True):
 
 
 class BundleTests(unittest.TestCase):
+    def test_bundle_cli_uses_utf8_toml_independent_of_windows_locale(self):
+        script = pathlib.Path(__file__).with_name('verify-msix.py').resolve()
+        # Force an ASCII legacy locale even on UTF-8 developer machines. This
+        # drives the real CLI entry point reading Cargo.toml with Chinese comments.
+        env = dict(os.environ, PYTHONUTF8='0', PYTHONCOERCECLOCALE='0', LC_ALL='C')
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'fixture.msixbundle'
+            path.write_bytes(bundle().getvalue())
+            result = subprocess.run(
+                [sys.executable, '-X', 'utf8=0', '-X', 'warn_default_encoding', str(script), str(path), '--bundle'],
+                env=env, capture_output=True, text=True, encoding='utf-8', errors='replace',
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('EncodingWarning', result.stderr)
+
     def test_open_handle_bundle_validation(self):
         self.assertEqual(verify.verify_bundle(bundle(), '1.5.0.0'), '1.5.0.0')
 

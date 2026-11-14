@@ -37,7 +37,6 @@ QUIC 支持私有 / 链路本地 IPv4 地址及纯 IPv4 网络。配对仍需连
 WSL NAT 通常没有可用 IPv6。支持镜像网络的 Windows 11 / WSL 可在 Windows 用户目录的
 `.wslconfig` 中设置 `networkingMode=mirrored`，然后从 Windows 执行 `wsl --shutdown`。
 前提是 Windows 所在网络已经支持 IPv6；随意添加一个 IPv6 地址不能获得公网路由。
-详见[网络与性能说明](NETWORK_PERFORMANCE.md)。
 
 ## 图形界面：三步传输
 
@@ -64,9 +63,143 @@ GUI 设置会本地持久化，每次开始传输时取得快照，修改只影�
 Store ID 为 **9PMPWN3HMR3M**。以后推送版本标签，全部检查和打包、GitHub Release 成功后，Actions 会自动提交
 包含 x64 和 ARM64 的商店包；微软完成审核后按现有发布设置分发更新。Windows 程序包仅保留为 Actions 内部产物并提交商店，不附加到 GitHub Release。
 旧 `Hermod.Transfer.Test` 版本迁移前，请先导出收件箱文件；
-商店版使用不同包身份。详见[商店提交说明](APP_BUILD.md#microsoft-store-packages)。
+商店版使用不同包身份。详见[商店提交说明](APP_BUILD.md#microsoft-store-identity)。
 
 Windows 更新必须保留相同的商店包身份。旧包身份或签名不同时，先导出收件箱中的重要文件再卸载；卸载可能删除应用私有数据。
+
+## 编译 CLI 和服务器
+
+在仓库根目录执行；需要项目固定的 Rust 工具链（1.99 或更新版本）和本地 C/C++ 构建工具：
+
+```text
+cargo build -p hermod-cli --release --locked
+```
+
+Windows 生成 `target/release/hermod.exe`，Linux 生成 `target/release/hermod`。
+客户端和 `serve` 使用同一个可执行程序。验证当前运行的版本：
+
+```powershell
+# Windows
+.\target\release\hermod.exe --version
+```
+
+```bash
+# Linux
+./target/release/hermod --version
+```
+
+当前源码版本输出 `hermod 0.5.0`。虽然不发布 Windows CLI 安装包，但可以在 Windows
+本地从源码编译使用。Linux 还需要 `cc` 等本地链接器，仅安装 Rust 不够。详见[构建说明](APP_BUILD.md)。
+
+## CLI 设备配对与备注
+
+0.5.0 已支持设备命令。双方须选择同一个可信信令服务器；按 ID 呼叫需要更新后的 Rust server，
+不能仅凭客户端版本就认定默认公共服务器已经升级。
+
+首次建立长期信任时，**双方都必须显式启用配对**：
+
+```text
+# 发送端
+hermod tx ./hello.txt --pair
+# 接收端：使用发送端显示的完整传输码
+hermod rx CODE --pair
+```
+
+普通 `tx` / `rx CODE` 不自动保存联系人。配对确认与文件传输结果独立：配对确认后，
+即使 QUIC 或文件传输失败，配对仍可保留。重复已有匹配配对不轮换密钥，也不覆盖本机备注。
+
+```text
+hermod device id
+hermod device list
+hermod device rename DEVICE_ID "我的笔记本"
+hermod device remove DEVICE_ID
+```
+
+设备 ID 是公钥派生的 32 位小写十六进制字符串。`rename` 只修改本机备注，不改变 ID，
+也不修改对端名称。允许同名备注，但 `--from` 必须精确且唯一匹配；重名时使用完整 ID。
+符合规范的完整 ID 优先按 ID 解析，找不到时不会再按备注查找。
+
+后续传输：
+
+```text
+# 发送端仍需主动选定本次发送内容
+hermod tx ./archive.zip
+# 接收端按 ID 或本机备注选择
+hermod rx --from DEVICE_ID -d ./received
+hermod rx --from "我的笔记本" -d ./received
+```
+
+`rx CODE` 与 `rx --from DEVICE` 互斥，`--from` 不能与 `--pair` 同时使用。
+没有客户端后台常驻、远程文件浏览或任意文件拉取；同一本机身份只能发布一个发送任务，
+第二个 `tx` 会立即报忙。发送时传输码和独立设备控制连接并行等待，认证成功的候选才能获胜。
+未知或认证失败的 ID 呼叫不会作废传输码。服务器不支持设备控制或控制连接断开时，码入口可以继续；
+需要查看该诊断时使用 `--verbose warning`。ID 认证失败不自动降级为码认证；显式配对要求双方支持并同意。
+
+## 配置与私密文件
+
+| 平台 | CLI 配置根目录 |
+| --- | --- |
+| Windows | `%APPDATA%\Hermod` |
+| Linux，设置了绝对路径的 XDG_CONFIG_HOME | `$XDG_CONFIG_HOME/hermod` |
+| Linux，其他情况 | `~/.config/hermod` |
+
+无法取得对应配置位置时，当前实现回退到临时目录；这不是适合长期部署的位置。
+配置目录与可执行文件位置、当前工作目录无关。
+
+```text
+配置根目录/
+├── config.yaml             # 当前服务器与其 SPKI 信任
+├── device-state/
+│   ├── device.json         # 长期身份，包含私钥
+│   ├── contacts.json       # 配对秘密、备注、pending/active 状态
+│   └── *.lock              # 身份、联系人事务和发送租约
+└── server/                 # serve 创建
+    ├── server-cert.pem     # 公开 TLS 证书
+    ├── server-key.der      # 私钥，PKCS#8 DER
+    └── server-cert.json    # 证书到期元数据
+```
+
+没有 `config.yaml` 时使用内建默认值，成功执行 `trust` 后保存。
+字段包括 `trust_version`、`server_url`、`trusted_servers`（目前仅保留选中的一个服务器）
+及保留的 `tls_configuration` 字段。旧 PEM 字段可能保留，新 Rust server 的证书和私钥
+实际位于 `server/`，不使用这些 YAML 字段。传输调优和接收目录不持久化。
+同一配置目录的设备 ID 和联系人不随服务器切换而改变，但双方必须连接同一服务器；
+稳定 ID 也意味着不同服务器可能关联同一设备的活动。
+
+身份、联系人和服务端私钥都是敏感数据，不要提交到 Git 或分享。
+Linux 设备存储验证所有者和 0700/0600 权限；Windows 设备存储通过系统 PowerShell
+设置并验证仅当前用户和 SYSTEM 可访问的私密权限，尚未实现 DPAPI/Keychain 加密。
+父目录须可信，不承诺防御同用户恶意进程。身份损坏或权限不安全时明确失败，不静默重建身份。
+
+匹配的待确认配对可由双方再次显式 `--pair` 核对恢复；一端已 active 而另一端没有记录，
+或两端记录冲突时，需要双方删除旧联系人后重新配对。删除只撤销本机信任，
+不会远程删除对端记录，也不会自动恢复信任。
+
+## 运行 Rust 信令服务器
+
+```text
+hermod serve -p 4376 --verbose info
+# 按需要限制监听地址族
+hermod -4 serve -p 4376 --verbose info
+hermod -6 serve -p 4376 --verbose info
+```
+
+放行 TCP 4376（TLS/WSS）和 UDP 4376（地址反射），客户端之间还须允许对端 UDP 通信。
+默认双栈监听，端口优先级为显式 `--port` > `HERMOD_PORT` > 4376。
+`--port 0` 用于本地测试时动态分配端口；长期部署应使用固定端口并持久保存 `server/`。
+删除服务端私钥会改变 SPKI 指纹，客户端必须重新建立信任。
+服务在启动时检查证书续期，正常续期复用现有密钥。
+
+读取启动时显示的指纹，并让每个客户端通过可信渠道核对后执行：
+
+```text
+hermod trust your-server.example.com:4376 --fingerprint HEX
+```
+
+注册证明只证明连接持有对应私钥，设备间的联系人信任仍由两端验证。
+设备路由状态只放内存，但服务器能观察 ID、呼叫关系和源地址。
+它不提供文件中转，也不能解决所有 NAT/防火墙可达性问题。本机集成测试不等于公网长期运行或负载认证；
+正式部署应配置进程守护，并安全备份私钥，不泄露到日志或仓库。
 
 ## 命令行快速开始
 
@@ -89,13 +222,15 @@ hermod --help
 hermod tx --help
 ```
 
-**CLI 调优状态：实施中，等待用户验证。** 唯一数据面是 QUIC，接收端自动跟随，目前没有载荷限速器。
+## CLI 传输参数
+
+以下功能已在 0.5.0 实现。唯一数据面是 QUIC，接收端自动跟随，目前没有载荷限速器。
 双方保持程序打开，直到摘要验证完成。调优仅用于本次调用：显式值覆盖内建默认，未输入项使用默认；
-不持久化，不从 YAML 读取。服务器信任配置仍独立持久化。详见[已确认实施方案](docs/cli-transport-tuning.md)。
+不持久化，不从 YAML 读取。服务器信任配置仍独立持久化。
 
 | 参数 | 默认 / 作用 |
 | --- | --- |
-| `-4/--ipv4`、`-6/--ipv6` | 互斥；严格约束全部四个命令，不跨族回退 |
+| `-4/--ipv4`、`-6/--ipv6` | 互斥；严格约束 tx/rx/trust/serve 的网络访问（含设备控制），不跨族回退 |
 | `-m/--mtu auto\|数值` | auto；QUIC UDP 载荷上限 1200–1452 字节；auto 从 1200 探测到 1452 |
 | `-c/--congestion auto\|bbr\|cubic\|newreno` | bbr；auto 同样选择 BBR |
 | `-P/--profile auto\|lan\|wan` | auto；不保留 compatible 别名 |
@@ -113,11 +248,13 @@ hermod tx --help
 
 枚举值大小写不敏感。大小仅接受整数字节或整数 KiB/MiB，例如 `1048576`、`1024KiB`、`1MiB`；
 不接受小数、MB 或内嵌空格。非法值在联网前报错。全部数据面参数（mtu、congestion、profile 和八项调优）
-在 serve/trust 中显式传入即错误，即使传的是默认值。
+在 serve/trust/device 中显式传入即错误，即使传的是默认值。
 
 接收端拥有开流计划，tx 调优不能强迫 rx 并发。auto 按对端地址分类，有有效 RTT 时还需 ≤25ms 才选择 LAN 多流。
 keepalive/idle-timeout 用于 QUIC，idle-timeout 也用于 CLI 载荷无进展看门狗，不改变独立的握手预算。
-较大窗口、chunk 与预读队列会消耗更多资源，不保证吞吐提升，详见[内存权衡与测量](NETWORK_PERFORMANCE.md)。
+较大窗口、chunk 与预读队列会消耗更多资源，不保证吞吐提升。默认连接窗口预算为 512MiB，
+最大设置为 2GiB，但不表示启动时立即分配这么多内存。单个 chunk × prefetch 队列预算约为
+1–256MiB，此外还有其他缓冲。应在实际链路上测量吞吐、延迟和内存，目前没有前后提速对照结论。
 
 **自建服务器信任**：从可信渠道取得服务器 SPKI SHA-256 指纹后，运行
 `hermod trust SERVER --fingerprint HEX`。GUI 可以获取指纹并显式确认；仅从网络获取指纹本身不能证明服务器身份。
@@ -144,7 +281,8 @@ Windows 使用 Flutter Material 3。GUI 经 flutter_rust_bridge 以 FFI 加载 `
 ## 常见问题
 
 - **传输码连不上**：检查双方 IPv4 局域网 / IPv6 路由、信令服务器、UDP 防火墙、完整传输码、客户端版本及 -4/-6 限制。
-- **发送时网页很卡**：上行跑满会挤占其他请求；当前没有载荷限速器，可考虑路由器 SQM/AQM 或外部流量整形，见[性能分析](NETWORK_PERFORMANCE.md)。
+- **设备 ID 连不上**：确认双方选择同一个已升级 Rust server、发送端正在运行 `tx`、双方保留匹配的 active 配对。设备 ID 不是密码。
+- **发送时网页很卡**：上行跑满会挤占其他请求；当前没有载荷限速器，可考虑路由器 SQM/AQM 或外部流量整形。
 - **导出失败**：收件箱副本仍在，重新选择可写目录后导出。
 - **Windows MSIXBundle 无法安装**：GitHub 文件仅供商店提交，尚未签名；请在审核上线后安装商店签名的版本。
 
@@ -152,7 +290,8 @@ Windows 使用 Flutter Material 3。GUI 经 flutter_rust_bridge 以 FFI 加载 `
 Actions 分为两个工作流：`CI` 负责分支推送和 PR 检查；`Build and release` 复用同一套检查，
 通过后才打包。推送 `master` 只检查，推送 `v*` 标签才发布 Release；手动运行只生成 Actions 构建产物，不发布。
 
-[构建与发布](APP_BUILD.md) · [架构与贡献指南](AGENTS.md) · [更新日志](CHANGELOG.md) · [隐私政策 / Privacy policy](PRIVACY.md) · [许可证](LICENSE)
+[构建与发布](APP_BUILD.md) · [core 架构说明](core/README.md) · [更新日志](CHANGELOG.md) · [隐私政策 / Privacy policy](PRIVACY.md) · [许可证](LICENSE)
 
 项目灵感来自 [Magic Wormhole](https://github.com/magic-wormhole/magic-wormhole)。协议采用 CPace、
-经过认证的端点交换和传输加密；与 Go 实现共享信令及传输码格式。
+经过认证的端点交换和传输加密；与旧 Go 实现共享原有信令及传输码格式，
+不代表 Go 支持新增设备控制协议或当前载荷版本。

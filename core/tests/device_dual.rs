@@ -14,6 +14,9 @@ use hermod_core::{
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
+#[path = "support/storage_permissions.rs"]
+mod storage_permissions;
+
 struct Fixture {
     dir: PathBuf,
     config: Config,
@@ -21,6 +24,7 @@ struct Fixture {
 }
 impl Fixture {
     async fn new() -> Self {
+        storage_permissions::install();
         let mut random = [0; 16];
         getrandom::fill(&mut random).unwrap();
         let dir = std::env::temp_dir().join(format!(

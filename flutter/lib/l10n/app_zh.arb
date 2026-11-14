@@ -1,0 +1,18 @@
+{
+ "@@locale":"zh",
+ "pairedDevices":"已配对设备", "receivePairedHint":"连接已配对设备当前的发送任务。已配对不代表设备在线。", "receiveCodeHint":"有传输码？输入后连接发送方。", "paired":"已配对", "pairingPending":"配对待确认", "nextTransfer":"下一次传输", "chooseFileHint":"选择文件，然后生成传输码交给接收方。", "inboxChecksum":"SHA-256 校验和",
+ "licenses":"开源许可",
+ "appTitle":"Hermod", "transfer":"传输", "devices":"设备", "inbox":"收件箱", "settings":"设置",
+ "send":"发送文件", "receive":"接收", "chooseFile":"选择文件", "generateCode":"生成传输码", "transferCode":"传输码", "connectReceive":"连接并接收", "transferHint":"端到端加密文件传输。接收到的文件在主动导出前仅保存在应用私有目录。",
+ "pairRequest":"请求设备配对", "pairHint":"双方必须明确同意。若对端不支持配对，请仅在接受单次传输时主动关闭此项。",
+ "cancel":"取消", "refresh":"刷新", "delete":"删除", "rename":"备注", "exportFile":"导出", "save":"保存设置", "saved":"设置已保存", "confirmDelete":"确认删除？", "deleteHint":"此操作无法撤销。请先导出需要保留的文件。",
+ "emptyInbox":"暂无已验证文件", "privateInboxHint":"仅显示通过 SHA-256 校验的文件。请主动导出以在应用外保留；卸载应用可能删除私有副本。", "ownDevice":"本机设备", "emptyDevices":"暂无可信设备", "deviceName":"设备备注", "receiveDevice":"从此设备接收", "deviceHint":"可信设备仅在协议认证配对完成后添加，不支持远程浏览文件。",
+ "server":"信令服务器", "verifyFingerprint":"验证服务器指纹", "fingerprintHint":"信任前，请通过独立渠道核对以下 SHA-256 SPKI 指纹。", "trust":"信任",
+ "settingsHint":"所有值由 Rust 验证并持久化。新任务使用已保存设置的冻结快照。", "sendTransport":"发送协议", "receiveTransport":"接收协议", "profile":"网络档位", "mtu":"MTU（auto 或字节数）", "congestion":"拥塞控制", "words":"传输码单词数量", "verbose":"日志级别", "quiet":"精简传输状态", "theme":"主题", "language":"语言", "system":"跟随系统", "light":"浅色", "dark":"深色", "auto":"自动", "lan":"局域网", "wan":"广域网", "advanced":"高级网络调优", "streams":"并行流（留空自动）", "chunkBytes":"分块字节数", "windowBytes":"窗口字节数", "udpBufferBytes":"UDP 缓冲字节数", "sliceBytes":"切片字节数", "prefetch":"预取数量", "keepaliveSecs":"保活秒数", "idleTimeoutSecs":"空闲超时秒数", "invalidNumber":"请输入支持范围内的整数。",
+ "cancelFileOperation":"取消文件操作",
+ "ipFamily":"IP 地址族", "ipv4":"仅 IPv4", "ipv6":"仅 IPv6",
+ "diagnostics":"诊断", "noLogs":"暂无日志。", "retry":"重试", "errorTitle":"操作失败", "retryable":"可重试此操作。", "preparingSource":"准备文件", "connectingSignaling":"连接信令服务", "waitingForPeer":"等待对端", "sending":"发送中", "receiving":"接收中", "completed":"校验完成", "cancelled":"已取消", "failed":"失败", "verifying":"等待完成与校验", "closeTitle":"停止当前传输？", "closeHint":"关闭将停止当前传输，已校验收件仍会保留。", "stopClose":"停止并关闭",
+ "bytesValue":"{value} 字节", "@bytesValue":{"placeholders":{"value":{"type":"String"}}},
+ "progressValue":"{bytes} / {total} 字节 · {rate} 字节/秒", "@progressValue":{"placeholders":{"bytes":{"type":"String"},"total":{"type":"String"},"rate":{"type":"String"}}},
+ "errorDetails":"{code}：{message}", "@errorDetails":{"placeholders":{"code":{"type":"String"},"message":{"type":"String"}}}
+}

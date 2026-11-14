@@ -1,0 +1,87 @@
+name: Android release APK
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      unsigned:
+        description: 'Build an explicitly UNSIGNED, non-installable inspection artifact (no release signing)'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      HERMOD_ANDROID_UNSIGNED: ${{ github.event_name == 'workflow_dispatch' && inputs.unsigned && 'true' || 'false' }}
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source-only Android contract and shell syntax tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 flutter/android/test_static_contract.py
+          bash -n flutter/scripts/build-android.sh
+      - name: Check signing Secrets before building
+        if: env.HERMOD_ANDROID_UNSIGNED != 'true'
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for key in KEYSTORE STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            [[ -n "${!key}" ]] || { echo "Required signing Secret missing: $key" >&2; exit 1; }
+          done
+          umask 077
+          printf '%s' "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/hermod-release.jks"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/hermod-release.jks" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-ndk28-frb213
+      - name: Install pinned Android toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang pkg-config perl
+      - name: Build Rust ABIs and release APK; inspect package
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash flutter/scripts/build-android.sh
+      - name: Remove ephemeral signing material
+        if: always()
+        shell: bash
+        run: |
+          # Exact known runner-temp path only; never touch a checked-in/user keystore.
+          rm -f -- "$RUNNER_TEMP/hermod-release.jks"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.HERMOD_ANDROID_UNSIGNED == 'true' && 'android-UNSIGNED-inspection-only' || 'android-release-signed' }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

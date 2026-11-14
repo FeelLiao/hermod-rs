@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 
-const workspace = readFileSync('Cargo.toml', 'utf8').match(/^version = "([^"]+)"/m)?.[1];
-const pubspec = readFileSync('flutter/pubspec.yaml', 'utf8');
+// Resolve repository inputs from this file, independent of the caller's cwd.
+const root = new URL('../../', import.meta.url);
+const readRepositoryFile = (path) => readFileSync(new URL(path, root), 'utf8');
+
+const workspace = readRepositoryFile('Cargo.toml').match(/^version = "([^"]+)"/m)?.[1];
+const pubspec = readRepositoryFile('flutter/pubspec.yaml');
 const flutter = pubspec.match(/^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)$/m);
 if (!workspace || !flutter || workspace !== flutter[1]) {
   throw new Error('Keep Cargo workspace and Flutter pubspec versions in sync.');
@@ -14,7 +18,7 @@ const expectedCode = major * 1000000 + minor * 10000 + patch * 100;
 if (Number(flutter[2]) !== expectedCode) {
   throw new Error(`Flutter build number must be ${expectedCode}.`);
 }
-const gradle = readFileSync('flutter/android/app/build.gradle.kts', 'utf8');
+const gradle = readRepositoryFile('flutter/android/app/build.gradle.kts');
 if (!/minSdk\s*=\s*34/.test(gradle)) {
   throw new Error('Android minimum API must be 34.');
 }

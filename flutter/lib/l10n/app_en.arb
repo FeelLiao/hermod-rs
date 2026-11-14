@@ -1,0 +1,23 @@
+{
+ "@@locale":"en",
+ "licenses":"Open-source licenses",
+ "appTitle":"Hermod",
+ "pairedDevices":"Paired devices", "receivePairedHint":"Connect to a paired device’s current sending task. Pairing does not indicate that a device is online.", "receiveCodeHint":"Have a transfer code? Enter it to connect to the sender.", "paired":"Paired", "pairingPending":"Pairing pending", "nextTransfer":"Next transfer", "chooseFileHint":"Choose a file, then create a code for the receiver.", "inboxChecksum":"SHA-256 checksum",
+ "transfer":"Transfer", "devices":"Devices", "inbox":"Inbox", "settings":"Settings",
+ "send":"Send file", "receive":"Receive", "chooseFile":"Choose file", "generateCode":"Generate transfer code", "transferCode":"Transfer code", "connectReceive":"Connect and receive",
+ "transferHint":"Encrypted peer-to-peer file transfer. Received files remain private until you export them.",
+ "pairRequest":"Request device pairing", "pairHint":"Both peers must explicitly agree. If the peer does not support pairing, turn this off only for a one-time transfer.",
+ "cancel":"Cancel", "refresh":"Refresh", "delete":"Delete", "rename":"Rename", "exportFile":"Export", "save":"Save settings", "saved":"Settings saved", "confirmDelete":"Delete this item?", "deleteHint":"This cannot be undone. Export any files you want to keep first.",
+ "emptyInbox":"No verified files", "privateInboxHint":"Only SHA-256 verified files appear here. Export files to keep them outside the app; uninstalling may remove private copies.",
+ "ownDevice":"This device", "emptyDevices":"No trusted devices", "deviceName":"Device name", "receiveDevice":"Receive from device", "deviceHint":"Trusted devices are added only after authenticated protocol pairing. This is not remote file browsing.",
+ "server":"Signaling server", "verifyFingerprint":"Verify fingerprint", "fingerprintHint":"Compare this SHA-256 SPKI fingerprint through an independent channel before trusting it.", "trust":"Trust",
+ "settingsHint":"Rust validates and persists these values. Each new task uses a frozen snapshot of saved settings.",
+ "sendTransport":"Send transport", "receiveTransport":"Receive transport", "profile":"Network profile", "mtu":"MTU (auto or bytes)", "congestion":"Congestion control", "words":"Transfer-code words", "verbose":"Log level", "quiet":"Compact transfer status", "theme":"Theme", "language":"Language", "system":"System", "light":"Light", "dark":"Dark", "auto":"Automatic", "lan":"LAN", "wan":"WAN", "advanced":"Advanced network tuning", "streams":"Streams (empty = automatic)", "chunkBytes":"Chunk bytes", "windowBytes":"Window bytes", "udpBufferBytes":"UDP buffer bytes", "sliceBytes":"Slice bytes", "prefetch":"Prefetch", "keepaliveSecs":"Keepalive seconds", "idleTimeoutSecs":"Idle timeout seconds", "invalidNumber":"Enter a whole number within the supported range.",
+ "cancelFileOperation":"Cancel file operation",
+ "ipFamily":"IP address family", "ipv4":"IPv4 only", "ipv6":"IPv6 only",
+ "diagnostics":"Diagnostics", "noLogs":"No logs available.", "retry":"Retry", "errorTitle":"Operation failed", "retryable":"You may retry this operation.",
+ "preparingSource":"Preparing source", "connectingSignaling":"Connecting to signaling", "waitingForPeer":"Waiting for peer", "sending":"Sending", "receiving":"Receiving", "completed":"Verified and complete", "cancelled":"Cancelled", "failed":"Failed", "verifying":"Awaiting completion and verification", "closeTitle":"Stop the active transfer?", "closeHint":"Closing stops the current transfer. Verified inbox files remain stored.", "stopClose":"Stop and close",
+ "bytesValue":"{value} bytes", "@bytesValue":{"placeholders":{"value":{"type":"String"}}},
+ "progressValue":"{bytes} / {total} bytes · {rate} bytes/s", "@progressValue":{"placeholders":{"bytes":{"type":"String"},"total":{"type":"String"},"rate":{"type":"String"}}},
+ "errorDetails":"{code}: {message}", "@errorDetails":{"placeholders":{"code":{"type":"String"},"message":{"type":"String"}}}
+}

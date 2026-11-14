@@ -14,8 +14,8 @@ $storeVersion = "$([int]$version[1].Value + 1).$($version[2].Value).$($version[3
 $kit = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Directory | Where-Object { (Test-Path "$($_.FullName)/x64/makeappx.exe") -and (Test-Path "$($_.FullName)/x64/makepri.exe") } | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
 if (-not $kit) { throw 'Windows SDK MakeAppx and MakePRI are required' }
 $output = New-Item -ItemType Directory -Force $OutputDirectory
-$work = "$root/target/msix-$Architecture"
-Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+# A fresh staging directory avoids recursive deletion and stale package content.
+$work = "$root/target/msix-$Architecture-$([guid]::NewGuid().ToString('N'))"
 $stage = New-Item -ItemType Directory -Force "$work/payload"
 Copy-Item "$build/*" $stage -Recurse
 Copy-Item "$flutter/windows/store/Assets" $stage -Recurse

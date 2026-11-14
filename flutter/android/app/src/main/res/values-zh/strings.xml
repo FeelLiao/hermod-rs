@@ -1,0 +1,5 @@
+<resources>
+    <string name="transfer_channel">文件传输</string>
+    <string name="transfer_notification_title">Hermod 正在传输</string>
+    <string name="transfer_notification_text">发送或接收文件期间保留此通知。</string>
+</resources>

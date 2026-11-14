@@ -34,6 +34,11 @@ def verify(path, architecture):
         require(identity.get("ProcessorArchitecture") == architecture, "Incorrect package architecture")
         app = manifest.find("f:Applications/f:Application", NS)
         require(app is not None and app.get("Executable") == "HermodTransfer.exe", "Incorrect application executable")
+        uap10 = "{http://schemas.microsoft.com/appx/manifest/uap/windows10/10}"
+        require(app.get(uap10 + "RuntimeBehavior") == "packagedClassicApp", "Expected packaged desktop activation")
+        require(app.get(uap10 + "TrustLevel") == "appContainer", "GUI must run in AppContainer")
+        require(not any(node.get("Name") == "runFullTrust" for node in manifest.iter()), "Full Trust capability is forbidden")
+        require(not any("fulltrust" in str(value).lower() for node in manifest.iter() for value in node.attrib.values()), "Full Trust entry/helper is forbidden")
         visual = app.find("uap:VisualElements", NS)
         require(visual is not None and visual.get("DisplayName") == "HermodTransfer", "Reserved Store name mismatch")
         expected_machine = {"x64": 0x8664, "arm64": 0xAA64}[architecture]

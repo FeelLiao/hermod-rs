@@ -23,7 +23,7 @@ jobs:
           node-version: '22'
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.44.8'
+          flutter-version: '3.47.9'
           channel: stable
           cache: true
       - uses: dtolnay/rust-toolchain@stable
@@ -36,8 +36,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config cmake perl clang
-      - run: node scripts/check-release-version.mjs
+      - run: node flutter/scripts/check-release-version.mjs
       - run: python3 -m unittest flutter/scripts/test_store_submission.py
+      - run: python3 flutter/android/test_static_contract.py
+      - run: python3 flutter/scripts/check-unsafe-free.py
+      - run: bash -n flutter/scripts/build-android.sh
       - name: Flutter quality gates
         working-directory: flutter
         run: |

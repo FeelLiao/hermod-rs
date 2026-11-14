@@ -27,11 +27,6 @@ pub enum Error {
     Permissions,
     #[error("private storage validation failed: {0}")]
     PermissionCheck(&'static str),
-    #[error("Windows ACL {operation} failed (exit {code:?})")]
-    WindowsAcl {
-        operation: &'static str,
-        code: Option<i32>,
-    },
     #[error("contact not found")]
     NotFound,
     #[error("contact name is ambiguous")]
@@ -78,6 +73,25 @@ pub fn parse_json<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     serde_json::from_slice(bytes).map_err(|_| Error::Invalid("invalid JSON schema"))
 }
 fn reject_links(path: &Path) -> Result<()> {
+    let original = path;
+    let path = std::path::absolute(path)?;
+    #[cfg(windows)]
+    let trusted_root = super::permissions::backend()?
+        .private_storage_root()
+        .map_err(|error| io_at("resolve private storage boundary", &path, error))?;
+    #[cfg(not(windows))]
+    let trusted_root: Option<std::path::PathBuf> = None;
+    if let Some(root) = &trusted_root {
+        if original
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(Error::PermissionCheck(
+                "parent traversal in private storage path",
+            ));
+        }
+        validate_bounded_path(&path, root)?;
+    }
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {
             Ok(meta) => {
@@ -92,9 +106,32 @@ fn reject_links(path: &Path) -> Result<()> {
                     }
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && trusted_root.as_deref() != Some(ancestor) => {}
             Err(error) => return Err(io_at("inspect path ancestor", ancestor, error)),
         }
+        // Include the system-authorized root itself in reparse checks, but do
+        // not probe inaccessible system/user ancestors outside AppContainer.
+        if trusted_root.as_deref() == Some(ancestor) {
+            break;
+        }
+    }
+    Ok(())
+}
+fn validate_bounded_path(path: &Path, root: &Path) -> Result<()> {
+    use std::path::Component;
+    if !root.is_absolute()
+        || !path.is_absolute()
+        || !path.starts_with(root)
+        || path
+            .components()
+            .chain(root.components())
+            .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+    {
+        return Err(Error::PermissionCheck(
+            "path outside system private storage root",
+        ));
     }
     Ok(())
 }
@@ -141,8 +178,9 @@ fn secure_new(path: &Path, directory: bool) -> Result<()> {
     }
     #[cfg(windows)]
     {
-        // 同一子进程已经设置并复查 ACL，不再重复启动验证进程。
-        windows_acl(path, directory, true)
+        super::permissions::backend()?
+            .initialize_private(path, directory)
+            .map_err(|error| io_at("initialize/verify private ACL", path, error))
     }
     #[cfg(not(windows))]
     check_permissions(path, directory)
@@ -168,53 +206,16 @@ fn check_permissions(path: &Path, directory: bool) -> Result<()> {
         }
     }
     #[cfg(windows)]
-    windows_acl(path, directory, false)?;
+    super::permissions::backend()?
+        .verify_private(path, directory)
+        .map_err(|error| io_at("verify private ACL", path, error))?;
     Ok(())
 }
-#[cfg(all(unix, target_os = "linux"))]
+#[cfg(unix)]
 fn unix_owner() -> Result<u32> {
-    use std::os::unix::fs::MetadataExt;
-    // /proc/self 的所有者代表当前进程身份；读取失败必须拒绝访问。
-    Ok(fs::metadata("/proc/self")?.uid())
-}
-#[cfg(all(unix, not(target_os = "linux")))]
-fn unix_owner() -> Result<u32> {
-    // 当前只支持 Windows/Linux，不用 HOME 或其它不可信目录代替有效 UID。
-    Err(Error::PermissionCheck(
-        "unsupported Unix identity verification",
-    ))
-}
-#[cfg(windows)]
-fn windows_acl(path: &Path, directory: bool, initialize: bool) -> Result<()> {
-    use std::process::Command;
-    // 参数经环境传递，不插入脚本文本。只允许当前用户和 SYSTEM 的完全控制 ACE。
-    let script = r#"$ErrorActionPreference='Stop'; $p=$env:HERMOD_ACL_PATH; $me=[Security.Principal.WindowsIdentity]::GetCurrent().User; $system=[Security.Principal.SecurityIdentifier]::new('S-1-5-18'); if($env:HERMOD_ACL_INIT -eq '1') { $acl=Get-Acl -LiteralPath $p; $acl.SetAccessRuleProtection($true,$false); foreach($rule in @($acl.Access)) {$acl.RemoveAccessRuleSpecific($rule)}; $inherit=if($env:HERMOD_ACL_DIR -eq '1') {[Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'} else {[Security.AccessControl.InheritanceFlags]::None}; foreach($sid in @($me,$system)) {$rule=[Security.AccessControl.FileSystemAccessRule]::new($sid,[Security.AccessControl.FileSystemRights]::FullControl,$inherit,[Security.AccessControl.PropagationFlags]::None,[Security.AccessControl.AccessControlType]::Allow); $acl.AddAccessRule($rule)}; $acl.SetOwner($me); Set-Acl -LiteralPath $p -AclObject $acl }; $acl=Get-Acl -LiteralPath $p; if(!$acl.AreAccessRulesProtected) {exit 2}; $owner=$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value; if($owner -ne $me.Value -and $owner -ne $system.Value) {exit 3}; $seen=@{}; foreach($r in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) { $sid=$r.IdentityReference.Value; if(($sid -ne $me.Value -and $sid -ne $system.Value) -or $r.AccessControlType -ne 'Allow' -or $r.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or $r.IsInherited) {exit 4}; $seen[$sid]=$true }; if(!$seen[$me.Value] -or !$seen[$system.Value]) {exit 5}"#;
-    let status = Command::new("powershell.exe")
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            script,
-        ])
-        .env("HERMOD_ACL_PATH", path)
-        .env("HERMOD_ACL_INIT", if initialize { "1" } else { "0" })
-        .env("HERMOD_ACL_DIR", if directory { "1" } else { "0" })
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::inherit())
-        .status()?;
-    if !status.success() {
-        return Err(Error::WindowsAcl {
-            operation: if initialize {
-                "initialize/verify"
-            } else {
-                "verify"
-            },
-            code: status.code(),
-        });
-    }
-    Ok(())
+    // Kernel effective UID, including Android; never infer identity from HOME,
+    // /proc ownership (which can change with dumpability), or application paths.
+    Ok(rustix::process::geteuid().as_raw())
 }
 fn create_private(path: &Path) -> Result<File> {
     reject_links(path)?;
@@ -335,7 +336,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn system_private_boundary_rejects_siblings_and_parent_traversal() {
+        let root = std::path::absolute("private-fixture/LocalState").unwrap();
+        assert!(validate_bounded_path(&root, &root).is_ok());
+        assert!(validate_bounded_path(&root.join("device-state/device.json"), &root).is_ok());
+        assert!(
+            validate_bounded_path(
+                &root.with_file_name("LocalState-other").join("device.json"),
+                &root
+            )
+            .is_err()
+        );
+        assert!(validate_bounded_path(&root.join("../other/device.json"), &root).is_err());
+        assert!(validate_bounded_path(root.parent().unwrap(), &root).is_err());
+    }
+
+    #[test]
     fn oversized_atomic_write_preserves_existing_file_and_creates_no_temporary() {
+        #[cfg(windows)]
+        {
+            #[derive(Debug)]
+            struct TestPermissions;
+            impl crate::identity::StoragePermissions for TestPermissions {
+                fn private_storage_root(&self) -> std::io::Result<Option<std::path::PathBuf>> {
+                    Ok(None)
+                }
+                fn initialize_private(&self, _: &Path, _: bool) -> std::io::Result<()> {
+                    Ok(())
+                }
+                fn verify_private(&self, _: &Path, _: bool) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+            // Explicit non-native test double for transaction/size-limit logic.
+            crate::identity::install_storage_permissions(std::sync::Arc::new(TestPermissions))
+                .unwrap();
+        }
         let mut random = [0; 16];
         getrandom::fill(&mut random).unwrap();
         let dir = std::env::temp_dir().join(format!("hermod-storage-limit-{}", hex(&random)));

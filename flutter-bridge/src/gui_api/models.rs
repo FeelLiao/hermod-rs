@@ -47,11 +47,36 @@ impl TransferSnapshot {
 }
 
 /// 启动传输时恰好设置一个字段。
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct StartRequest {
     pub source_id: Option<String>,
     pub code: Option<String>,
+    /// 已确认配对的规范设备 ID；不接受未经认证的新设备。
+    pub from_device: Option<String>,
+    pub pair: bool,
+    /// 兼容旧绑定；GUI 始终拒绝文本，CLI 使用 Engine::start。
     pub text: Option<String>,
+}
+impl Default for StartRequest {
+    fn default() -> Self {
+        Self {
+            source_id: None,
+            code: None,
+            from_device: None,
+            pair: true,
+            text: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuiDeviceDto {
+    pub device_id: String,
+    pub name: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub active: bool,
 }
 
 // 保留显式别名，桥接代码无需依赖 app 模块路径。

@@ -12,3 +12,5 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+# Generated exclusively by the CI Android build entrypoint.
+/app/src/main/jniLibs/

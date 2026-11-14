@@ -10,11 +10,20 @@ mod tty;
 mod tx;
 mod util;
 mod verbosity;
+#[cfg(windows)]
+mod windows;
 
 use clap::{CommandFactory, Parser};
 use verbosity::Level;
 
 fn main() -> std::process::ExitCode {
+    #[cfg(windows)]
+    if let Err(error) = hermod_core::identity::install_storage_permissions(std::sync::Arc::new(
+        windows::NativePermissions,
+    )) {
+        eprintln!("Failed to initialize private storage permissions: {error}");
+        return std::process::ExitCode::FAILURE;
+    }
     // 保持既有大栈工作线程行为，避免改变平台上的传输执行环境。
     match std::thread::Builder::new()
         .name("hermod-cli".into())

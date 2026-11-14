@@ -26,8 +26,14 @@ getrandom = { version = "0.4", features = ["sys_rng"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
-[lints]
-workspace = true
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization"] }
+
+# Native ACL FFI is confined to src/windows.rs; all other CLI code denies unsafe.
+[lints.rust]
+unsafe_code = "deny"
+[lints.clippy]
+all = "deny"
 
 [[bin]]
 name = "hermod"

@@ -1,6 +1,9 @@
 //! 持久设备身份、规范设备 ID 与带域分隔的 P-256 签名。
 
+mod permissions;
 pub(crate) mod storage;
+pub mod windows_acl_policy;
+pub use permissions::{StoragePermissions, install_storage_permissions};
 
 use p256::ecdsa::{
     Signature, SigningKey, VerifyingKey,

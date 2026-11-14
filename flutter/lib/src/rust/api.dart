@@ -9,19 +9,37 @@ import 'app/worker.dart';
 import 'frb_generated.dart';
 import 'gui_api/error.dart';
 import 'gui_api/models.dart';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `api_bootstrap`, `controller`, `from_engine`, `from_engine`, `to_engine`, `to_engine`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `fmt`, `fmt`, `fmt`, `fmt`, `from`, `from`
 
-/// GUI 装载后首先调用；`app_dir` 是 Flutter 传入的应用支持目录。
+/// 重复初始化明确拒绝；shutdown 完成后可重新初始化。
 Future<ApiBootstrap> initialize({required String appDir}) =>
     RustLib.instance.api.crateApiInitialize(appDir: appDir);
+
+/// 停止接收新任务、幂等取消并有界等待。未初始化时也成功。
+Future<void> shutdown() => RustLib.instance.api.crateApiShutdown();
+
+Future<List<GuiDeviceDto>> devices() => RustLib.instance.api.crateApiDevices();
+
+Future<void> renameDevice({required String deviceId, required String name}) =>
+    RustLib.instance.api.crateApiRenameDevice(deviceId: deviceId, name: name);
+
+Future<void> removeDevice({required String deviceId}) =>
+    RustLib.instance.api.crateApiRemoveDevice(deviceId: deviceId);
 
 Future<TransferSnapshot?> status() => RustLib.instance.api.crateApiStatus();
 
 Future<Selection> selectSource({required String path}) =>
     RustLib.instance.api.crateApiSelectSource(path: path);
+
+/// 用于平台授权暂存文件；name 是经过 Rust 校验的显示/协议文件名。
+Future<Selection> selectNamedSource({
+  required String path,
+  required String name,
+}) => RustLib.instance.api.crateApiSelectNamedSource(path: path, name: name);
 
 Future<void> start({required StartRequest request}) =>
     RustLib.instance.api.crateApiStart(request: request);
@@ -60,6 +78,7 @@ Future<void> saveSettings({required ApiSettings settings}) =>
 Future<List<String>> logs() => RustLib.instance.api.crateApiLogs();
 
 class ApiBootstrap {
+  final String deviceId;
   final String version;
   final List<String> ipv4;
   final List<String> ipv6;
@@ -68,6 +87,7 @@ class ApiBootstrap {
   final ApiSettings settings;
 
   const ApiBootstrap({
+    required this.deviceId,
     required this.version,
     required this.ipv4,
     required this.ipv6,
@@ -78,6 +98,7 @@ class ApiBootstrap {
 
   @override
   int get hashCode =>
+      deviceId.hashCode ^
       version.hashCode ^
       ipv4.hashCode ^
       ipv6.hashCode ^
@@ -90,6 +111,7 @@ class ApiBootstrap {
       identical(this, other) ||
       other is ApiBootstrap &&
           runtimeType == other.runtimeType &&
+          deviceId == other.deviceId &&
           version == other.version &&
           ipv4 == other.ipv4 &&
           ipv6 == other.ipv6 &&
@@ -102,15 +124,15 @@ class ApiConnection {
   final String transport;
   final String mtu;
   final String congestion;
+
+  /// 链路档位：auto / lan / wan。
   final String profile;
-  final String limitMbps;
 
   const ApiConnection({
     required this.transport,
     required this.mtu,
     required this.congestion,
     required this.profile,
-    required this.limitMbps,
   });
 
   @override
@@ -118,8 +140,7 @@ class ApiConnection {
       transport.hashCode ^
       mtu.hashCode ^
       congestion.hashCode ^
-      profile.hashCode ^
-      limitMbps.hashCode;
+      profile.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -129,14 +150,17 @@ class ApiConnection {
           transport == other.transport &&
           mtu == other.mtu &&
           congestion == other.congestion &&
-          profile == other.profile &&
-          limitMbps == other.limitMbps;
+          profile == other.profile;
 }
 
 class ApiSettings {
   final int version;
   final ApiConnection connection;
+  final ApiTuning tuning;
   final String receiveTransport;
+
+  /// 地址族约束：auto / ipv4 / ipv6。
+  final String ipFamily;
   final String server;
   final int words;
   final String verbose;
@@ -148,7 +172,9 @@ class ApiSettings {
   const ApiSettings({
     required this.version,
     required this.connection,
+    required this.tuning,
     required this.receiveTransport,
+    required this.ipFamily,
     required this.server,
     required this.words,
     required this.verbose,
@@ -162,7 +188,9 @@ class ApiSettings {
   int get hashCode =>
       version.hashCode ^
       connection.hashCode ^
+      tuning.hashCode ^
       receiveTransport.hashCode ^
+      ipFamily.hashCode ^
       server.hashCode ^
       words.hashCode ^
       verbose.hashCode ^
@@ -178,7 +206,9 @@ class ApiSettings {
           runtimeType == other.runtimeType &&
           version == other.version &&
           connection == other.connection &&
+          tuning == other.tuning &&
           receiveTransport == other.receiveTransport &&
+          ipFamily == other.ipFamily &&
           server == other.server &&
           words == other.words &&
           verbose == other.verbose &&
@@ -186,4 +216,51 @@ class ApiSettings {
           theme == other.theme &&
           language == other.language &&
           destination == other.destination;
+}
+
+class ApiTuning {
+  final int? streams;
+  final int chunkBytes;
+  final BigInt windowBytes;
+  final int udpBufferBytes;
+  final BigInt sliceBytes;
+  final int prefetch;
+  final int keepaliveSecs;
+  final int idleTimeoutSecs;
+
+  const ApiTuning({
+    this.streams,
+    required this.chunkBytes,
+    required this.windowBytes,
+    required this.udpBufferBytes,
+    required this.sliceBytes,
+    required this.prefetch,
+    required this.keepaliveSecs,
+    required this.idleTimeoutSecs,
+  });
+
+  @override
+  int get hashCode =>
+      streams.hashCode ^
+      chunkBytes.hashCode ^
+      windowBytes.hashCode ^
+      udpBufferBytes.hashCode ^
+      sliceBytes.hashCode ^
+      prefetch.hashCode ^
+      keepaliveSecs.hashCode ^
+      idleTimeoutSecs.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ApiTuning &&
+          runtimeType == other.runtimeType &&
+          streams == other.streams &&
+          chunkBytes == other.chunkBytes &&
+          windowBytes == other.windowBytes &&
+          udpBufferBytes == other.udpBufferBytes &&
+          sliceBytes == other.sliceBytes &&
+          prefetch == other.prefetch &&
+          keepaliveSecs == other.keepaliveSecs &&
+          idleTimeoutSecs == other.idleTimeoutSecs;
 }

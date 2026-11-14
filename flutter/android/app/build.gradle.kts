@@ -1,45 +1,68 @@
 plugins {
     id("com.android.application")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    // gradle.properties explicitly opts out of AGP 9 built-in Kotlin for Flutter.
+    id("org.jetbrains.kotlin.android")
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val signingValues = listOf(
+    "ANDROID_KEYSTORE_PATH", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD"
+).associateWith { System.getenv(it).orEmpty() }
+val unsignedArtifact = System.getenv("HERMOD_ANDROID_UNSIGNED") == "true"
+val hasSigning = signingValues.values.all { it.isNotBlank() }
+
 android {
     namespace = "org.hermod.transfer"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    compileSdk = 36
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "org.hermod.transfer"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 34
-        targetSdk = flutter.targetSdkVersion
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
-
+    signingConfigs {
+        if (hasSigning && !unsignedArtifact) {
+            create("releaseSecrets") {
+                storeFile = file(signingValues.getValue("ANDROID_KEYSTORE_PATH"))
+                storePassword = signingValues.getValue("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = signingValues.getValue("ANDROID_KEY_ALIAS")
+                keyPassword = signingValues.getValue("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Deliberately no debug-signing fallback. Unsigned is explicit and not distributable.
+            signingConfig = if (hasSigning && !unsignedArtifact) signingConfigs.getByName("releaseSecrets") else null
+        }
+    }
+    packaging { jniLibs { useLegacyPackaging = false } }
+}
+
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.name.contains("Release", ignoreCase = true) }) {
+        check(unsignedArtifact || hasSigning) { "Release signing Secrets are required; no debug fallback" }
+        listOf("arm64-v8a", "x86_64").forEach { abi ->
+            check(file("src/main/jniLibs/$abi/libhermod_flutter_bridge.so").isFile) {
+                "Missing Rust bridge for $abi; use flutter/scripts/build-android.sh in Actions"
+            }
         }
     }
 }
 
 kotlin {
-    compilerOptions {
-        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
-    }
+    compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 }
 }
 
-flutter {
-    source = "../.."
-}
+// FlutterFragmentActivity is needed for the AndroidX ActivityResult registry.
+dependencies { implementation("androidx.activity:activity-ktx:1.10.1") }
+
+flutter { source = "../.." }

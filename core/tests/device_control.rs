@@ -13,6 +13,9 @@ use hermod_core::{
     },
 };
 use tokio_tungstenite::tungstenite::Message as Frame;
+#[path = "support/storage_permissions.rs"]
+mod storage_permissions;
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -34,6 +37,7 @@ async fn authenticated_call_requires_channel_owner_and_routes_terminal_events() 
     getrandom::fill(&mut random).unwrap();
     let dir = std::env::temp_dir().join(format!("hermod-device-test-{}", hex(&random)));
     let cert = hermod_core::server::cert::ensure(&dir.join("server"), Duration::ZERO).unwrap();
+    storage_permissions::install();
     let target_identity = Identity::load_or_create(&dir.join("target")).unwrap();
     let caller_identity = Identity::load_or_create(&dir.join("caller")).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

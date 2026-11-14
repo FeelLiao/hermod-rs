@@ -1,5 +1,7 @@
 //! 公共 API：真实中继下显式码配对、幂等重配及确认中断恢复。
 mod common;
+#[path = "support/storage_permissions.rs"]
+mod storage_permissions;
 
 use hermod_core::{
     contacts::{Contacts, PairingState},
@@ -8,6 +10,10 @@ use hermod_core::{
     session::{self, SessionOptions},
 };
 use std::time::Duration;
+fn load_identity(path: &std::path::Path) -> hermod_core::identity::Result<Identity> {
+    storage_permissions::install();
+    Identity::load_or_create(path)
+}
 
 #[tokio::test]
 async fn leaked_pairing_secret_does_not_authorize_a_different_device_identity() {
@@ -15,9 +21,9 @@ async fn leaked_pairing_secret_does_not_authorize_a_different_device_identity() 
     let a_dir = common::temp_dir("pin-owner");
     let b_dir = common::temp_dir("pin-expected");
     let c_dir = common::temp_dir("pin-attacker");
-    let a = Identity::load_or_create(&a_dir).unwrap();
-    let b = Identity::load_or_create(&b_dir).unwrap();
-    let c = Identity::load_or_create(&c_dir).unwrap();
+    let a = load_identity(&a_dir).unwrap();
+    let b = load_identity(&b_dir).unwrap();
+    let c = load_identity(&c_dir).unwrap();
     let ac = Contacts::open(&a_dir).unwrap();
     let cc = Contacts::open(&c_dir).unwrap();
     let secret = [19; 32];
@@ -108,8 +114,8 @@ async fn leaked_pairing_secret_does_not_authorize_a_different_device_identity() 
 async fn explicit_pairing_is_confirmed_before_session_and_preserves_secret() {
     let tx_dir = common::temp_dir("device-pair-tx");
     let rx_dir = common::temp_dir("device-pair-rx");
-    let tx_id = Identity::load_or_create(&tx_dir).unwrap();
-    let rx_id = Identity::load_or_create(&rx_dir).unwrap();
+    let tx_id = load_identity(&tx_dir).unwrap();
+    let rx_id = load_identity(&rx_dir).unwrap();
     let tx_contacts = Contacts::open(&tx_dir).unwrap();
     let rx_contacts = Contacts::open(&rx_dir).unwrap();
     let opts = SessionOptions {
@@ -172,8 +178,8 @@ async fn interrupted_pairing_recovers_pending_and_active_without_rotation() {
         // 0=尚未落盘，1=pending，2=已 confirm 但可能没收到最终 ACK。
         let tx_dir = common::temp_dir("recover-pair-tx");
         let rx_dir = common::temp_dir("recover-pair-rx");
-        let tx_id = Identity::load_or_create(&tx_dir).unwrap();
-        let rx_id = Identity::load_or_create(&rx_dir).unwrap();
+        let tx_id = load_identity(&tx_dir).unwrap();
+        let rx_id = load_identity(&rx_dir).unwrap();
         let tx_contacts = Contacts::open(&tx_dir).unwrap();
         let rx_contacts = Contacts::open(&rx_dir).unwrap();
         let secret = [41; 32];

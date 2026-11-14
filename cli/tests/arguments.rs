@@ -4,6 +4,9 @@ use std::{
     process::{Command, Output},
     sync::atomic::{AtomicU64, Ordering},
 };
+#[cfg(windows)]
+#[path = "../src/windows.rs"]
+mod windows;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Sandbox(PathBuf);
 impl Sandbox {
@@ -201,6 +204,11 @@ fn environment_port_is_validated_and_explicit_default_wins() {
 }
 #[test]
 fn device_commands_persist_identity_and_manage_local_remarks() {
+    #[cfg(windows)]
+    hermod_core::identity::install_storage_permissions(std::sync::Arc::new(
+        windows::NativePermissions,
+    ))
+    .unwrap();
     let sandbox = Sandbox::new();
     let first = sandbox.run(&["device", "id"]);
     assert!(

@@ -1,3 +1,6 @@
 rust_input: crate::api
 rust_root: ../flutter-bridge/
 dart_output: lib/src/rust
+dart_format: false
+dart_fix: false
+add_mod_to_lib: false

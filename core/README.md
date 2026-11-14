@@ -1,45 +1,30 @@
 # hermod-core
 
-`hermod-core` is the only home for Hermod's protocol logic: cryptography,
-rendezvous (signaling), data-plane transports, the direct-stream payload protocol, session
-negotiation and the final send/receive orchestration. Both front ends — the
-`cli` binary (`hermod`) and the Windows GUI through `flutter-bridge` — are thin
-shells that call into this crate; neither implements transfer state, trust,
-hashing, inbox storage, timeouts or QUIC internals (decision D17 in the
-original design docs).
+`hermod-core` owns the shared cryptography, signaling, device identity, pairing,
+QUIC transport and file-transfer orchestration. The CLI parses commands and presents
+results; application-specific settings, jobs and inbox policy are outside this crate.
+Start with [crate documentation](src/lib.rs) and the modules below.
 
-This README explains how the crate is organized and why. Module-level `//!`
-docs contain the line-by-line details; start with `src/lib.rs`.
+## Mental model
 
-## Mental model: one code, four layers
-
-An entire transfer is a small protocol stack. Each layer only talks to its
-neighbours:
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│ orchestrate   tx: serve_file/send_file/send_text               │  "the transfer"
-│               rx: receive  → temp file → SHA-256 → atomic move │
-├────────────────────────────────────────────────────────────────┤
-│ transport     QUIC (TLS 1.3, pluggable CC, BBR default)         │  "a reliable,
-│               direct-stream payload framing                     │   authenticated
-│                                                                 │   byte stream"
-├────────────────────────────────────────────────────────────────┤
-│ session       transfer code → signaling → CPace → established  │  "getting the
-│               connection + per-session credential              │   peers together"
-├────────────────────────────────────────────────────────────────┤
-│ crypto + signal + transfer/config/options utilities            │  "primitives"
-└────────────────────────────────────────────────────────────────┘
+```text
+CLI command or embedding application
+  → session: code rendezvous or authenticated device rendezvous
+  → transport: QUIC connection and bidirectional streams
+  → orchestrate: payload v3, exact byte counts, hashing and receiver verdict
 ```
 
-Two properties to keep in mind when reading the code:
+`crypto`, `identity`, `contacts`, `config` and `options` supply the primitives and
+validated state. `server` implements the optional Rust signaling service.
 
-1. **The signaling server is a dumb relay.** It routes WebSocket messages by
-   `channel_id` and never learns the transfer-code words, the shared secret,
-   or the (cipher-protected) endpoint bundles. After the handshake the server
-   is dropped entirely; payloads travel peer-to-peer over UDP.
-2. **Every secret is derived by both peers locally** from the CPace shared
-   key `K`. Nothing else enters the wire.
+- The server routes encrypted endpoint messages without learning code passwords,
+  session keys, pairing secrets or file contents. Device registration separately
+  proves private-key possession; it does not establish peer trust. The server can
+  observe device IDs, call relationships, source addresses and timing.
+- Per-session credentials derive from CPace's shared key. Long-term device private
+  keys are generated and stored separately. They are not derived from a transfer
+  code. Pairing recovery can transmit a saved secret inside an authenticated,
+  encrypted pairing exchange; it is never exposed to the signaling service.
 
 ## Directory map
 
@@ -54,12 +39,14 @@ core/src/
 ├── signal/           # rendezvous layer (WebSocket to the signaling server)
 │   ├── protocol.rs   #   wire format (allocate/join/blob/ok/ready/error)
 │   ├── client.rs     #   connect + CPace handshake orchestration
+│   ├── device.rs     #   authenticated /device control protocol
 │   └── tls.rs        #   TLS client with SPKI pinning (fingerprint, not CA)
 ├── transport/
 │   ├── iface.rs      # ★ the contract: Transport / TransportConnection traits
 │   ├── mod.rs        #   AnyTransport/AnyConnection runtime dispatch
 │   ├── network.rs    #   address enumeration / candidate filtering (shared)
 │   ├── quic/         #   implementation: quinn + rustls, self-signed pins
+├── server/           # TLS service, device routing and generation-owned channels
 ├── identity.rs       # persistent P-256 identity and canonical device ID
 ├── identity/storage.rs # private files, permissions, transaction locks
 ├── contacts.rs       # remarks, pending/active pairings, sending lease
@@ -81,9 +68,10 @@ core/
 │   ├── orchestrate.rs #  orchestration integration entry point
 │   ├── orchestrate/  #   memory and QUIC integration cases
 │   ├── quic_transport.rs # endpoint lifecycle and authentication
+│   ├── device_*.rs   #   identity, storage, pairing, dual-door and ID transfer
 │   ├── server_e2e.rs #   real TLS signaling service
 │   └── e2e_full_chain.rs
-└── examples/         # manual probes; ipv6_load_probe backs latency-check.sh
+└── examples/         # manual probes; ipv6_load_probe exercises the current QUIC stream
 ```
 
 Naming conventions to keep in mind:
@@ -91,7 +79,7 @@ Naming conventions to keep in mind:
 - **tx / Sender** = the side that serves the file (listens on the tunnel).
 - **rx / Receiver** = the side that opens the payload stream (dials).
   `Transport::establish(Role, psk, peer_endpoint)` encodes this split, and the
-  the payload framing respects it (`tx` listens, `rx` dials).
+  payload framing respects it (`tx` listens, `rx` dials).
 - The crate *package* is `hermod-core`; the workspace *directory* is `core`.
 
 ## Layer contracts
@@ -116,12 +104,11 @@ trait TransportConnection {             // established, ready to carry bytes
 }
 ```
 
-Key design decision: endpoint bytes are **opaque to the upper layers**. Each
-implementation defines its own bundle format (QUIC: cert fingerprint + port
-+ address candidates); the session layer
-only encrypts, carries and unwraps them. Adding a transport means adding an
-`AnyTransport`/`AnyConnection` arm, a `TransportKind` wire code, and per-protocol
-validation in `options.rs` — `session.rs` and `orchestrate.rs` do not change.
+Transport-specific endpoint bytes are interpreted by the selected transport.
+The session layer wraps them, attaches transfer metadata and capability information,
+and encrypts/authenticates the exchange. Device sessions additionally bind endpoint
+bytes into a signed transcript. Keep these responsibilities separate when extending
+an implementation; adding a transport is not guaranteed to require zero session changes.
 
 ### session.rs — from words to wire
 
@@ -143,34 +130,44 @@ connected `TxSession`/`RxSession`:
 6. `establish` and return. The signaling WebSocket is dropped here.
 
 The receiver-side `transfer_offer` (kind/name/size) piggybacks on the endpoint
-JSON as an optional field, so old peers simply ignore it while new peers learn
-the file size before the first payload byte.
+JSON field. The current receiver requires this offer to obtain the byte count
+before payload transfer; incompatible endpoint protocol versions are rejected.
+The offer contains kind, name and size, not a precomputed SHA-256.
 
-### orchestrate.rs — "the transfer" (direct-stream framing, protocol v2)
+### orchestrate.rs — payload protocol v3
 
-One frame conversation on a single QUIC bidirectional stream (metadata comes
+Metadata arrives in the encrypted signaling exchange before QUIC payload transfer.
+The receiver opens a control stream and selects the mode:
 
-```
-rx: writes GO                       tx: streams exactly N payload bytes
-                                    hashing on the fly
-rx: reads N bytes into .hermod_tmp (O_EXCL, 0600), hashes locally
-rx: writes verdict [status|sha256|size]  → tx accepts or rejects (verified)
-rx: rename temp → safe_destination_path (dir-stripped, de-duplicated)
-rx: rename temp → safe_destination_path (dir-stripped, de-duplicated)
-```
+- **Single stream**: `MODE_SINGLE` (1 byte), followed by exactly the announced
+  payload size from tx to rx. Both sides calculate SHA-256 while processing bytes.
+- **Multiple streams**: `MODE_MULTI` plus a 12-byte plan (little-endian u64 slice
+  size and u32 slice count). The receiver opens bounded data streams carrying
+  slice indices; the sender seeks the source file, while the receiver writes each
+  slice at its offset and hashes the complete contents in file order.
+- **Receiver verdict**: rx sends `[status:1 | sha256:32 | size:8 LE]` back to tx,
+  on the payload stream or the multi-stream control stream. SHA-256 is binary on
+  the wire, not hex text. Tx compares all fields with its local result.
 
-`orchestrate::receive` is the safety boundary: nothing touches the final path
-unless the digest verdict passed. Cancellation travels as a dedicated io error
-marker up through `OrchestrateError::PeerCancelled`, so hosts can print the
-friendly "peer cancelled the transfer" without string matching.
+The receiver writes a temporary file, computes its own digest, sends the verdict,
+synchronizes the file and renames it to a sanitized, non-clashing destination.
+**There is currently no tx-to-rx final digest-acceptance frame.** The receiver does
+not wait for sender agreement before finalizing its file. QUIC provides transport
+integrity, but this is not a symmetric application-level digest-confirmation protocol.
+Device-pairing confirmation does not change this payload behavior.
+
+Cancellation and error paths discard incomplete temporary files. Transport errors
+carry a peer-cancellation marker, exposed as `OrchestrateError::PeerCancelled`.
 
 ## Runtime, errors, logging — conventions for hosts
 
-- **Runtime ownership**: `hermod-core` never builds a tokio runtime and never
-  blocks. Hosts (CLI, GUI bridge worker) own the runtime and drive the futures.
-- **Cancellation**: everything cancellable hangs off `AbortHandle` (WG sends an
-  RST; QUIC uses a CONNECTION_CLOSE code). Hosts keep one slot and call
-  `abort()` on Ctrl+C / the GUI cancel button.
+- **Runtime ownership**: the embedding application owns the Tokio runtime.
+  Identity/contact APIs perform synchronous filesystem operations, OS locking and,
+  on Windows, permission-check subprocesses. Async callers must move these operations
+  to `spawn_blocking`; session authentication already does this for contact transactions.
+- **Cancellation**: QUIC transfers expose `AbortHandle` for immediate connection
+  cancellation. Dropping rendezvous futures closes their owned signaling connections;
+  candidate and confirmation stages have bounded deadlines.
 - **Logging**: `log_info!`/`log_warn!`/… are `tracing` macros. The crate does
   not install a subscriber; CLI ties `--verbose` to a filter, the GUI logs into
   a bounded in-memory ring.
@@ -178,8 +175,8 @@ friendly "peer cancelled the transfer" without string matching.
   `TransportError`, `BundleError`, `CpaceError`, …). Never `unwrap()` on peer
   input: `transfer::validate_filename` + path-safety guards exist because
   hostile names/paths arrive from the other end.
-- **Workspace safety**: `unsafe_code = "forbid"` applies workspace-wide; this
-  crate contains no unsafe.
+- **Safety**: core and CLI forbid handwritten unsafe Rust; the separately generated
+  FFI bridge glue has its own exception. This crate contains no unsafe code.
 
 ## Configuration and trust
 
@@ -189,10 +186,12 @@ fields, so old files still load). `normalize_server_url` pins the default port
 and `expected_spki` refuses to run against a server that is not pinned — a
 transfer never starts without verified signaling-server identity.
 
-`options.rs` is the *shared* surface for CLI flags and GUI settings:
-`ConnectionSettings::session_options(receiving)` validates every field against
-the chosen transport (MTU ranges, congestion support, receiver `auto`) BEFORE
-any network access; both front ends call exactly this code path.
+`options.rs` provides shared connection settings and runtime tuning validation.
+The CLI builds `SessionOptions` directly and validates them before networking;
+other callers can use `ConnectionSettings::session_options(receiving)`. These
+are not identical parsing paths. Runtime tuning is not read from or saved to YAML.
+The current configuration retains only the selected signaling server pin. Device
+contacts are a separate trust domain and may contain multiple paired devices.
 
 ## Testing model
 
@@ -213,7 +212,7 @@ any network access; both front ends call exactly this code path.
   checks standard streams, usage errors and exit codes.
 - **Performance**: correctness gates (fmt/test/clippy/doc/deny) do not establish
   throughput improvement. Manual probes include the ignored `quic_throughput`
-  test and `latency-check.sh`.
+  test and the `ipv6_load_probe` example. These are not release gates.
 
 ### Source and test placement
 
@@ -250,8 +249,9 @@ The CLI now opts into long-term pairing on both sides with `--pair`. Ordinary
 code transfers keep their existing protocol and do not save contacts. New public
 session entry points are `sender_device_session`, `receiver_pairing_session`,
 `sender_dual_session` and `receiver_device_session`; GUI callers of existing entry
-points are unchanged. See the [CLI device guide](../cli/README.md) for commands,
-file locations, platform permission requirements and recovery rules.
+points are unchanged. See the [English CLI guide](../README.md#cli-device-pairing-and-remarks)
+or [Chinese CLI guide](../README.zh-CN.md#cli-设备配对与备注) for commands, file locations,
+platform permission requirements and recovery rules.
 
 A sender owns its normal `/ws` code connection and an independent authenticated
 `/device` control connection. Each ID candidate uses a separate channel; CPace
@@ -280,13 +280,12 @@ restricted execution is expected to fail closed, not skip the check. Linux
 storage permission tests are platform-specific and require a working native C
 linker in addition to Rust.
 
-The older root design draft describes the
-motivation but its automatic-pairing, Go-server and key-size details are superseded
-by this implemented CLI/core contract; no GUI or Go code is changed.
+The implemented contract uses explicit bilateral pairing, a 33-byte canonical
+P-256 compressed public key and the Rust server control endpoint. It does not
+require a Go server extension or introduce a GUI device-management interface.
 
 ## See also
 
-- `../README.md` / `../README.zh-CN.md` — user-facing setup and migration.
-- `../AGENTS.md` — repo conventions and the CLI/GUI boundaries.
-- `../APP_BUILD.md` — Flutter toolchain, Store identity and CI gates.
-- `../NETWORK_PERFORMANCE.md` — why QUIC/BBR exists and its tuning knobs.
+- [English](../README.md) / [简体中文](../README.zh-CN.md) — user-facing setup and migration.
+- [Build and release guide](../APP_BUILD.md) — toolchains, packaging and CI gates.
+- [CLI tuning and resource tradeoffs](../README.md#cli-transport-options).

@@ -66,7 +66,7 @@ performance improvements have not been measured.
   lower layer for CLI and GUI.
 - Replaced the JSON-lines child-process bridge with flutter_rust_bridge (v2)
   FFI: the GUI loads `hermod_flutter_bridge.dll` directly, the generated glue
-  is the only unsafe code on the workspace, and `scripts/check-unsafe-free.py`
+  is the only unsafe code on the workspace, and `flutter/scripts/check-unsafe-free.py`
   keeps handwritten unsafe out.
 - The CLI runs its async entrypoint on an explicit 64 MiB worker thread, and the
   CLI/GUI interoperability test isolates `%APPDATA%` on Windows so child

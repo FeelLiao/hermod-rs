@@ -22,6 +22,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # 生成胶水代码含 unsafe，因此在 [lints] 一节单独放开禁止并靠 CI 评审约束。
 flutter_rust_bridge = "=2.13.0"
 
+[target.'cfg(windows)'.dependencies]
+windows-future = "0.3"
+windows = { version = "0.62", features = ["ApplicationModel", "Win32_Security_Isolation", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_Memory", "Win32_Storage_FileSystem", "Foundation", "Foundation_Collections", "Storage", "Storage_Pickers", "Storage_Search", "Storage_Streams", "Win32_System_WinRT", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
 [lib]
 # cdylib 供 Flutter 加载；rlib 供 hermod-cli 互通测试复用 Engine。
 crate-type = ["cdylib", "rlib"]
@@ -30,6 +34,7 @@ crate-type = ["cdylib", "rlib"]
 # 生成代码（frb_generated.rs）包含 unsafe FFI；在该 crate 内仍禁止手写 unsafe，
 # 约束由 CI 脚本检查而不再依赖编译期全局 lint。
 rust.unsafe_code = "allow"
+rust.unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
 
 [lints.clippy]
 all = "deny"

@@ -7,14 +7,19 @@
 // ignore_for_file: argument_type_not_assignable
 
 import 'api.dart';
+import 'api/events.dart';
+import 'api/platform.dart';
 import 'app.dart';
 import 'app/storage.dart';
 import 'app/worker.dart';
+
 import 'dart:async';
 import 'dart:convert';
+
 import 'frb_generated.dart';
 import 'gui_api/error.dart';
 import 'gui_api/models.dart';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
@@ -24,6 +29,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
     required super.generalizedFrbRustBinding,
     required super.portManager,
   });
+
+  @protected
+  AnyhowException dco_decode_AnyhowException(dynamic raw);
+
+  @protected
+  RustStreamSink<GuiEvent> dco_decode_StreamSink_gui_event_Sse(dynamic raw);
 
   @protected
   String dco_decode_String(dynamic raw);
@@ -38,6 +49,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ApiSettings dco_decode_api_settings(dynamic raw);
 
   @protected
+  ApiTuning dco_decode_api_tuning(dynamic raw);
+
+  @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
@@ -47,10 +61,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double dco_decode_box_autoadd_f_64(dynamic raw);
 
   @protected
+  Selection dco_decode_box_autoadd_selection(dynamic raw);
+
+  @protected
   StartRequest dco_decode_box_autoadd_start_request(dynamic raw);
 
   @protected
   TransferSnapshot dco_decode_box_autoadd_transfer_snapshot(dynamic raw);
+
+  @protected
+  int dco_decode_box_autoadd_u_32(dynamic raw);
 
   @protected
   BigInt dco_decode_box_autoadd_u_64(dynamic raw);
@@ -59,16 +79,25 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double dco_decode_f_64(dynamic raw);
 
   @protected
+  GuiDeviceDto dco_decode_gui_device_dto(dynamic raw);
+
+  @protected
   GuiError dco_decode_gui_error(dynamic raw);
 
   @protected
   GuiErrorCode dco_decode_gui_error_code(dynamic raw);
 
   @protected
+  GuiEvent dco_decode_gui_event(dynamic raw);
+
+  @protected
   int dco_decode_i_32(dynamic raw);
 
   @protected
   List<String> dco_decode_list_String(dynamic raw);
+
+  @protected
+  List<GuiDeviceDto> dco_decode_list_gui_device_dto(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -83,7 +112,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double? dco_decode_opt_box_autoadd_f_64(dynamic raw);
 
   @protected
+  Selection? dco_decode_opt_box_autoadd_selection(dynamic raw);
+
+  @protected
   TransferSnapshot? dco_decode_opt_box_autoadd_transfer_snapshot(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_32(dynamic raw);
 
   @protected
   BigInt? dco_decode_opt_box_autoadd_u_64(dynamic raw);
@@ -116,6 +151,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void dco_decode_unit(dynamic raw);
 
   @protected
+  AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+
+  @protected
+  RustStreamSink<GuiEvent> sse_decode_StreamSink_gui_event_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   String sse_decode_String(SseDeserializer deserializer);
 
   @protected
@@ -128,6 +171,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ApiSettings sse_decode_api_settings(SseDeserializer deserializer);
 
   @protected
+  ApiTuning sse_decode_api_tuning(SseDeserializer deserializer);
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
@@ -135,6 +181,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   double sse_decode_box_autoadd_f_64(SseDeserializer deserializer);
+
+  @protected
+  Selection sse_decode_box_autoadd_selection(SseDeserializer deserializer);
 
   @protected
   StartRequest sse_decode_box_autoadd_start_request(
@@ -147,10 +196,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  int sse_decode_box_autoadd_u_32(SseDeserializer deserializer);
+
+  @protected
   BigInt sse_decode_box_autoadd_u_64(SseDeserializer deserializer);
 
   @protected
   double sse_decode_f_64(SseDeserializer deserializer);
+
+  @protected
+  GuiDeviceDto sse_decode_gui_device_dto(SseDeserializer deserializer);
 
   @protected
   GuiError sse_decode_gui_error(SseDeserializer deserializer);
@@ -159,10 +214,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   GuiErrorCode sse_decode_gui_error_code(SseDeserializer deserializer);
 
   @protected
+  GuiEvent sse_decode_gui_event(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
   List<String> sse_decode_list_String(SseDeserializer deserializer);
+
+  @protected
+  List<GuiDeviceDto> sse_decode_list_gui_device_dto(
+    SseDeserializer deserializer,
+  );
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -177,9 +240,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   double? sse_decode_opt_box_autoadd_f_64(SseDeserializer deserializer);
 
   @protected
+  Selection? sse_decode_opt_box_autoadd_selection(SseDeserializer deserializer);
+
+  @protected
   TransferSnapshot? sse_decode_opt_box_autoadd_transfer_snapshot(
     SseDeserializer deserializer,
   );
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_32(SseDeserializer deserializer);
 
   @protected
   BigInt? sse_decode_opt_box_autoadd_u_64(SseDeserializer deserializer);
@@ -212,6 +281,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_decode_unit(SseDeserializer deserializer);
 
   @protected
+  void sse_encode_AnyhowException(
+    AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_gui_event_Sse(
+    RustStreamSink<GuiEvent> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_String(String self, SseSerializer serializer);
 
   @protected
@@ -222,6 +303,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_api_settings(ApiSettings self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_api_tuning(ApiTuning self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
@@ -236,6 +320,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_f_64(double self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_selection(
+    Selection self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_start_request(
     StartRequest self,
     SseSerializer serializer,
@@ -248,10 +338,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_box_autoadd_u_64(BigInt self, SseSerializer serializer);
 
   @protected
   void sse_encode_f_64(double self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_gui_device_dto(GuiDeviceDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_gui_error(GuiError self, SseSerializer serializer);
@@ -260,10 +356,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_gui_error_code(GuiErrorCode self, SseSerializer serializer);
 
   @protected
+  void sse_encode_gui_event(GuiEvent self, SseSerializer serializer);
+
+  @protected
   void sse_encode_i_32(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_String(List<String> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_gui_device_dto(
+    List<GuiDeviceDto> self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_list_prim_u_8_strict(
@@ -281,10 +386,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_f_64(double? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_selection(
+    Selection? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_transfer_snapshot(
     TransferSnapshot? self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_32(int? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_u_64(BigInt? self, SseSerializer serializer);

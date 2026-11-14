@@ -28,6 +28,11 @@ impl GuiController {
     pub fn bootstrap(&self) -> BootstrapDto {
         self.engine.bootstrap()
     }
+    pub(crate) fn subscribe_status(
+        &self,
+    ) -> Option<tokio::sync::watch::Receiver<crate::app::StateEvent>> {
+        self.engine.subscribe_status()
+    }
     pub fn settings(&self) -> SettingsDto {
         self.engine.settings()
     }
@@ -36,6 +41,9 @@ impl GuiController {
     }
     pub fn set_destination(&self, destination: Option<String>) -> Result<(), GuiError> {
         self.engine.set_destination(destination).gui()
+    }
+    pub(crate) fn export_cache(&self) -> PathBuf {
+        self.engine.export_cache()
     }
     pub fn transfer_destination(&self) -> Option<String> {
         self.engine.transfer_destination()
@@ -55,10 +63,23 @@ impl GuiController {
     pub fn select_file(&self, path: &Path) -> Result<SelectionDto, GuiError> {
         self.engine.select_file(path).gui()
     }
+    pub fn select_file_named(&self, path: &Path, name: String) -> Result<SelectionDto, GuiError> {
+        self.engine.select_file_named(path, name).gui()
+    }
     pub fn start(&self, request: StartRequest) -> Result<(), GuiError> {
-        self.engine
-            .start(request.source_id, request.code, request.text)
-            .gui()
+        self.engine.start_request(request).gui()
+    }
+    pub fn devices(&self) -> Result<Vec<GuiDeviceDto>, GuiError> {
+        self.engine.devices().gui()
+    }
+    pub fn rename_device(&self, id: &str, name: &str) -> Result<(), GuiError> {
+        self.engine.rename_device(id, name).gui()
+    }
+    pub fn remove_device(&self, id: &str) -> Result<(), GuiError> {
+        self.engine.remove_device(id).gui()
+    }
+    pub fn shutdown(&self) -> Result<(), GuiError> {
+        self.engine.shutdown().gui()
     }
     pub fn status(&self) -> Option<TransferSnapshot> {
         self.engine

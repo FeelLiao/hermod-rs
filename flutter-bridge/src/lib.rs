@@ -5,6 +5,9 @@
 //! 本 crate 编译为 cdylib（`hermod_flutter_bridge.dll`），经 FFI 直接被
 //! Flutter 加载，不再使用独立的 JSON 行协议子进程。
 
+#[cfg(windows)]
+mod windows;
+
 pub mod api;
 pub mod app;
 mod frb_generated;

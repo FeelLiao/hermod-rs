@@ -5,9 +5,13 @@ use hermod_core::{
 };
 use std::{fs, path::PathBuf};
 
+#[path = "support/storage_permissions.rs"]
+mod storage_permissions;
+
 struct TempDir(PathBuf);
 impl TempDir {
     fn new() -> Self {
+        storage_permissions::install();
         let mut random = [0; 16];
         getrandom::fill(&mut random).unwrap();
         let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -203,21 +207,44 @@ fn concurrent_identity_initialization_is_single_winner() {
 
 #[cfg(windows)]
 #[test]
-fn windows_acl_tampering_fails_closed_without_repair() {
+fn injected_permission_denial_fails_closed_without_repair() {
     let dir = TempDir::new();
     Identity::load_or_create(&dir.0).unwrap();
     let path = dir.0.join("device-state/device.json");
     let original = fs::read(&path).unwrap();
-    let status = std::process::Command::new("icacls.exe")
-        .arg(&path)
-        .args(["/grant", "*S-1-1-0:R"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    // Explicit safe test double; real native ACL tampering is tested by CLI.
+    storage_permissions::deny(&path);
     assert!(Identity::load_or_create(&dir.0).is_err());
     assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn unsupported_or_mismatched_identity_is_never_rotated() {
+    let dir = TempDir::new();
+    let original = Identity::load_or_create(&dir.0).unwrap().device_id();
+    let path = dir.0.join("device-state/device.json");
+    let bytes = fs::read(&path).unwrap();
+    let stored: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    for (field, invalid) in [
+        ("version", serde_json::json!(99)),
+        (
+            "device_id",
+            serde_json::json!("00000000000000000000000000000000"),
+        ),
+        ("private_key", serde_json::json!("00".repeat(32))),
+    ] {
+        let mut modified = stored.clone();
+        modified[field] = invalid;
+        let modified = serde_json::to_vec(&modified).unwrap();
+        fs::write(&path, &modified).unwrap();
+        assert!(Identity::load_or_create(&dir.0).is_err());
+        assert_eq!(fs::read(&path).unwrap(), modified);
+    }
+    fs::write(&path, bytes).unwrap();
+    assert_eq!(
+        Identity::load_or_create(&dir.0).unwrap().device_id(),
+        original
+    );
 }
 
 #[cfg(unix)]

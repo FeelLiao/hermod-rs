@@ -4,23 +4,24 @@ Hermod now has one GUI stack: Flutter Material 3. Tauri, React and WebView asset
 
 ## Repository layout
 
-- `core`: cryptography, signaling, QUIC/WireGuard and transfer orchestration — the shared lower layer for CLI and GUI.
+- `core`: cryptography, signaling, QUIC and transfer orchestration — the shared lower layer for CLI and GUI.
+- `flutter-bridge/src/windows`: GUI Windows ACL/broker FFI modules, with narrow audited unsafe; no extra platform crate. Core exposes only safe storage-permission injection and shared ACL policy. CLI has its own thin Windows adapter.
 - `flutter-bridge/src/app`: persistent settings, jobs, cancellation, logs, storage and private inbox.
 - `flutter-bridge/src/gui_api`: stable typed GUI facade; private inbox paths remain internal.
-- `flutter-bridge/src/api` and generated `frb_generated.rs`: flutter_rust_bridge (v2) glue compiled to `hermod_flutter_bridge.dll`. Only generated code contains unsafe; `scripts/check-unsafe-free.py` fails the build for any handwritten unsafe.
+- `flutter-bridge/src/api` and generated `frb_generated.rs`: flutter_rust_bridge (v2) glue compiled to `hermod_flutter_bridge.dll`. Generated glue and explicitly audited bridge/CLI Windows modules contain FFI unsafe; `flutter/scripts/check-unsafe-free.py` rejects handwritten unsafe elsewhere.
 - `flutter`: FVM-pinned Flutter Material 3 GUI, Windows runner, Store metadata and packaging scripts.
 - `cli`: CLI and integration tests.
-- `scripts`: repository version and Release allowlist checks.
+- `flutter/scripts`: build, packaging, Store submission, repository version, Release allowlist and native safety checks (one consolidated scripts directory).
 
 ## Toolchains
 
 - Rust: workspace `rust-version` in `Cargo.toml`.
-- Flutter: FVM version in `.fvmrc` (`3.44.8`). Always use `fvm flutter` / `fvm dart` locally.
+- Flutter: FVM version in `.fvmrc` (`3.47.9`). Always use `fvm flutter` / `fvm dart` locally.
 - Windows: Visual Studio C++ Build Tools, Windows SDK MakeAppx/MakePRI/SignTool, x64 and ARM64 MSVC components.
-- Android runner: minSdk 34. It is retained for later integration and is not currently a release artifact.
+- Android: minSdk 34, compile/target SDK 36, NDK 28.2.13676358. Build only in GitHub Actions with `.github/workflows/android-release.yml`; do not build APKs locally. See [Android platform notes](docs/android-platform.md) for signing, SAF and foreground-service contracts; static checks are not device acceptance.
 - flutter_rust_bridge: pinned `=2.13.0` on both the Dart and Rust sides. The `flutter_rust_bridge_codegen`
   CLI is a local tool, not stored in the repository: `cargo install flutter_rust_bridge_codegen --version 2.13.0 --locked`.
-  The code generator detects FVM automatically; run it from `flutter` after changing `flutter-bridge/src/api`: `flutter_rust_bridge_codegen generate`.
+  Run codegen from `flutter` after changing `flutter-bridge/src/api`: `flutter_rust_bridge_codegen generate`, then `dart format lib/src/rust` and `cargo fmt --all`. Use the pinned SDK; FRB can attempt `fvm install` when FVM is on PATH. Avoid recursively formatting prototype/build directories.
 
 ## Local quality gates
 
@@ -28,7 +29,7 @@ Hermod now has one GUI stack: Flutter Material 3. Tauri, React and WebView asset
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-python scripts/check-unsafe-free.py
+python flutter/scripts/check-unsafe-free.py
 
 Push-Location flutter
 fvm dart format --output=none --set-exit-if-changed lib test
@@ -52,6 +53,21 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
   .\flutter\scripts\build-windows.ps1 `
   -Architecture x64 -Mode release
 ```
+
+## Windows AppContainer runtime
+
+The packaged GUI uses `packagedClassicApp` + `appContainer`; no `runFullTrust`,
+medium-IL helper, administrator token, firewall modification or loopback exemption.
+System file authorization is implemented in Rust via Windows WinRT brokers. The
+runner exposes only window/lifecycle interop. Direct EXE launch is not a supported
+substitute for package identity/LocalFolder testing and can report storage errors.
+
+Identity/contact files live under the package LocalFolder. The native security
+module checks the effective package token and exact package SID; do not reuse the
+CLI's normal-user directory or widen ACLs to ALL APPLICATION PACKAGES.
+
+UI status uses bounded latest-value subscriptions with explicit acknowledgements,
+not periodic snapshot polling. Cancelling observation does not cancel a transfer.
 
 ## Microsoft Store identity
 
@@ -89,26 +105,13 @@ Partner Center receives the unsigned `hermod-windows.msixbundle` and signs it af
 
 ## Local MSIX debugging
 
-Store upload packages are intentionally unsigned and Windows will not install them directly. The helper creates a one-day, non-exportable development certificate with the exact manifest publisher, trusts it for the current user, signs a copy (never the Store upload original), installs it, launches the AppUserModelId and optionally tails AppModel event logs:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
-  .\flutter\scripts\debug-msix.ps1 `
-  -Package .\dist\windows\hermod-windows-x64.msix `
-  -InstallCertificate
-```
-
-Useful options:
-
-```powershell
-# Reinstall without launching
-.\flutter\scripts\debug-msix.ps1 -Package .\dist\windows\hermod-windows-x64.msix -InstallCertificate -NoLaunch
-
-# Remove the installed development package and certificate
-.\flutter\scripts\debug-msix.ps1 -Uninstall
-```
-
-The script copies the package to `target/msix-debug/`, signs only that copy, installs for the current user and reports paths. Direct executable debugging remains faster: build debug, open `flutter/windows/runner.sln`, or launch `HermodTransfer.exe` from `build/windows/x64/runner/Debug` and attach Visual Studio. Use MSIX debugging specifically for package identity, capabilities, application data location, PRI/localization and Store-style launch behavior.
+Store upload packages are intentionally unsigned and cannot be installed directly.
+Use a separately identified development MSIX for local validation; do not uninstall
+or replace the Store application merely to debug. Certificate trust, signing and
+installation require explicit authorization. Attach Visual Studio to the installed
+package process to retain AppContainer identity and LocalFolder access. A plain
+`flutter run -d windows` / direct EXE is not equivalent to packaged validation.
+The obsolete direct-run and Store-identity-replacing debug helpers were removed.
 
 Manual diagnostics:
 
@@ -122,11 +125,11 @@ explorer.exe shell:AppsFolder\FeelLiao.HermodTransfer_8qnpvd7fj1r9a!Hermod
 Package data is under `%LOCALAPPDATA%\Packages\FeelLiao.HermodTransfer_8qnpvd7fj1r9a`. Export important inbox files before uninstalling because removal can delete private application data.
 
 The GUI loads the Rust Core through flutter_rust_bridge FFI (`hermod_flutter_bridge.dll` placed next to `HermodTransfer.exe`).
-Inside a Windows Store package the application support directory resolves through
-package identity; for terminal debugging the loader falls back to
-`app-support` next to the executable, and `HERMOD_APP_SUPPORT` can point the engine
-to a custom directory. Uninstalling clears `app-support`, so export the private inbox
-before uninstalling a terminal-run build.
+The Windows support directory comes from `ApplicationData.Current.LocalFolder`
+through the Rust platform adapter. It no longer falls back to a writable directory
+beside the executable or accepts an environment override for the packaged GUI.
+Test using an isolated package identity rather than replacing the installed Store
+application; uninstall/reset may remove private inbox and identity data.
 
 ## Releases
 

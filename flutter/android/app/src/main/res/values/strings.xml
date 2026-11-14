@@ -1,0 +1,5 @@
+<resources>
+    <string name="transfer_channel">File transfers</string>
+    <string name="transfer_notification_title">Hermod transfer active</string>
+    <string name="transfer_notification_text">Keep this notification while sending or receiving a file.</string>
+</resources>

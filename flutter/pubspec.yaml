@@ -19,7 +19,8 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 0.5.0+50000
 
 environment:
-  sdk: ^3.12.2
+  sdk: ^3.13.0
+  flutter: '>=3.47.0'
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -30,10 +31,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  file_selector: ^1.0.4
+  flutter_localizations:
+    sdk: flutter
+  intl: any
   path: ^1.9.1
-  path_provider: ^2.1.5
-  flutter_rust_bridge: ^2.13.0
+  flutter_rust_bridge: 2.13.0
+  material_ui: 1.11.0
 
 
 dev_dependencies:
@@ -52,11 +55,18 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  generate: true
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+  assets:
+    - assets/fonts/noto-sans-sc/OFL.txt
+  fonts:
+    - family: HermodSansSC
+      fonts:
+        - asset: assets/fonts/noto-sans-sc/NotoSansSC-Variable.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:

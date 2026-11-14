@@ -43,5 +43,8 @@ rcgen = { version = "0.14", default-features = false, features = ["ring"] }
 # 注意：x25519 密钥类型统一用 `boringtun::x25519` 的再导出（x25519-dalek 2.0.1，
 # 与 Tunn::new 同类型）。不要再加不同版本的 x25519-dalek 直接依赖。
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
 [lints]
 workspace = true

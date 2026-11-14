@@ -5,18 +5,71 @@
 
 import '../app/worker.dart';
 import '../frb_generated.dart';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+
+class GuiDeviceDto {
+  final String deviceId;
+  final String name;
+  final BigInt createdAt;
+  final BigInt updatedAt;
+  final bool active;
+
+  const GuiDeviceDto({
+    required this.deviceId,
+    required this.name,
+    required this.createdAt,
+    required this.updatedAt,
+    required this.active,
+  });
+
+  @override
+  int get hashCode =>
+      deviceId.hashCode ^
+      name.hashCode ^
+      createdAt.hashCode ^
+      updatedAt.hashCode ^
+      active.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GuiDeviceDto &&
+          runtimeType == other.runtimeType &&
+          deviceId == other.deviceId &&
+          name == other.name &&
+          createdAt == other.createdAt &&
+          updatedAt == other.updatedAt &&
+          active == other.active;
+}
 
 /// 启动传输时恰好设置一个字段。
 class StartRequest {
   final String? sourceId;
   final String? code;
+
+  /// 已确认配对的规范设备 ID；不接受未经认证的新设备。
+  final String? fromDevice;
+  final bool pair;
+
+  /// 兼容旧绑定；GUI 始终拒绝文本，CLI 使用 Engine::start。
   final String? text;
 
-  const StartRequest({this.sourceId, this.code, this.text});
+  const StartRequest({
+    this.sourceId,
+    this.code,
+    this.fromDevice,
+    required this.pair,
+    this.text,
+  });
 
   @override
-  int get hashCode => sourceId.hashCode ^ code.hashCode ^ text.hashCode;
+  int get hashCode =>
+      sourceId.hashCode ^
+      code.hashCode ^
+      fromDevice.hashCode ^
+      pair.hashCode ^
+      text.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -25,6 +78,8 @@ class StartRequest {
           runtimeType == other.runtimeType &&
           sourceId == other.sourceId &&
           code == other.code &&
+          fromDevice == other.fromDevice &&
+          pair == other.pair &&
           text == other.text;
 }
 

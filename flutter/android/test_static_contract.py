@@ -110,6 +110,22 @@ class AndroidContractTests(unittest.TestCase):
         self.assertIn('command -v apkanalyzer', script)
         self.assertNotIn('"$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"', script)
 
+    def test_compiled_manifest_service_type_accepts_symbolic_and_numeric_forms(self):
+        script = (ROOT / 'flutter/scripts/build-android.sh').read_text(encoding='utf-8')
+        block = re.findall(r"<<'PY'\n(.*?)\nPY", script, re.S)[2]
+        permissions = ''.join(f'<uses-permission android:name="android.permission.{name}"/>' for name in (
+            'INTERNET', 'WAKE_LOCK', 'POST_NOTIFICATIONS', 'FOREGROUND_SERVICE', 'FOREGROUND_SERVICE_DATA_SYNC'))
+        import io
+        import contextlib
+        from unittest.mock import patch
+        for value in ('dataSync', '1', '0x00000001'):
+            xml = f'<manifest xmlns:android="http://schemas.android.com/apk/res/android">{permissions}<application><service android:name="org.hermod.transfer.TransferService" android:foregroundServiceType="{value}" android:exported="false"/></application></manifest>'
+            with self.subTest(value=value), patch.object(pathlib.Path, 'read_text', return_value=xml), contextlib.redirect_stdout(io.StringIO()):
+                exec(compile(block, 'compiled APK manifest validation', 'exec'), {})
+        xml = f'<manifest xmlns:android="http://schemas.android.com/apk/res/android">{permissions}<application><service android:name="org.hermod.transfer.TransferService" android:foregroundServiceType="0x2" android:exported="false"/></application></manifest>'
+        with patch.object(pathlib.Path, 'read_text', return_value=xml), self.assertRaises(AssertionError):
+            exec(compile(block, 'compiled APK manifest validation', 'exec'), {})
+
     def test_workflow_unsigned_explicit_and_secrets_only(self):
         source = (ROOT / ".github/workflows/android-release.yml").read_text(encoding="utf-8")
         for name in ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD"):

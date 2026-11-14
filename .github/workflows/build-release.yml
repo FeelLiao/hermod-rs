@@ -72,13 +72,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
+        if: matrix.arch == 'x64'
         with:
           flutter-version: '3.47.9'
           channel: stable
-          # Tool SDK architecture is independent of the application target.
-          # Use the published x64 Windows SDK on both runners (ARM64 emulates x64).
           architecture: x64
           cache: true
+      - name: Bootstrap pinned Flutter with native ARM64 Dart
+        if: matrix.arch == 'arm64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') { throw 'ARM64 runner required' }
+          $sdk = Join-Path $env:RUNNER_TEMP 'flutter-3.47.9-arm64'
+          git clone --depth 1 --branch 3.47.9 https://github.com/flutter/flutter.git $sdk
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Flutter checkout failed' }
+          # Flutter bootstraps dart-sdk-windows-arm64.zip on native ARM64 hosts.
+          & "$sdk/bin/flutter.bat" --version
+          if ($LASTEXITCODE -ne 0) { throw 'Native Flutter bootstrap failed' }
+          "$sdk/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "FLUTTER_ROOT=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}

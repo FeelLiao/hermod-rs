@@ -34,7 +34,15 @@ try {
     # Capture the conditional output as an array even when only flutter is used.
     $flutterCommand = @(if (Get-Command fvm -ErrorAction SilentlyContinue) { 'fvm'; 'flutter' } else { 'flutter' })
     $arguments = @('build','windows',$modeFlag)
-    if ($Architecture -eq 'arm64') { $arguments += @('--target-platform','windows-arm64') }
+    # Flutter 3.47 selects the Windows target from the native Dart process ABI.
+    # There is no --target-platform option for this command.
+    $useFvm = $flutterCommand.Count -eq 2
+    $toolAbi = if ($useFvm) { & fvm dart "$PSScriptRoot/tool_arch.dart" } else { & dart "$PSScriptRoot/tool_arch.dart" }
+    if ($LASTEXITCODE -ne 0) { throw 'Could not determine Flutter Dart tool ABI' }
+    $expectedAbi = if ($Architecture -eq 'arm64') { 'windows_arm64' } else { 'windows_x64' }
+    if (($toolAbi -join "`n").Trim() -ne $expectedAbi) {
+        throw "Flutter tool ABI must be $expectedAbi, found $($toolAbi -join ' '). Use a native SDK matching the package architecture."
+    }
     if ($flutterCommand.Count -eq 2) { & $flutterCommand[0] $flutterCommand[1] @arguments } else { & $flutterCommand[0] @arguments }
     if ($LASTEXITCODE -ne 0) { throw 'Flutter Windows build failed' }
 } finally {

@@ -78,11 +78,26 @@ import pathlib, xml.etree.ElementTree as ET
 root = ET.fromstring(pathlib.Path('dist/android-manifest.xml').read_text())
 ns = '{http://schemas.android.com/apk/res/android}'
 permissions = {node.get(ns+'name') for node in root.findall('uses-permission')}
-assert {'android.permission.INTERNET', 'android.permission.WAKE_LOCK', 'android.permission.POST_NOTIFICATIONS', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC'} <= permissions
-assert 'android.permission.MANAGE_EXTERNAL_STORAGE' not in permissions
+required = {'android.permission.INTERNET', 'android.permission.WAKE_LOCK', 'android.permission.POST_NOTIFICATIONS', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC'}
+assert required <= permissions, f'Missing required permissions: {sorted(required - permissions)}'
+assert 'android.permission.MANAGE_EXTERNAL_STORAGE' not in permissions, 'All-files access is forbidden'
 app = root.find('application')
-assert app is not None and app.get(ns+'debuggable', 'false') == 'false'
-assert any(node.get(ns+'name', '').endswith('TransferService') and node.get(ns+'foregroundServiceType') == 'dataSync' and node.get(ns+'exported') == 'false' for node in app.findall('service'))
+assert app is not None, 'Missing application element'
+assert app.get(ns+'debuggable', 'false') == 'false', 'Release APK is debuggable'
+def is_data_sync(value):
+    # Compiled Android flags may be decoded as names, decimal or hexadecimal.
+    if value == 'dataSync':
+        return True
+    try:
+        return int(value, 0) == 1
+    except (TypeError, ValueError):
+        return False
+services = [node for node in app.findall('service') if node.get(ns+'name', '').endswith('.TransferService')]
+assert len(services) == 1, f'Expected one TransferService, found {len(services)}'
+service = services[0]
+assert service.get(ns+'exported') == 'false', 'TransferService must not be exported'
+service_type = service.get(ns+'foregroundServiceType')
+assert is_data_sync(service_type), f'TransferService must be dataSync (flag 1), found {service_type!r}'
 PY
 if [[ "${HERMOD_ANDROID_UNSIGNED:-false}" == 'true' ]]; then
   if "$build_tools/apksigner" verify "$destination" >/dev/null 2>&1; then

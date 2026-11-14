@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """验证 Flutter Windows Store 包的身份、架构、内容和本地化。"""
 import pathlib
+import re
 import shutil
 import struct
 import tempfile
@@ -90,11 +91,14 @@ def verify_bundle(path, expected_version=None):
 
 if __name__ == "__main__":
     if sys.argv[2] == '--bundle':
-        import tomllib
-        # TOML is UTF-8 by definition. Binary load avoids Windows ANSI defaults.
-        with (pathlib.Path(__file__).resolve().parents[2] / 'Cargo.toml').open('rb') as source:
-            workspace = tomllib.load(source)
-        major, minor, patch = map(int, workspace['workspace']['package']['version'].split('.'))
+        # Match the existing release scripts; Python 3.10 on ubuntu-22.04 has
+        # no stdlib tomllib. Read the workspace section explicitly as UTF-8.
+        cargo = (pathlib.Path(__file__).resolve().parents[2] / 'Cargo.toml').read_text(encoding='utf-8')
+        section = re.search(r'^\[workspace\.package\]\s*\n(?P<body>.*?)(?=^\[|\Z)', cargo, re.MULTILINE | re.DOTALL)
+        require(section is not None, 'Missing workspace package metadata')
+        version = re.search(r'^version\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*$', section.group('body'), re.MULTILINE)
+        require(version is not None, 'Could not read workspace release version')
+        major, minor, patch = map(int, version.groups())
         verify_bundle(sys.argv[1], f'{major + 1}.{minor}.{patch}.0')
         print('Store bundle verified: identity, version, exact unsigned x64/ARM64 contents')
     else:

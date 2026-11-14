@@ -2,6 +2,8 @@
 import importlib.util
 import io
 import pathlib
+import runpy
+from unittest.mock import patch
 import os
 import subprocess
 import sys
@@ -58,11 +60,20 @@ class BundleTests(unittest.TestCase):
             path = pathlib.Path(directory) / 'fixture.msixbundle'
             path.write_bytes(bundle().getvalue())
             result = subprocess.run(
-                [sys.executable, '-X', 'utf8=0', '-X', 'warn_default_encoding', str(script), str(path), '--bundle'],
+                [sys.executable, '-S', '-X', 'utf8=0', '-X', 'warn_default_encoding', str(script), str(path), '--bundle'],
                 env=env, capture_output=True, text=True, encoding='utf-8', errors='replace',
             )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('EncodingWarning', result.stderr)
+
+    def test_cli_needs_no_python311_tomllib(self):
+        script = pathlib.Path(__file__).with_name('verify-msix.py').resolve()
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'fixture.msixbundle'
+            path.write_bytes(bundle().getvalue())
+            # Simulate Python 3.10's missing module at the real CLI entry.
+            with patch.dict(sys.modules, {'tomllib': None}), patch.object(sys, 'argv', [str(script), str(path), '--bundle']):
+                runpy.run_path(str(script), run_name='__main__')
 
     def test_open_handle_bundle_validation(self):
         self.assertEqual(verify.verify_bundle(bundle(), '1.5.0.0'), '1.5.0.0')

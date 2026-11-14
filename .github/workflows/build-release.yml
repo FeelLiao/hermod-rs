@@ -144,9 +144,15 @@ jobs:
           path: dist/hermod-windows.msixbundle
           if-no-files-found: error
 
+  android:
+    name: Android signed release APK
+    needs: verify
+    uses: ./.github/workflows/android-release.yml
+    secrets: inherit
+
   release:
-    name: Publish Linux CLI release
-    needs: [verify, linux, windows_bundle]
+    name: Publish Linux CLI and Android release
+    needs: [verify, linux, windows_bundle, android]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-22.04
     permissions:
@@ -169,6 +175,7 @@ jobs:
             Both peers need the same IPv4 LAN or reachable IPv6, plus signaling access. See README.md / README.zh-CN.md for setup and migration.
             Windows: install HermodTransfer from Microsoft Store (publisher FeelLiao, Store ID 9PMPWN3HMR3M). Windows updates are submitted automatically after this release succeeds.
             Linux: x64 / ARM64 static musl CLI.
+            Android: signed APK for ARM64 and x86_64, Android 14 or newer (API 34). Export private inbox files before uninstalling.
             Windows: Flutter desktop GUI for x64 and ARM64, delivered as one Microsoft Store MSIXBundle.
 
   store:

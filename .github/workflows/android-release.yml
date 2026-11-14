@@ -1,7 +1,15 @@
 name: Android release APK
 on:
-  push:
-    tags: ['v*']
+  workflow_call:
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: true
+      ANDROID_KEYSTORE_PASSWORD:
+        required: true
+      ANDROID_KEY_ALIAS:
+        required: true
+      ANDROID_KEY_PASSWORD:
+        required: true
   workflow_dispatch:
     inputs:
       unsigned:
@@ -97,9 +105,22 @@ jobs:
         run: |
           # Exact known runner-temp path only; never touch a checked-in/user keystore.
           rm -f -- "$RUNNER_TEMP/hermod-release.jks"
-      - uses: actions/upload-artifact@v4
+      - name: Upload signed APK for the release workflow
+        if: env.HERMOD_ANDROID_UNSIGNED != 'true'
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.HERMOD_ANDROID_UNSIGNED == 'true' && 'android-UNSIGNED-inspection-only' || 'android-release-signed' }}
-          path: dist/*
+          name: release-android
+          path: dist/hermod-android-release.apk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload build inspection reports separately
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.HERMOD_ANDROID_UNSIGNED == 'true' && 'android-UNSIGNED-inspection-only' || 'android-build-reports' }}
+          path: |
+            dist/android-manifest.xml
+            dist/android-signature.txt
+            dist/*.sha256
+            dist/*UNSIGNED.apk
           if-no-files-found: error
           retention-days: 14

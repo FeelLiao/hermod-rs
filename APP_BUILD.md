@@ -133,6 +133,6 @@ application; uninstall/reset may remove private inbox and identity data.
 
 ## Releases
 
-CI checks Rust and Flutter. Release tags build x64/ARM64 static Linux CLI binaries and x64/ARM64 Windows Store packages. GitHub Releases contain only the two Linux CLI programs. MSIX/MSIXBundle artifacts remain internal to Actions and Store submission.
+CI checks Rust and Flutter. Release tags build x64/ARM64 static Linux CLI binaries, a signed universal Android APK (ARM64/x86_64), and x64/ARM64 Windows Store packages. The main workflow calls and waits for the Android workflow. GitHub Releases contain exactly the two Linux CLI programs and `hermod-android-release.apk`; unsigned APKs, inspection reports and signing material are excluded. MSIX/MSIXBundle artifacts remain internal to Actions and Store submission. Manual Android workflow runs upload artifacts only and do not publish a Release.
 
 Store submission uses the pinned official Store CLI and these Actions secrets: `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`, `AZURE_AD_APPLICATION_SECRET`, `SELLER_ID`, and `MS_STORE_APP_ID`. The submission helper validates the bundle before authentication and must never print credentials, complete submission JSON or SAS URLs.

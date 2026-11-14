@@ -7,7 +7,7 @@ Hermod is an encrypted, peer-to-peer **IPv4 LAN / IPv6** transfer tool written i
 travel between your devices; the signaling server only helps them connect.
 
 - **Windows GUI:** Flutter Material 3 with a Rust Core process, distributed through Microsoft Store as x64/ARM64 MSIXBundle.
-- **Android:** Flutter runner exists for ongoing platform integration; no Android release package is currently published.
+- **Android:** signed Flutter APK for Android 14+, built in GitHub Actions with ARM64/x86_64 native libraries.
 - **Linux CLI:** static musl binaries for terminals and automation.
 - **One data-plane protocol:** QUIC (TLS 1.3, BBR by default) for both GUI and CLI; receivers follow automatically.
 - Files, text, cancellation, progress, server fingerprint pinning and SHA-256 verification.
@@ -22,8 +22,9 @@ Choose your device's CPU architecture, not the architecture of the sender.
 | --- | --- |
 | Windows 10 2004+ / Windows 11, x64 / ARM64 | [HermodTransfer in Microsoft Store](https://apps.microsoft.com/detail/9PMPWN3HMR3M) |
 | Linux terminal x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
+| Android 14+, ARM64 / x86_64 | `hermod-android-release.apk` |
 
-There are no macOS, Linux GUI, Windows CLI, or Android release builds. Release attachments contain only the two Linux CLI programs. Windows packages are submitted directly to Microsoft Store. No certificates or installation scripts are published. GitHub also provides automatic source archives.
+There are no macOS, Linux GUI or Windows CLI release builds. Release attachments contain the two Linux CLI programs and one signed Android APK. Windows packages are submitted directly to Microsoft Store. No certificates or installation scripts are published. GitHub also provides automatic source archives.
 
 ## Before connecting
 

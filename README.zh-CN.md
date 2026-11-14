@@ -7,7 +7,7 @@ Hermod 是使用 Rust 编写的加密 P2P **IPv4 局域网 / IPv6** 文件传输
 信令服务器只帮助双方建立连接，不中转文件。
 
 - **Windows GUI**：Flutter Material 3 + Rust Core 子进程，通过 Microsoft Store 的 x64/ARM64 MSIXBundle 发布。
-- **Android**：Flutter runner 已保留用于后续平台接入，目前不发布 Android 安装包。
+- **Android**：Android 14+ 签名 Flutter APK，通过 GitHub Actions 构建，包含 ARM64 / x86_64 原生库。
 - **Linux 命令行**：musl 静态可执行文件，适合终端和脚本。
 - 唯一数据面协议为 **QUIC**（TLS 1.3，默认 BBR）；GUI 与 CLI 一致，接收端自动跟随。
 - 支持文件、文本、取消、进度、服务器指纹信任与 SHA-256 校验。
@@ -21,8 +21,9 @@ Hermod 是使用 Rust 编写的加密 P2P **IPv4 局域网 / IPv6** 文件传输
 | --- | --- |
 | Windows 10 2004+ / Windows 11，x64 / ARM64 | [Microsoft Store 中的 HermodTransfer](https://apps.microsoft.com/detail/9PMPWN3HMR3M) |
 | Linux 命令行 x64 / ARM64 | `hermod-linux-x64-musl` / `hermod-linux-arm64-musl` |
+| Android 14+，ARM64 / x86_64 | `hermod-android-release.apk` |
 
-不再构建 macOS、Linux GUI、Windows CLI 或 Android 安装包。Release 只上传两个 Linux CLI 程序，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
+不再构建 macOS、Linux GUI 或 Windows CLI 发布包。Release 上传两个 Linux CLI 程序和一个正式签名 Android APK，不上传证书、安装脚本、ZIP、deb、checksum、私钥、日志或调试符号。
 Windows MSIX/MSIXBundle 仅用于商店提交，不放入 GitHub Release。用户通过微软商店安装 **HermodTransfer**，商店会选择对应架构。
 GitHub 自动提供的源码下载链接属于平台功能。
 

@@ -90,6 +90,10 @@ jobs:
           # Flutter bootstraps dart-sdk-windows-arm64.zip on native ARM64 hosts.
           & "$sdk/bin/flutter.bat" --version
           if ($LASTEXITCODE -ne 0) { throw 'Native Flutter bootstrap failed' }
+          $abi = & "$sdk/bin/dart.bat" flutter/scripts/tool_arch.dart
+          if ($LASTEXITCODE -ne 0 -or ($abi -join "`n").Trim() -ne 'windows_arm64') {
+            throw "Flutter bootstrap did not provide native ARM64 Dart: $($abi -join ' ')"
+          }
           "$sdk/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "FLUTTER_ROOT=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: dtolnay/rust-toolchain@stable
@@ -98,6 +102,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-${{ matrix.arch }}-v040
+      - name: Windows packaging regression tests
+        shell: pwsh
+        run: python -m unittest discover -s flutter/scripts -p 'test_*.py'
       - name: Flutter analysis and tests
         working-directory: flutter
         run: |
@@ -129,6 +136,8 @@ jobs:
       - name: Bundle validated architectures for Microsoft Store
         shell: pwsh
         run: ./flutter/scripts/bundle-msix.ps1 -PackageDirectory packages -OutputDirectory dist
+      - name: Validate complete Store bundle before release
+        run: python flutter/scripts/verify-msix.py dist/hermod-windows.msixbundle --bundle
       - uses: actions/upload-artifact@v4
         with:
           name: store-windows

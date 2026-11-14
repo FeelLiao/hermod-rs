@@ -17,6 +17,16 @@ $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.e
 $vs = if (Test-Path $vswhere) { & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath } else { 'D:\Programs\MSVC\BuildTools' }
 if (-not $vs) { throw 'Visual Studio C++ Build Tools are required' }
 $vcvars = if ($Architecture -eq 'x64') { 'vcvars64.bat' } else { 'vcvarsamd64_arm64.bat' }
+# Match Flutter's native ARM64 compiler environment when available; retain the
+# previous x64-host cross compiler as a checked fallback rather than guessing.
+if ($Architecture -eq 'arm64' -and $env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -and
+    (Test-Path "$vs\VC\Auxiliary\Build\vcvarsarm64.bat")) {
+    $vcvars = 'vcvarsarm64.bat'
+}
+if (-not (Test-Path "$vs\VC\Auxiliary\Build\$vcvars")) {
+    throw "Required Visual Studio compiler environment is missing: $vcvars ($vs)"
+}
+Write-Output "MSVC environment: $vcvars; Rust target: $rustTarget"
 $command = "call `"$vs\VC\Auxiliary\Build\$vcvars`" >nul && set TMP=$temp&&set TEMP=$temp&&cargo build -p hermod-flutter-bridge --target $rustTarget --locked $profile"
 cmd /d /s /c $command
 if ($LASTEXITCODE -ne 0) { throw 'Rust Core bridge build failed' }

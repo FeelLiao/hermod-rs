@@ -24,6 +24,20 @@ class AndroidContractTests(unittest.TestCase):
         self.assertEqual(service.get(NS + "foregroundServiceType"), "dataSync")
         self.assertEqual(service.get(NS + "exported"), "false")
 
+    def test_launcher_has_adaptive_foreground_and_monochrome(self):
+        root = ET.parse(ANDROID / 'app/src/main/AndroidManifest.xml').getroot()
+        app = root.find('application')
+        self.assertEqual(app.get(NS + 'icon'), '@mipmap/ic_launcher')
+        self.assertEqual(app.get(NS + 'roundIcon'), '@mipmap/ic_launcher')
+        icon = ET.parse(ANDROID / 'app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml').getroot()
+        self.assertEqual(icon.tag, 'adaptive-icon')
+        self.assertEqual(icon.find('foreground').get(NS + 'drawable'), '@drawable/ic_launcher_foreground')
+        self.assertEqual(icon.find('monochrome').get(NS + 'drawable'), '@drawable/ic_launcher_monochrome')
+        for name in ('ic_launcher_foreground', 'ic_launcher_monochrome'):
+            vector = ET.parse(ANDROID / f'app/src/main/res/drawable/{name}.xml').getroot()
+            self.assertEqual(vector.tag, 'vector')
+            self.assertTrue(vector.findall('path'))
+
     def test_xml_resources_parse(self):
         for path in (ANDROID / "app/src/main/res").rglob("*.xml"):
             ET.parse(path)

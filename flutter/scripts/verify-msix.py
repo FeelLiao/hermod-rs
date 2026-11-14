@@ -55,21 +55,46 @@ def verify(path, architecture):
 def verify_bundle(path, expected_version=None):
     expected = {"x64": "hermod-windows-x64.msix", "arm64": "hermod-windows-arm64.msix"}
     with zipfile.ZipFile(path) as bundle:
-        names = set(bundle.namelist())
+        entries = bundle.namelist()
+        names = set(entries)
+        metadata = {"AppxMetadata/AppxBundleManifest.xml", "AppxBlockMap.xml", "[Content_Types].xml"}
+        require(len(entries) == len(names), "Duplicate bundle entries")
         require(set(expected.values()).issubset(names), "Bundle must contain x64 and ARM64 packages")
+        require(names == metadata | set(expected.values()), "Unexpected bundle contents or signature")
+        ns = {"b": "http://schemas.microsoft.com/appx/2013/bundle"}
+        manifest = ET.fromstring(bundle.read("AppxMetadata/AppxBundleManifest.xml"))
+        identity = manifest.find("b:Identity", ns)
+        require(identity is not None and identity.get("Name") == IDENTITY and identity.get("Publisher") == PUBLISHER, "Incorrect bundle identity")
+        declarations = manifest.findall("b:Packages/b:Package", ns)
+        require(len(declarations) == 2 and {e.get("Architecture") for e in declarations} == set(expected), "Invalid bundle architecture declarations")
+        for entry in declarations:
+            name = expected[entry.get("Architecture")]
+            require(entry.get("Type") == "application" and entry.get("FileName") == name, "Invalid bundle application entry")
+            require(entry.get("Size") == str(bundle.getinfo(name).file_size), "Incorrect bundled package size")
+            require(entry.get("Version") == identity.get("Version"), "Bundle declaration version mismatch")
         versions = set()
         for architecture, name in expected.items():
-            with bundle.open(name) as source, tempfile.NamedTemporaryFile(suffix=".msix") as package:
+            # Pass the open handle, as v0.4.5 did. Reopening a named temporary
+            # file by path fails on Windows while its exclusive handle is open.
+            with bundle.open(name) as source, tempfile.TemporaryFile() as package:
                 shutil.copyfileobj(source, package)
-                package.flush()
-                versions.add(verify(package.name, architecture))
+                package.seek(0)
+                versions.add(verify(package, architecture))
         require(len(versions) == 1, "Bundled package versions differ")
         version = versions.pop()
+        require(identity.get("Version") == version, "Bundle and package version mismatch")
         if expected_version is not None:
             require(version == expected_version, "Bundle version does not match workspace version")
         return version
 
 
 if __name__ == "__main__":
-    verify(sys.argv[1], sys.argv[2])
-    print("Flutter Store MSIX verified: identity, architecture, bilingual resources, Core bridge, unsigned payload")
+    if sys.argv[2] == '--bundle':
+        import tomllib
+        workspace = tomllib.loads((pathlib.Path(__file__).resolve().parents[2] / 'Cargo.toml').read_text())
+        major, minor, patch = map(int, workspace['workspace']['package']['version'].split('.'))
+        verify_bundle(sys.argv[1], f'{major + 1}.{minor}.{patch}.0')
+        print('Store bundle verified: identity, version, exact unsigned x64/ARM64 contents')
+    else:
+        verify(sys.argv[1], sys.argv[2])
+        print("Flutter Store MSIX verified: identity, architecture, bilingual resources, Core bridge, unsigned payload")

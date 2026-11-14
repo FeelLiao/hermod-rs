@@ -31,7 +31,8 @@ $env:TMP = $flutterTemp
 Push-Location $flutter
 try {
     $modeFlag = "--$Mode"
-    $flutterCommand = if (Get-Command fvm -ErrorAction SilentlyContinue) { @('fvm','flutter') } else { @('flutter') }
+    # Capture the conditional output as an array even when only flutter is used.
+    $flutterCommand = @(if (Get-Command fvm -ErrorAction SilentlyContinue) { 'fvm'; 'flutter' } else { 'flutter' })
     $arguments = @('build','windows',$modeFlag)
     if ($Architecture -eq 'arm64') { $arguments += @('--target-platform','windows-arm64') }
     if ($flutterCommand.Count -eq 2) { & $flutterCommand[0] $flutterCommand[1] @arguments } else { & $flutterCommand[0] @arguments }

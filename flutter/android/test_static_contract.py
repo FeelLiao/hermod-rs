@@ -98,6 +98,18 @@ class AndroidContractTests(unittest.TestCase):
         self.assertIn('id("org.jetbrains.kotlin.android")', app)
         self.assertLess(app.index('id("org.jetbrains.kotlin.android")'), app.index('id("dev.flutter.flutter-gradle-plugin")'))
 
+    def test_sdkmanager_discovery_does_not_depend_on_runner_path(self):
+        source = (ROOT / ".github/workflows/android-release.yml").read_text(encoding="utf-8")
+        install = source[source.index("- name: Install pinned Android toolchain"):source.index("- name: Build Rust ABIs")]
+        self.assertIn('SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"', install)
+        self.assertIn('candidates=("$SDK"/cmdline-tools/*/bin/sdkmanager)', install)
+        self.assertIn('"$SDKMANAGER" --sdk_root="$SDK"', install)
+        self.assertIn('echo "$tools_bin" >> "$GITHUB_PATH"', install)
+        self.assertNotIn('uses: android-actions/setup-android', source)
+        script = (ROOT / "flutter/scripts/build-android.sh").read_text(encoding="utf-8")
+        self.assertIn('command -v apkanalyzer', script)
+        self.assertNotIn('"$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer"', script)
+
     def test_workflow_unsigned_explicit_and_secrets_only(self):
         source = (ROOT / ".github/workflows/android-release.yml").read_text(encoding="utf-8")
         for name in ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD"):

@@ -63,7 +63,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
+          # Preserve the previously working runner SDK discovery; PATH may omit it.
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$SDKMANAGER" ]]; then
+            shopt -s nullglob
+            candidates=("$SDK"/cmdline-tools/*/bin/sdkmanager)
+            SDKMANAGER=''
+            for candidate in "${candidates[@]}"; do
+              if [[ -x "$candidate" ]]; then SDKMANAGER="$candidate"; break; fi
+            done
+          fi
+          [[ -n "$SDKMANAGER" && -x "$SDKMANAGER" ]] || { echo "::error::No sdkmanager found under $SDK/cmdline-tools"; exit 1; }
+          tools_bin="$(dirname "$SDKMANAGER")"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$tools_bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "Using $SDKMANAGER"
+          "$SDKMANAGER" --sdk_root="$SDK" 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build clang pkg-config perl
       - name: Build Rust ABIs and release APK; inspect package

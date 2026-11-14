@@ -69,7 +69,10 @@ with zipfile.ZipFile(apk) as archive, tempfile.TemporaryDirectory() as directory
 PY
 build_tools="$ANDROID_SDK_ROOT/build-tools/36.0.0"
 "$build_tools/zipalign" -c -P 16 -v 4 "$destination"
-"$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/apkanalyzer" manifest print "$destination" > dist/android-manifest.xml
+# Workflow exports the discovered command-line-tools directory, not necessarily latest/.
+apkanalyzer="$(command -v apkanalyzer || true)"
+[[ -n "$apkanalyzer" && -x "$apkanalyzer" ]] || { echo 'apkanalyzer not found in configured Android tools PATH' >&2; exit 1; }
+"$apkanalyzer" manifest print "$destination" > dist/android-manifest.xml
 python3 - <<'PY'
 import pathlib, xml.etree.ElementTree as ET
 root = ET.fromstring(pathlib.Path('dist/android-manifest.xml').read_text())

@@ -75,6 +75,9 @@ jobs:
         with:
           flutter-version: '3.47.9'
           channel: stable
+          # Tool SDK architecture is independent of the application target.
+          # Use the published x64 Windows SDK on both runners (ARM64 emulates x64).
+          architecture: x64
           cache: true
       - uses: dtolnay/rust-toolchain@stable
         with:

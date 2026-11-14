@@ -7,6 +7,7 @@ default-members = ["core", "cli"]
 version = "0.5.0"
 edition = "2024"
 rust-version = "1.99.0"
+license = "MIT"
 
 # 工作区统一禁止手写 unsafe；Clippy 警告作为错误处理。
 [workspace.lints.rust]

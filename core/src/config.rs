@@ -189,7 +189,11 @@ pub fn load_selected(p: &Path, selected: Option<&str>) -> Result<Config, ConfigE
         return Ok(Config::default());
     }
     let data = std::fs::read_to_string(p).map_err(ConfigError::Read)?;
-    let mut config: Config = serde_yaml::from_str(&data).map_err(ConfigError::Parse)?;
+    // 空/注释/null 文档与 Go 一样保留默认值；仍由解析器校验整个输入，
+    // 不把语法错误或额外文档当作空配置忽略。
+    let mut config = serde_saphyr::from_str::<Option<Config>>(&data)
+        .map_err(ConfigError::Parse)?
+        .unwrap_or_default();
     if config.trust_version == 0
         && let Some(server) = selected
     {
@@ -206,7 +210,7 @@ pub fn save_to(cfg: &Config, p: &Path) -> Result<(), ConfigError> {
     }
     let mut cfg = cfg.clone();
     cfg.retain_active_trust()?;
-    let data = serde_yaml::to_string(&cfg).map_err(ConfigError::Serialize)?;
+    let data = serde_saphyr::to_string(&cfg).map_err(ConfigError::Serialize)?;
     // 独占临时文件并原子替换，失败不会破坏已信任的配置。
     use std::io::Write;
     let mut random = [0u8; 8];
@@ -301,9 +305,9 @@ pub enum ConfigError {
     #[error("write config: {0}")]
     Write(#[source] std::io::Error),
     #[error("parse config: {0}")]
-    Parse(#[source] serde_yaml::Error),
+    Parse(#[source] serde_saphyr::DeserializeError),
     #[error("serialize config: {0}")]
-    Serialize(#[source] serde_yaml::Error),
+    Serialize(#[source] serde_saphyr::SerializeError),
     #[error("server URL is empty")]
     EmptyServerUrl,
     #[error("invalid server URL")]
@@ -326,7 +330,7 @@ mod tests {
         config
             .trusted_servers
             .insert("wss://custom:4376".into(), "ab".repeat(32));
-        std::fs::write(&path, serde_yaml::to_string(&config).unwrap()).unwrap();
+        std::fs::write(&path, serde_saphyr::to_string(&config).unwrap()).unwrap();
         let mut migrated = load_selected(&path, Some("custom")).unwrap();
         assert_eq!(migrated.server_url, "wss://custom:4376");
         assert_eq!(migrated.trusted_servers.len(), 1);
@@ -378,7 +382,7 @@ server_cert_pem: "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----"
 trusted_servers:
   wss://relay.example.com:4376: aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899
 "#;
-        let cfg: Config = serde_yaml::from_str(yaml).unwrap();
+        let cfg: Config = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(cfg.server_url, "wss://relay.example.com:4376");
         assert_eq!(cfg.tls.prefer_curves, vec!["X25519MLKEM768"]);
         assert_eq!(
@@ -400,7 +404,7 @@ trusted_servers:
     /// YAML 里缺的字段得到 Go 默认值（load-onto-default 语义）。
     #[test]
     fn missing_fields_get_defaults() {
-        let cfg: Config = serde_yaml::from_str("server_url: wss://other:9999\n").unwrap();
+        let cfg: Config = serde_saphyr::from_str("server_url: wss://other:9999\n").unwrap();
         assert_eq!(cfg.server_url, "wss://other:9999");
         assert_eq!(cfg.tls.prefer_curves, vec!["X25519MLKEM768"]); // 默认曲线保留
         assert_eq!(
@@ -410,7 +414,9 @@ trusted_servers:
             Some(DEFAULT_SERVER_FINGERPRINT)
         );
         // 空 YAML → 全部默认
-        let cfg: Config = serde_yaml::from_str("").unwrap();
+        let cfg = serde_saphyr::from_str::<Option<Config>>("")
+            .unwrap()
+            .unwrap_or_default();
         assert_eq!(cfg.server_url, DEFAULT_SERVER_URL);
     }
 

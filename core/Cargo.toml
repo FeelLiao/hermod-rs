@@ -3,6 +3,7 @@ name = "hermod-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 aes-gcm = "0.11"
@@ -24,7 +25,8 @@ rand_core = "0.10"
 rustls = "0.23"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+# 纯 Rust YAML；不启用 include/include_fs，配置不得读取外部文件。
+serde-saphyr = { version = "2.1.1", default-features = false, features = ["serialize", "deserialize"] }
 sha2 = "0.11"
 socket2 = "0.6"
 subtle = "2"

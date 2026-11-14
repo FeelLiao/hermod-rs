@@ -3,6 +3,7 @@ name = "hermod-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 # 所有逻辑都在 hermod-core（D17），CLI 只做参数解析与调度。
@@ -15,7 +16,7 @@ clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
 
 # 进度条与终端颜色/tty 检测
-indicatif = "0.17"
+indicatif = { version = "0.18.6", default-features = false, features = ["unicode-width"] }
 console = "0.15"
 
 # 生成传输码的随机源（已在 core 依赖树里）
